@@ -67,7 +67,6 @@ module.exports = (sequelize, DataTypes) => {
           const sequential = (count + 1).toString().padStart(5, '0');
           school.schoolId = `SCH-${year}-${sequential}`;
 
-          // Generate QR code
           const qrData = {
             schoolId: school.schoolId,
             name: school.name,
@@ -85,7 +84,7 @@ module.exports = (sequelize, DataTypes) => {
   });
 
   School.prototype.validateAccessCode = function(code) {
-    return code === this.schoolId || 
+    return code === this.schoolId ||
            (this.lookupCodes && this.lookupCodes.includes(code)) ||
            code === this.qrCode;
   };

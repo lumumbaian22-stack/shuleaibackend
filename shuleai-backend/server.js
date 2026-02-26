@@ -11,12 +11,22 @@ const io = socketio(server, {
 global.io = io;
 
 io.on('connection', (socket) => {
-  socket.on('join', (userId) => socket.join(`user-${userId}`));
+  socket.on('join', (userId) => {
+    if (userId) socket.join(`user-${userId}`);
+  });
+
   socket.on('private-message', (data) => {
     io.to(`user-${data.to}`).emit('private-message', {
       from: socket.userId,
       message: data.message,
       timestamp: new Date()
+    });
+  });
+
+  socket.on('typing', (data) => {
+    socket.to(`user-${data.to}`).emit('typing', {
+      from: socket.userId,
+      isTyping: data.isTyping
     });
   });
 });
@@ -26,9 +36,10 @@ const PORT = process.env.PORT || 5000;
 sequelize.sync({ alter: process.env.NODE_ENV === 'development' })
   .then(() => {
     server.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
+      console.log(`✅ Server running on port ${PORT}`);
     });
   })
   .catch(err => {
-    console.error('Database sync failed:', err);
+    console.error('❌ Database sync failed:', err);
+    process.exit(1);
   });

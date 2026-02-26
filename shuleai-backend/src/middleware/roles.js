@@ -2,7 +2,8 @@ const { User, Student, Parent } = require('../models');
 
 const checkOwnership = (modelName) => async (req, res, next) => {
   try {
-    const resource = await require('../models')[modelName].findByPk(req.params.id);
+    const Model = require('../models')[modelName];
+    const resource = await Model.findByPk(req.params.id);
     if (!resource) {
       return res.status(404).json({ success: false, message: 'Resource not found' });
     }

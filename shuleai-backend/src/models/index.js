@@ -1,7 +1,7 @@
 const sequelize = require('../config/database');
 const { DataTypes } = require('sequelize');
 
-// Import all models
+// Import model definitions
 const User = require('./User')(sequelize, DataTypes);
 const School = require('./School')(sequelize, DataTypes);
 const Student = require('./Student')(sequelize, DataTypes);
@@ -19,7 +19,7 @@ const DutyRoster = require('./DutyRoster')(sequelize, DataTypes);
 const UploadLog = require('./UploadLog')(sequelize, DataTypes);
 const SchoolNameRequest = require('./SchoolNameRequest')(sequelize, DataTypes);
 
-// Define associations
+// Associations
 User.hasOne(Student, { foreignKey: 'userId', onDelete: 'CASCADE' });
 Student.belongsTo(User, { foreignKey: 'userId' });
 
@@ -35,7 +35,6 @@ Admin.belongsTo(User, { foreignKey: 'userId' });
 School.hasMany(User, { foreignKey: 'schoolCode', sourceKey: 'code' });
 User.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'code' });
 
-// Student-parent many-to-many through a junction table
 const StudentParent = sequelize.define('StudentParent', {
   studentId: { type: DataTypes.INTEGER, references: { model: Student, key: 'id' } },
   parentId: { type: DataTypes.INTEGER, references: { model: Parent, key: 'id' } }
@@ -43,7 +42,6 @@ const StudentParent = sequelize.define('StudentParent', {
 Student.belongsToMany(Parent, { through: StudentParent, foreignKey: 'studentId' });
 Parent.belongsToMany(Student, { through: StudentParent, foreignKey: 'parentId' });
 
-// Other associations
 AcademicRecord.belongsTo(Student, { foreignKey: 'studentId' });
 AcademicRecord.belongsTo(Teacher, { foreignKey: 'teacherId' });
 
