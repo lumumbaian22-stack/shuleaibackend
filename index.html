@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <!-- RESPONSIVE META TAG - CRITICAL FOR MOBILE -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
+    <title>LETS EAT - Local Food Marketplace</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+    <!-- Notification Container -->
+    <div class="notification-container" id="notificationContainer"></div>
+
+    <!-- Chat System -->
+    <button class="chat-toggle-btn" id="chatToggleBtn">
+        <i class="fas fa-comments"></i>
+        <div class="chat-notification" id="chatNotification" style="display: none;">1</div>
+    </button>
+
+    <div class="chat-container" id="chatContainer">
+        <div class="chat-header">
+            <h3><i class="fas fa-comment-dots"></i> Live Chat</h3>
+            <button class="chat-close" id="chatCloseBtn">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="chat-messages" id="chatMessages">
+            <!-- Messages will appear here -->
+        </div>
+        <div class="chat-input">
+            <input type="text" id="chatInput" placeholder="Type your message...">
+            <button id="chatSendBtn">
+                <i class="fas fa-paper-plane"></i>
+            </button>
+            <button class="call-btn" id="callBtn" title="Voice Call">
+                <i class="fas fa-phone"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Delivery Completion Modal -->
+    <div class="delivery-completion-modal" id="deliveryCompletionModal">
+        <div class="completion-content">
+            <div class="completion-icon">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <h2 class="completion-title">Delivery Completed!</h2>
+            <p style="color: var(--gray); margin-bottom: 15px;">Order #<span id="completedOrderId">1234</span> has been delivered</p>
+            <div class="completion-amount">
+                <span class="currency" id="completedEarnings">150</span>
+            </div>
+            <p style="color: var(--gray); margin-bottom: 5px;">Earned for this delivery</p>
+            <p style="color: var(--dark); font-weight: 600;">Total Earnings: <span class="currency" id="totalEarningsAfter">0</span></p>
+            <div class="completion-buttons">
+                <button class="btn btn-primary" id="closeCompletionModalBtn">Continue</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auth Screen -->
+    <div class="auth-screen" id="authScreen">
+        <div class="auth-container">
+            <div class="auth-logo" id="logo">
+                <i class="fas fa-utensils"></i>
+                <h1>LETS EAT</h1>
+                <p>Local Food Marketplace</p>
+            </div>
+            
+            <!-- USER TYPE SELECTION -->
+            <div class="user-type-selection">
+                <button class="user-type-btn active" id="selectCustomerBtn">
+                    <i class="fas fa-user"></i> Customer
+                </button>
+                <button class="user-type-btn" id="selectRestaurantBtn">
+                    <i class="fas fa-hotel"></i> Restaurant
+                </button>
+                <button class="user-type-btn" id="selectDeliveryBtn">
+                    <i class="fas fa-motorcycle"></i> Delivery
+                </button>
+            </div>
+            
+            <div class="auth-tabs">
+                <button class="auth-tab active" id="loginTab">Login</button>
+                <button class="auth-tab" id="registerTab">Register</button>
+            </div>
+            
+            <!-- Login Forms -->
+            <div class="auth-form active" id="loginForms">
+                <!-- Customer Login -->
+                <div class="login-form" id="customerLoginForm">
+                    <div class="form-group">
+                        <label for="customerLoginPhone">Phone Number</label>
+                        <input type="tel" id="customerLoginPhone" placeholder="0712 345 678" value="0712345678">
+                    </div>
+                    <button class="auth-btn" id="customerLoginBtn">
+                        <i class="fas fa-sign-in-alt"></i> Login as Customer
+                    </button>
+                </div>
+                
+                <!-- Restaurant Login -->
+                <div class="login-form" id="restaurantLoginForm">
+                    <div class="form-group">
+                        <label for="restaurantLoginEmail">Email Address</label>
+                        <input type="email" id="restaurantLoginEmail" placeholder="restaurant@example.com" value="sunrise@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="restaurantLoginPassword">Password</label>
+                        <input type="password" id="restaurantLoginPassword" placeholder="Enter your password" value="password123">
+                    </div>
+                    <button class="auth-btn" id="restaurantLoginBtn">
+                        <i class="fas fa-sign-in-alt"></i> Login as Restaurant
+                    </button>
+                </div>
+                
+                <!-- Delivery Login -->
+                <div class="login-form" id="deliveryLoginForm">
+                    <div class="form-group">
+                        <label for="deliveryLoginEmail">Email Address</label>
+                        <input type="email" id="deliveryLoginEmail" placeholder="delivery@example.com" value="john@delivery.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="deliveryLoginPassword">Password</label>
+                        <input type="password" id="deliveryLoginPassword" placeholder="Enter your password" value="password123">
+                    </div>
+                    <button class="auth-btn" id="deliveryLoginBtn">
+                        <i class="fas fa-motorcycle"></i> Login as Delivery Person
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Register Forms -->
+            <div class="auth-form" id="registerForms">
+                <!-- Customer Register -->
+                <div class="register-form" id="customerRegisterForm">
+                    <div class="form-group">
+                        <label for="customerRegisterName">Full Name</label>
+                        <input type="text" id="customerRegisterName" placeholder="John Doe">
+                    </div>
+                    <div class="form-group">
+                        <label for="customerRegisterPhone">Phone Number</label>
+                        <input type="tel" id="customerRegisterPhone" placeholder="0712 345 678">
+                    </div>
+                    <div class="form-group">
+                        <label for="customerRegisterEmail">Email (Optional)</label>
+                        <input type="email" id="customerRegisterEmail" placeholder="john@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="customerRegisterLocation">Default Location</label>
+                        <input type="text" id="customerRegisterLocation" placeholder="Nairobi, Kenya">
+                    </div>
+                    <button class="auth-btn" id="customerRegisterBtn">
+                        <i class="fas fa-user-plus"></i> Register as Customer
+                    </button>
+                </div>
+                
+                <!-- Restaurant Register -->
+                <div class="register-form" id="restaurantRegisterForm">
+                    <div class="form-group">
+                        <label for="restaurantRegisterName">Restaurant Name</label>
+                        <input type="text" id="restaurantRegisterName" placeholder="Sunrise Hotel & Restaurant">
+                    </div>
+                    <div class="form-group">
+                        <label for="restaurantRegisterOwner">Owner Name</label>
+                        <input type="text" id="restaurantRegisterOwner" placeholder="James Kamau">
+                    </div>
+                    <div class="form-group">
+                        <label for="restaurantRegisterEmail">Email Address</label>
+                        <input type="email" id="restaurantRegisterEmail" placeholder="restaurant@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="restaurantRegisterPhone">Phone Number</label>
+                        <input type="tel" id="restaurantRegisterPhone" placeholder="0712 123 456">
+                    </div>
+                    <div class="form-group">
+                        <label for="restaurantRegisterLocation">Location</label>
+                        <input type="text" id="restaurantRegisterLocation" placeholder="Nairobi CBD">
+                    </div>
+                    <div class="form-group">
+                        <label for="restaurantRegisterPassword">Password</label>
+                        <input type="password" id="restaurantRegisterPassword" placeholder="Create a password">
+                    </div>
+                    <div class="form-group">
+                        <label for="restaurantRegisterConfirmPassword">Confirm Password</label>
+                        <input type="password" id="restaurantRegisterConfirmPassword" placeholder="Confirm your password">
+                    </div>
+                    <button class="auth-btn" id="restaurantRegisterBtn">
+                        <i class="fas fa-user-plus"></i> Register Restaurant
+                    </button>
+                </div>
+                
+                <!-- Delivery Register -->
+                <div class="register-form" id="deliveryRegisterForm">
+                    <div class="form-group">
+                        <label for="deliveryRegisterName">Full Name</label>
+                        <input type="text" id="deliveryRegisterName" placeholder="John Doe">
+                    </div>
+                    <div class="form-group">
+                        <label for="deliveryRegisterPhone">Phone Number</label>
+                        <input type="tel" id="deliveryRegisterPhone" placeholder="0712 345 678">
+                    </div>
+                    <div class="form-group">
+                        <label for="deliveryRegisterEmail">Email Address</label>
+                        <input type="email" id="deliveryRegisterEmail" placeholder="john@delivery.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="deliveryRegisterVehicle">Vehicle Type</label>
+                        <select id="deliveryRegisterVehicle">
+                            <option value="motorcycle">Motorcycle</option>
+                            <option value="bicycle">Bicycle</option>
+                            <option value="car">Car</option>
+                            <option value="scooter">Scooter</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="deliveryRegisterPlate">Vehicle Plate (Optional)</label>
+                        <input type="text" id="deliveryRegisterPlate" placeholder="Kxx 123A">
+                    </div>
+                    <div class="form-group">
+                        <label for="deliveryRegisterLocation">Service Area</label>
+                        <input type="text" id="deliveryRegisterLocation" placeholder="Nairobi, Kenya">
+                    </div>
+                    <div class="form-group">
+                        <label for="deliveryRegisterPassword">Password</label>
+                        <input type="password" id="deliveryRegisterPassword" placeholder="Create a password">
+                    </div>
+                    <div class="form-group">
+                        <label for="deliveryRegisterConfirmPassword">Confirm Password</label>
+                        <input type="password" id="deliveryRegisterConfirmPassword" placeholder="Confirm your password">
+                    </div>
+                    <div class="form-group">
+                        <label for="deliveryRegisterId">National ID/Passport</label>
+                        <input type="text" id="deliveryRegisterId" placeholder="ID Number">
+                    </div>
+                    <button class="auth-btn" id="deliveryRegisterBtn">
+                        <i class="fas fa-motorcycle"></i> Register as Delivery Person
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Switch Links -->
+            <div class="switch-auth" id="switchAuthLinks">
+                <!-- This will be populated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Application -->
+    <div class="main-app" id="mainApp">
+        <!-- Header -->
+        <header>
+            <div class="container">
+                <div class="header-content">
+                    <div class="logo" id="mainLogo">
+                        <i class="fas fa-utensils"></i>
+                        <span>LETS EAT</span>
+                    </div>
+                    
+                    <div class="user-menu">
+                        <div class="location-selector" id="locationSelector">
+                            <i class="fas fa-map-marker-alt"></i>
+                            <span id="currentLocation">Detecting location...</span>
+                        </div>
+                        
+                        <!-- Customer Order Tracking Button -->
+                        <button class="order-tracking-btn" id="orderTrackingBtn" style="display: none;">
+                            <i class="fas fa-truck"></i> Track Order
+                        </button>
+                        
+                        <div class="current-user" id="currentUserInfo">
+                            <div class="user-avatar" id="userAvatar">C</div>
+                            <div>
+                                <div id="userName">Customer</div>
+                                <div id="userType" style="font-size: 0.8rem; color: var(--gray);">Customer</div>
+                            </div>
+                        </div>
+                        
+                        <button class="logout-btn" id="logoutBtn" title="Logout">
+                            <i class="fas fa-sign-out-alt"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Customer View -->
+        <div class="main-layout" id="customerView">
+            <!-- Mobile Header with Hero Section -->
+            <div class="mobile-hero" id="mobileHero">
+                <div class="hero-content">
+                    <h2>Find Food Near You</h2>
+                    <p>Discover the best restaurants and cafes in your area</p>
+                    <div class="hero-search">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="heroSearchInput" placeholder="Search for restaurants or cuisines...">
+                    </div>
+                </div>
+                <button class="hero-toggle" id="heroToggleBtn">
+                    <i class="fas fa-chevron-up" id="heroToggleIcon"></i>
+                </button>
+            </div>
+
+            <!-- Mobile Action Bar -->
+            <div class="mobile-action-bar">
+                <button class="action-btn" id="toggleMapBtn">
+                    <i class="fas fa-map"></i>
+                    <span>Map</span>
+                </button>
+                <button class="action-btn" id="toggleSidebarBtn">
+                    <i class="fas fa-list"></i>
+                    <span>Restaurants</span>
+                </button>
+                <button class="action-btn" id="refreshLocationBtn">
+                    <i class="fas fa-location-dot"></i>
+                    <span>Near me</span>
+                </button>
+            </div>
+
+            <!-- Order Tracking Panel -->
+            <div class="tracking-panel" id="trackingPanel">
+                <div class="tracking-header">
+                    <h3 class="tracking-title">Order Tracking</h3>
+                    <button class="close-tracking" id="closeTrackingBtn">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div id="trackingContent">
+                    <p style="color: var(--gray); text-align: center; padding: 20px;">No active orders to track</p>
+                </div>
+            </div>
+            
+            <!-- Main Content Area -->
+            <div class="content-area">
+                <!-- Sidebar with hotel listings -->
+                <div class="sidebar" id="sidebar">
+                    <div class="sidebar-header">
+                        <div class="sidebar-header-content">
+                            <h3>Nearby Restaurants</h3>
+                            <p>Order from local establishments</p>
+                        </div>
+                        <button class="sidebar-close" id="sidebarCloseBtn">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="radius-selector">
+                        <button class="radius-btn active" data-radius="1">1 km</button>
+                        <button class="radius-btn" data-radius="3">3 km</button>
+                        <button class="radius-btn" data-radius="5">5 km</button>
+                        <button class="radius-btn" data-radius="10">10 km</button>
+                    </div>
+                    
+                    <div class="hotel-list" id="hotelList">
+                        <!-- Hotel cards will be dynamically inserted here -->
+                    </div>
+                </div>
+                
+                <!-- Map Container - Collapsible on Mobile -->
+                <div class="map-container" id="mapContainer">
+                    <div class="map-header">
+                        <h4><i class="fas fa-map-marked-alt"></i> <span id="mapLocationLabel">Your Location</span></h4>
+                        <button class="map-close" id="mapCloseBtn">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div id="map"></div>
+                    
+                    <!-- Menu Overlay (Hidden by default) -->
+                    <div class="map-overlay hidden" id="menuOverlay">
+                        <div class="overlay-header">
+                            <h3 id="menuHotelName">Hotel Menu</h3>
+                            <button class="close-overlay" id="closeMenuBtn">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                        
+                        <div class="menu-section" id="menuSection">
+                            <!-- Menu items will be dynamically inserted here -->
+                        </div>
+                        
+                        <div class="order-summary">
+                            <h4>Order Summary</h4>
+                            <div id="orderItems">
+                                <p class="empty-order">No items added yet</p>
+                            </div>
+                            <div class="order-total" style="margin-top: 10px; font-weight: 700; text-align: right;">
+                                Total: <span class="currency" id="orderTotal">0</span>
+                            </div>
+                            
+                            <div class="order-actions">
+                                <button class="btn btn-outline" id="clearOrderBtn">Clear</button>
+                                <button class="btn btn-primary" id="placeOrderBtn">Place Order</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Restaurant Owner Dashboard -->
+        <div class="dashboard" id="restaurantView">
+            <div class="container">
+                <div class="dashboard-header">
+                    <h1 class="dashboard-title" id="restaurantDashboardTitle">Restaurant Dashboard</h1>
+                    <p class="dashboard-subtitle" id="restaurantDashboardSubtitle">Manage your restaurant profile, menu, and orders in real-time</p>
+                </div>
+                
+                <!-- Quick Stats -->
+                <div class="dashboard-grid">
+                    <div class="dashboard-card">
+                        <div class="card-title">
+                            <i class="fas fa-shopping-cart"></i> Today's Orders
+                        </div>
+                        <div class="card-value" id="todayOrders">0</div>
+                        <div class="card-subtext">From <span id="todayCustomers">0</span> customers</div>
+                    </div>
+                    
+                    <div class="dashboard-card">
+                        <div class="card-title">
+                            <i class="fas fa-clock"></i> Active Orders
+                        </div>
+                        <div class="card-value" id="activeOrders">0</div>
+                        <div class="card-subtext">In progress</div>
+                    </div>
+                    
+                    <div class="dashboard-card">
+                        <div class="card-title">
+                            <i class="fas fa-money-bill-wave"></i> Today's Revenue
+                        </div>
+                        <div class="card-value"><span class="currency" id="todayRevenue">0</span></div>
+                        <div class="card-subtext">Average order: <span class="currency" id="avgOrderValue">0</span></div>
+                    </div>
+                    
+                    <div class="dashboard-card">
+                        <div class="card-title">
+                            <i class="fas fa-utensils"></i> Menu Items
+                        </div>
+                        <div class="card-value" id="menuItemsCount">0</div>
+                        <div class="card-subtext"><span id="availableItems">0</span> available</div>
+                    </div>
+                </div>
+                
+                <!-- Restaurant Status -->
+                <div class="dashboard-section">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <i class="fas fa-store"></i> Restaurant Status
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="restaurantStatusToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <p>Toggle to open/close your restaurant for orders. When closed, customers won't be able to place orders.</p>
+                    <div style="display: flex; gap: 20px; margin-top: 15px; flex-wrap: wrap;">
+                        <div>
+                            <label style="font-weight: 600; display: block; margin-bottom: 5px;">Opening Time</label>
+                            <input type="time" id="openingTime" value="08:00" style="padding: 8px; border: 1px solid #ddd; border-radius: 6px;">
+                        </div>
+                        <div>
+                            <label style="font-weight: 600; display: block; margin-bottom: 5px;">Closing Time</label>
+                            <input type="time" id="closingTime" value="22:00" style="padding: 8px; border: 1px solid #ddd; border-radius: 6px;">
+                        </div>
+                        <div>
+                            <label style="font-weight: 600; display: block; margin-bottom: 5px;">Delivery Fee (KSh)</label>
+                            <input type="number" id="deliveryFee" value="50" min="0" max="100" style="padding: 8px; border: 1px solid #ddd; border-radius: 6px; width: 100px;">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" style="margin-top: 15px;" id="saveRestaurantSettingsBtn">
+                        <i class="fas fa-save"></i> Save Settings
+                    </button>
+                </div>
+                
+                <!-- Menu Management -->
+                <div class="dashboard-section">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <i class="fas fa-utensils"></i> Menu Management
+                        </div>
+                        <button class="btn btn-primary" id="addMenuItemBtn">
+                            <i class="fas fa-plus"></i> Add New Item
+                        </button>
+                    </div>
+                    
+                    <div class="menu-management-grid" id="menuManagementGrid">
+                        <!-- Menu items will be dynamically inserted here -->
+                    </div>
+                </div>
+                
+                <!-- Order Management -->
+                <div class="dashboard-section">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <i class="fas fa-clipboard-list"></i> Recent Orders
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <select id="orderFilter" style="padding: 8px; border: 1px solid #ddd; border-radius: 6px;">
+                                <option value="all">All Orders</option>
+                                <option value="today">Today</option>
+                                <option value="week">This Week</option>
+                                <option value="month">This Month</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="orders-grid" id="ordersList">
+                        <!-- Order cards will be dynamically inserted here -->
+                    </div>
+                </div>
+                
+                <!-- Delivery Status Section -->
+                <div class="dashboard-section" id="restaurantDeliveryStatusSection" style="display: none;">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <i class="fas fa-truck"></i> Active Deliveries
+                        </div>
+                    </div>
+                    <div id="restaurantActiveDeliveries">
+                        <!-- Active deliveries for restaurant will show here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Delivery Person Dashboard -->
+        <div class="delivery-dashboard" id="deliveryView">
+            <div class="container">
+                <div class="delivery-header">
+                    <h1 class="delivery-title">
+                        <i class="fas fa-motorcycle"></i> Delivery Dashboard
+                    </h1>
+                    <p class="delivery-subtitle" id="deliveryDashboardSubtitle">Available orders and live tracking</p>
+                </div>
+                
+                <!-- Delivery Person Status -->
+                <div class="delivery-grid">
+                    <div class="delivery-card">
+                        <div class="card-title">
+                            <i class="fas fa-circle"></i> Status
+                        </div>
+                        <div class="delivery-status-badge status-online" id="deliveryStatusBadge">
+                            <i class="fas fa-check-circle"></i> Online
+                        </div>
+                        <label class="toggle-switch" style="margin-top: 10px;">
+                            <input type="checkbox" id="deliveryStatusToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span style="margin-left: 10px;">Toggle Online/Offline</span>
+                    </div>
+                    
+                    <div class="delivery-card">
+                        <div class="card-title">
+                            <i class="fas fa-truck"></i> Active Deliveries
+                        </div>
+                        <div class="card-value" id="activeDeliveriesCount">0</div>
+                        <div class="card-subtext">Currently delivering</div>
+                    </div>
+                    
+                    <div class="delivery-card">
+                        <div class="card-title">
+                            <i class="fas fa-star"></i> Rating
+                        </div>
+                        <div class="card-value" id="deliveryRating">4.8</div>
+                        <div class="card-subtext">⭐ ⭐ ⭐ ⭐ ⭐</div>
+                    </div>
+                    
+                    <div class="delivery-card">
+                        <div class="card-title">
+                            <i class="fas fa-money-bill-wave"></i> Today's Earnings
+                        </div>
+                        <div class="card-value"><span class="currency" id="todayEarnings">0</span></div>
+                        <div class="card-subtext">Completed deliveries: <span id="completedDeliveries">0</span></div>
+                    </div>
+                </div>
+                
+                <!-- Live Map for Current Delivery -->
+                <div class="dashboard-section" id="currentDeliverySection" style="display: none;">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <i class="fas fa-location-dot"></i> Active Delivery
+                        </div>
+                        <span class="delivery-status-badge status-busy">On Delivery</span>
+                    </div>
+                    
+                    <div class="active-delivery-card" id="activeDeliveryCard">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <h3 style="color: white;" id="activeDeliveryOrderId">Order #1234</h3>
+                            <span style="background: white; color: var(--delivery); padding: 5px 10px; border-radius: 50px; font-weight: 600;">
+                                ETA: <span id="activeDeliveryETA">10 min</span>
+                            </span>
+                        </div>
+                        
+                        <div class="delivery-map-container">
+                            <div id="deliveryMap"></div>
+                        </div>
+                        
+                        <div style="background: white; border-radius: var(--border-radius); padding: 15px; margin-top: 15px;">
+                            <div style="display: flex; gap: 15px; margin-bottom: 15px;">
+                                <i class="fas fa-map-pin" style="color: var(--delivery); font-size: 1.5rem;"></i>
+                                <div>
+                                    <strong>Pickup:</strong>
+                                    <p id="activeDeliveryPickup">Restaurant Name</p>
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 15px; margin-bottom: 15px;">
+                                <i class="fas fa-flag-checkered" style="color: var(--success); font-size: 1.5rem;"></i>
+                                <div>
+                                    <strong>Dropoff:</strong>
+                                    <p id="activeDeliveryDropoff">Customer Location</p>
+                                </div>
+                            </div>
+                            
+                            <div class="delivery-progress">
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>Picked Up</span>
+                                    <span>On Route</span>
+                                    <span>Delivered</span>
+                                </div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" id="deliveryProgressFill" style="width: 50%;"></div>
+                                </div>
+                            </div>
+                            
+                            <div class="customer-contact">
+                                <button class="contact-btn call-btn-customer" id="callCustomerBtn">
+                                    <i class="fas fa-phone"></i> Call Customer
+                                </button>
+                                <button class="contact-btn sms-btn" id="smsCustomerBtn">
+                                    <i class="fas fa-sms"></i> SMS
+                                </button>
+                                <button class="contact-btn chat-btn" id="chatCustomerBtn">
+                                    <i class="fas fa-comment"></i> Chat
+                                </button>
+                            </div>
+                            
+                            <!-- COMPLETE DELIVERY BUTTON -->
+                            <button class="complete-delivery-btn" id="completeDeliveryBtn">
+                                <i class="fas fa-check-circle"></i> CONFIRM DELIVERY COMPLETE
+                            </button>
+                            <p style="font-size: 0.8rem; color: var(--gray); text-align: center; margin-top: 5px;">
+                                Click only when you have handed the food to the customer
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Available Deliveries -->
+                <div class="dashboard-section">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <i class="fas fa-clock"></i> Available Deliveries
+                        </div>
+                        <span id="availableDeliveriesCount">0 orders waiting</span>
+                    </div>
+                    
+                    <div class="delivery-orders-grid" id="availableDeliveriesList">
+                        <!-- Available deliveries will be inserted here -->
+                    </div>
+                </div>
+                
+                <!-- Delivery History -->
+                <div class="dashboard-section">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <i class="fas fa-history"></i> Completed Deliveries
+                        </div>
+                        <span class="delivery-completion-badge">
+                            <i class="fas fa-check-circle"></i> Total Earned: <span class="currency" id="totalEarnedDisplay">0</span>
+                        </span>
+                    </div>
+                    
+                    <div class="delivery-orders-grid" id="deliveryHistoryList">
+                        <!-- Delivery history will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Customer Live Tracking Modal -->
+        <div class="live-tracking-container" id="liveTrackingContainer">
+            <div class="live-tracking-header" id="liveTrackingHeader">
+                <h3><i class="fas fa-motorcycle"></i> Live Delivery Tracking</h3>
+                <button class="close-tracking-btn" id="closeLiveTrackingBtn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="delivery-man-info" id="deliveryManInfo">
+                <div class="delivery-avatar" id="deliveryAvatar">J</div>
+                <div>
+                    <h4 id="deliveryManName">John Doe</h4>
+                    <p style="color: var(--gray);" id="deliveryManVehicle">Motorcycle • Kxx 123A</p>
+                </div>
+            </div>
+            
+            <div style="padding: 15px; text-align: center;">
+                <span class="eta-info" id="liveETA">10 min</span>
+                <p style="color: var(--gray);" id="etaLabel">Estimated arrival time</p>
+            </div>
+            
+            <div class="live-map-mini" id="liveMapMini"></div>
+            
+            <div style="padding: 15px; display: flex; gap: 10px;" id="liveTrackingActions">
+                <button class="contact-btn call-btn-customer" id="liveCallDeliveryBtn" style="flex: 1;">
+                    <i class="fas fa-phone"></i> Call
+                </button>
+                <button class="contact-btn chat-btn" id="liveChatDeliveryBtn" style="flex: 1;">
+                    <i class="fas fa-comment"></i> Chat
+                </button>
+            </div>
+            
+            <!-- Delivery Completed Message -->
+            <div class="delivery-completed-message" id="deliveryCompletedMessage" style="display: none;">
+                <i class="fas fa-check-circle"></i> Your order has been delivered! Enjoy your meal!
+            </div>
+        </div>
+
+        <!-- Admin Dashboard -->
+        <div class="admin-dashboard container" id="adminView">
+            <div class="admin-header">
+                <h1 class="admin-title">Admin Control Panel</h1>
+                <p class="admin-subtitle">Manage restaurants and delivery personnel</p>
+            </div>
+            
+            <!-- Platform Overview -->
+            <div class="admin-grid">
+                <div class="dashboard-card">
+                    <div class="card-title">
+                        <i class="fas fa-users"></i> Total Customers
+                    </div>
+                    <div class="card-value" id="totalCustomers">0</div>
+                    <div class="card-subtext">Registered users</div>
+                </div>
+                
+                <div class="dashboard-card">
+                    <div class="card-title">
+                        <i class="fas fa-hotel"></i> Active Restaurants
+                    </div>
+                    <div class="card-value" id="activeRestaurants">0</div>
+                    <div class="card-subtext">Approved & active</div>
+                </div>
+                
+                <div class="dashboard-card">
+                    <div class="card-title">
+                        <i class="fas fa-motorcycle"></i> Delivery Personnel
+                    </div>
+                    <div class="card-value" id="activeDeliveryPersonnel">0</div>
+                    <div class="card-subtext"><span id="pendingDeliveryApprovals">0</span> pending</div>
+                </div>
+                
+                <div class="dashboard-card">
+                    <div class="card-title">
+                        <i class="fas fa-shopping-cart"></i> Total Orders
+                    </div>
+                    <div class="card-value" id="totalOrders">0</div>
+                    <div class="card-subtext"><span id="completedOrdersCount">0</span> completed</div>
+                </div>
+            </div>
+            
+            <!-- Verification Tabs -->
+            <div class="verification-tabs">
+                <button class="verification-tab active" id="restaurantVerificationTab">
+                    <i class="fas fa-hotel"></i> Restaurants
+                </button>
+                <button class="verification-tab" id="deliveryVerificationTab">
+                    <i class="fas fa-motorcycle"></i> Delivery Personnel
+                </button>
+            </div>
+            
+            <!-- Restaurant Verifications -->
+            <div class="dashboard-section" id="restaurantVerificationSection">
+                <div class="section-header">
+                    <div class="section-title">
+                        <i class="fas fa-user-check"></i> Restaurant Verifications
+                    </div>
+                    <div class="card-subtext" id="pendingRestaurantCount">0 restaurants pending approval</div>
+                </div>
+                
+                <div class="verification-list" id="restaurantVerificationList">
+                    <!-- Restaurant verification cards will be dynamically inserted here -->
+                </div>
+            </div>
+            
+            <!-- Delivery Person Verifications -->
+            <div class="dashboard-section" id="deliveryVerificationSection" style="display: none;">
+                <div class="section-header">
+                    <div class="section-title">
+                        <i class="fas fa-user-check"></i> Delivery Personnel Verifications
+                    </div>
+                    <div class="card-subtext" id="pendingDeliveryCount">0 delivery personnel pending approval</div>
+                </div>
+                
+                <div class="verification-list" id="deliveryVerificationList">
+                    <!-- Delivery verification cards will be dynamically inserted here -->
+                </div>
+            </div>
+            
+            <!-- Platform Statistics -->
+            <div class="dashboard-section">
+                <div class="section-header">
+                    <div class="section-title">
+                        <i class="fas fa-chart-line"></i> Delivery Performance
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
+                    <div>
+                        <h4>Total Deliveries</h4>
+                        <p style="font-size: 1.5rem; font-weight: 700;" id="totalDeliveries">0</p>
+                    </div>
+                    <div>
+                        <h4>Avg. Delivery Time</h4>
+                        <p style="font-size: 1.5rem; font-weight: 700;" id="avgDeliveryTime">25 min</p>
+                    </div>
+                    <div>
+                        <h4>Total Payouts</h4>
+                        <p style="font-size: 1.5rem; font-weight: 700;" id="totalPayouts"><span class="currency">0</span></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Single JavaScript file - ALL original JavaScript + NEW features -->
+    <script src="js/app.js"></script>
+</body>
+</html>
