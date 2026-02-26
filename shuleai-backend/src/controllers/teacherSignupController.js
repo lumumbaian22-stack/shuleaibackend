@@ -1,207 +1,184 @@
-const { Teacher, Student, AcademicRecord, Attendance, User, Class } = require('../models');
-const { createAlert } = require('../services/notificationService');
-const { Op } = require('sequelize');
-const csv = require('csv-parser');
-const fs = require('fs');
+const { User, Teacher, School, ApprovalRequest, Alert } = require('../models');
+const QRCode = require('qrcode');
 
-// @desc    Get teacher's classes/students
-// @route   GET /api/teacher/students
-// @access  Private/Teacher
-exports.getMyStudents = async (req, res) => {
+exports.teacherSignup = async (req, res) => {
   try {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher profile not found' });
+    const { name, email, password, phone, schoolId, qualification, subjects, classTeacher } = req.body;
 
-    // Assuming teacher has a classTeacher field
-    const students = await Student.findAll({
-      where: { grade: teacher.classTeacher },
-      include: [{ model: User, attributes: ['id','name','email','phone'] }]
+    const school = await School.findOne({ 
+      where: {
+        [Op.or]: [
+          { schoolId },
+          { lookupCodes: { [Op.contains]: [schoolId] } },
+          { qrCode: schoolId }
+        ]
+      }
+    });
+    if (!school) {
+      return res.status(404).json({ success: false, message: 'Invalid school ID' });
+    }
+
+    if (!school.settings.allowTeacherSignup) {
+      return res.status(403).json({ success: false, message: 'School not accepting signups' });
+    }
+
+    const existing = await User.findOne({ where: { email } });
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'Email already exists' });
+    }
+
+    const emailDomain = email.split('@')[1];
+    const autoApprove = school.settings.autoApproveDomains.includes(emailDomain);
+
+    const user = await User.create({
+      name, email, password, role: 'teacher', phone,
+      schoolCode: school.code,
+      isActive: autoApprove
     });
 
-    res.json({ success: true, data: students });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Enter marks for a student
-// @route   POST /api/teacher/marks
-// @access  Private/Teacher
-exports.enterMarks = async (req, res) => {
-  try {
-    const { studentId, subject, score, assessmentType, assessmentName, date, term, year } = req.body;
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-
-    const record = await AcademicRecord.create({
-      studentId,
-      schoolCode: req.user.schoolCode,
-      term: term || 'Term 1',
-      year: year || new Date().getFullYear(),
-      subject,
-      assessmentType,
-      assessmentName,
-      score,
-      teacherId: teacher.id,
-      date: date || new Date(),
-      isPublished: true
+    const teacher = await Teacher.create({
+      userId: user.id,
+      subjects: subjects || [],
+      classTeacher: classTeacher || null,
+      qualification,
+      approvalStatus: autoApprove ? 'approved' : 'pending',
+      approvedAt: autoApprove ? new Date() : null
     });
 
-    // Check for performance alerts (using curriculumEngine later)
-    // For now, create a simple alert if score < 50
-    if (score < 50) {
-      const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-      await createAlert({
-        userId: student.userId,
-        role: 'student',
-        type: 'academic',
-        severity: 'warning',
-        title: 'Low Score Alert',
-        message: `You scored ${score}% in ${subject}. Please review.`
+    if (!autoApprove) {
+      await ApprovalRequest.create({
+        schoolId: school.schoolId,
+        userId: user.id,
+        role: 'teacher',
+        data: { name, email, phone, qualification, subjects, classTeacher },
+        metadata: { ipAddress: req.ip, userAgent: req.headers['user-agent'] }
       });
 
-      // Also alert parents
-      const parents = await student.getParents({ include: [{ model: User }] });
-      for (const p of parents) {
-        await createAlert({
-          userId: p.userId,
-          role: 'parent',
-          type: 'academic',
-          severity: 'warning',
-          title: `Low Score: ${student.User.name}`,
-          message: `${student.User.name} scored ${score}% in ${subject}.`
+      school.stats.pendingApprovals++;
+      await school.save();
+
+      // Notify admins (internal alerts)
+      const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.code } });
+      for (const admin of admins) {
+        await Alert.create({
+          userId: admin.id,
+          role: 'admin',
+          type: 'approval',
+          severity: 'info',
+          title: 'New Teacher Signup',
+          message: `${name} requested to join.`,
+          data: { teacherId: teacher.id }
         });
       }
     }
 
-    res.status(201).json({ success: true, data: record });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+    const qrData = { teacherId: teacher.id, name, school: school.name };
+    const qrCode = await QRCode.toDataURL(JSON.stringify(qrData));
 
-// @desc    Take attendance
-// @route   POST /api/teacher/attendance
-// @access  Private/Teacher
-exports.takeAttendance = async (req, res) => {
-  try {
-    const { studentId, date, status, reason } = req.body;
-    const [attendance, created] = await Attendance.findOrCreate({
-      where: { studentId, date },
-      defaults: { studentId, date, status, reason, schoolCode: req.user.schoolCode, reportedBy: req.user.id }
+    res.status(201).json({
+      success: true,
+      message: autoApprove ? 'Signup successful' : 'Pending approval',
+      data: { userId: user.id, name, email, school: school.name, status: teacher.approvalStatus, qrCode }
     });
-
-    if (!created) {
-      attendance.status = status;
-      attendance.reason = reason;
-      await attendance.save();
-    }
-
-    // Alert if absent
-    if (status === 'absent') {
-      const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-      await createAlert({
-        userId: student.userId,
-        role: 'student',
-        type: 'attendance',
-        severity: 'info',
-        title: 'Absence Recorded',
-        message: `You were marked absent on ${date}.`
-      });
-    }
-
-    res.json({ success: true, data: attendance });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Add a comment about a student
-// @route   POST /api/teacher/comment
-// @access  Private/Teacher
-exports.addComment = async (req, res) => {
+exports.verifySchoolId = async (req, res) => {
   try {
-    const { studentId, comment } = req.body;
-    // This could be stored in a separate Comments table
-    // For now, just create an alert for parent
-    const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-    const parents = await student.getParents({ include: [{ model: User }] });
-    for (const p of parents) {
-      await createAlert({
-        userId: p.userId,
-        role: 'parent',
-        type: 'system',
-        severity: 'info',
-        title: `Teacher Comment: ${student.User.name}`,
-        message: comment
-      });
-    }
-
-    res.json({ success: true, message: 'Comment sent to parents' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Upload CSV of marks
-// @route   POST /api/teacher/upload/marks
-// @access  Private/Teacher
-exports.uploadMarksCSV = async (req, res) => {
-  if (!req.files || !req.files.file) {
-    return res.status(400).json({ success: false, message: 'No file uploaded' });
-  }
-
-  const file = req.files.file;
-  const filePath = `/tmp/${Date.now()}-${file.name}`;
-  await file.mv(filePath);
-
-  const results = [];
-  const errors = [];
-
-  fs.createReadStream(filePath)
-    .pipe(csv())
-    .on('data', (data) => results.push(data))
-    .on('end', async () => {
-      fs.unlinkSync(filePath);
-
-      const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-      for (const row of results) {
-        try {
-          // Expecting columns: studentId or elimuid, subject, score, date, assessmentType
-          const student = await Student.findOne({
-            where: {
-              [Op.or]: [
-                { id: row.studentId },
-                { elimuid: row.elimuid }
-              ]
-            }
-          });
-          if (!student) {
-            errors.push({ row, error: 'Student not found' });
-            continue;
-          }
-
-          await AcademicRecord.create({
-            studentId: student.id,
-            schoolCode: req.user.schoolCode,
-            term: row.term || 'Term 1',
-            year: row.year || new Date().getFullYear(),
-            subject: row.subject,
-            assessmentType: row.assessmentType || 'test',
-            assessmentName: row.assessmentName,
-            score: parseInt(row.score),
-            teacherId: teacher.id,
-            date: row.date || new Date(),
-            isPublished: true
-          });
-        } catch (err) {
-          errors.push({ row, error: err.message });
-        }
+    const { schoolId } = req.body;
+    const school = await School.findOne({
+      where: {
+        [Op.or]: [
+          { schoolId },
+          { lookupCodes: { [Op.contains]: [schoolId] } },
+          { qrCode: schoolId }
+        ]
       }
-
-      res.json({
-        success: true,
-        message: `Processed ${results.length} records with ${errors.length} errors`,
-        errors
-      });
     });
+    if (!school) {
+      return res.status(404).json({ success: false, message: 'Invalid school ID' });
+    }
+    res.json({
+      success: true,
+      data: {
+        schoolName: school.name,
+        schoolId: school.schoolId,
+        requiresApproval: school.settings.requireApproval,
+        autoApproveDomains: school.settings.autoApproveDomains
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.approveTeacher = async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    const { action, rejectionReason } = req.body;
+
+    const teacher = await Teacher.findByPk(teacherId, { include: [{ model: User }] });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
+    const school = await School.findOne({ where: { code: teacher.User.schoolCode } });
+
+    if (action === 'approve') {
+      teacher.approvalStatus = 'approved';
+      teacher.approvedBy = req.user.id;
+      teacher.approvedAt = new Date();
+      teacher.User.isActive = true;
+      await teacher.User.save();
+
+      school.stats.pendingApprovals--;
+      school.stats.teachers++;
+      await school.save();
+
+      await ApprovalRequest.update(
+        { status: 'approved', reviewedBy: req.user.id, reviewedAt: new Date() },
+        { where: { userId: teacher.User.id } }
+      );
+
+      await Alert.create({
+        userId: teacher.User.id,
+        role: 'teacher',
+        type: 'system',
+        severity: 'success',
+        title: 'Account Approved',
+        message: `Your account has been approved.`
+      });
+    } else {
+      teacher.approvalStatus = 'rejected';
+      teacher.rejectionReason = rejectionReason;
+      teacher.User.isActive = false;
+      await teacher.User.save();
+
+      school.stats.pendingApprovals--;
+      await school.save();
+
+      await ApprovalRequest.update(
+        { status: 'rejected', reviewedBy: req.user.id, reviewedAt: new Date(), rejectionReason },
+        { where: { userId: teacher.User.id } }
+      );
+    }
+    await teacher.save();
+
+    res.json({ success: true, message: `Teacher ${action}d` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getPendingApprovals = async (req, res) => {
+  try {
+    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    const pending = await Teacher.findAll({
+      where: { approvalStatus: 'pending' },
+      include: [{ model: User, attributes: ['id','name','email','phone','createdAt'] }]
+    });
+    res.json({ success: true, data: { teachers: pending, total: pending.length } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
