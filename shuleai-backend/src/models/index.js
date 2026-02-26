@@ -19,7 +19,9 @@ const DutyRoster = require('./DutyRoster')(sequelize, DataTypes);
 const UploadLog = require('./UploadLog')(sequelize, DataTypes);
 const SchoolNameRequest = require('./SchoolNameRequest')(sequelize, DataTypes);
 
-// Associations
+// --- Associations ---
+
+// User to role-specific profiles
 User.hasOne(Student, { foreignKey: 'userId', onDelete: 'CASCADE' });
 Student.belongsTo(User, { foreignKey: 'userId' });
 
@@ -32,10 +34,11 @@ Parent.belongsTo(User, { foreignKey: 'userId' });
 User.hasOne(Admin, { foreignKey: 'userId', onDelete: 'CASCADE' });
 Admin.belongsTo(User, { foreignKey: 'userId' });
 
-// School <-> User: using schoolId as the key
+// School <-> User (using schoolId as the key)
 School.hasMany(User, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
 User.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
 
+// Student-Parent many-to-many
 const StudentParent = sequelize.define('StudentParent', {
   studentId: { type: DataTypes.INTEGER, references: { model: Student, key: 'id' } },
   parentId: { type: DataTypes.INTEGER, references: { model: Parent, key: 'id' } }
@@ -43,30 +46,42 @@ const StudentParent = sequelize.define('StudentParent', {
 Student.belongsToMany(Parent, { through: StudentParent, foreignKey: 'studentId' });
 Parent.belongsToMany(Student, { through: StudentParent, foreignKey: 'parentId' });
 
+// AcademicRecord
 AcademicRecord.belongsTo(Student, { foreignKey: 'studentId' });
 AcademicRecord.belongsTo(Teacher, { foreignKey: 'teacherId' });
 
+// Attendance
 Attendance.belongsTo(Student, { foreignKey: 'studentId' });
 
+// Fee
 Fee.belongsTo(Student, { foreignKey: 'studentId' });
 
+// Payment
 Payment.belongsTo(Student, { foreignKey: 'studentId' });
 Payment.belongsTo(Parent, { foreignKey: 'parentId' });
 
+// Message
 Message.belongsTo(User, { as: 'Sender', foreignKey: 'senderId' });
 Message.belongsTo(User, { as: 'Receiver', foreignKey: 'receiverId' });
 
+// Alert
 Alert.belongsTo(User, { foreignKey: 'userId' });
 
+// ApprovalRequest
 ApprovalRequest.belongsTo(User, { foreignKey: 'userId' });
 ApprovalRequest.belongsTo(School, { foreignKey: 'schoolId', targetKey: 'schoolId' });
 
+// DutyRoster
 DutyRoster.belongsTo(School, { foreignKey: 'schoolId', targetKey: 'schoolId' });
 
+// UploadLog
 UploadLog.belongsTo(User, { foreignKey: 'uploadedBy' });
 
+// SchoolNameRequest
 SchoolNameRequest.belongsTo(User, { foreignKey: 'requestedBy' });
-SchoolNameRequest.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'code' }); // Note: School has `code` field? If not, adjust.
+// If your School model does not have a 'code' field, use 'schoolId' as targetKey.
+// Here we assume School has a 'schoolId' field.
+SchoolNameRequest.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
 
 module.exports = {
   sequelize,

@@ -2,12 +2,13 @@ const QRCode = require('qrcode');
 
 module.exports = (sequelize, DataTypes) => {
   const School = sequelize.define('School', {
-    name: {
+    // Primary key is automatically 'id', but we also have a unique schoolId
+    schoolId: {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true
     },
-    schoolId: {
+    name: {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true
@@ -67,6 +68,7 @@ module.exports = (sequelize, DataTypes) => {
           const sequential = (count + 1).toString().padStart(5, '0');
           school.schoolId = `SCH-${year}-${sequential}`;
 
+          // Generate QR code
           const qrData = {
             schoolId: school.schoolId,
             name: school.name,
