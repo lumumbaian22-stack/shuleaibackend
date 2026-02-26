@@ -21,7 +21,15 @@ const app = express();
 
 // Security
 app.use(helmet());
-app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
+const allowedOrigins = [
+  'http://localhost:3000',
+  process.env.FRONTEND_URL
+].filter(Boolean);
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true
+}));
 
 // Rate limiting
 const limiter = rateLimit({ windowMs: 15*60*1000, max: 100 });
