@@ -1,7 +1,7 @@
 const sequelize = require('../config/database');
 const { DataTypes } = require('sequelize');
 
-// Import model definitions
+// Import all models
 const User = require('./User')(sequelize, DataTypes);
 const School = require('./School')(sequelize, DataTypes);
 const Student = require('./Student')(sequelize, DataTypes);
@@ -32,8 +32,9 @@ Parent.belongsTo(User, { foreignKey: 'userId' });
 User.hasOne(Admin, { foreignKey: 'userId', onDelete: 'CASCADE' });
 Admin.belongsTo(User, { foreignKey: 'userId' });
 
-School.hasMany(User, { foreignKey: 'schoolCode', sourceKey: 'code' });
-User.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'code' });
+// School <-> User: using schoolId as the key
+School.hasMany(User, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
+User.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
 
 const StudentParent = sequelize.define('StudentParent', {
   studentId: { type: DataTypes.INTEGER, references: { model: Student, key: 'id' } },
@@ -65,7 +66,7 @@ DutyRoster.belongsTo(School, { foreignKey: 'schoolId', targetKey: 'schoolId' });
 UploadLog.belongsTo(User, { foreignKey: 'uploadedBy' });
 
 SchoolNameRequest.belongsTo(User, { foreignKey: 'requestedBy' });
-SchoolNameRequest.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'code' });
+SchoolNameRequest.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'code' }); // Note: School has `code` field? If not, adjust.
 
 module.exports = {
   sequelize,
