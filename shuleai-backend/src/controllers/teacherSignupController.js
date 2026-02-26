@@ -1,5 +1,6 @@
 const { User, Teacher, School, ApprovalRequest, Alert } = require('../models');
 const QRCode = require('qrcode');
+const { Op } = require('sequelize');
 
 exports.teacherSignup = async (req, res) => {
   try {
