@@ -160,4 +160,6 @@ exports.changePassword = async (req, res) => {
   }
 };
 
+console.log('✅ authController loaded, exports:', Object.keys(module.exports));
+module.exports = authController;
 // Forgot password and reset password are omitted because external email is removed.
