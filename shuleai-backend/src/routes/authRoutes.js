@@ -11,6 +11,6 @@ router.post('/verify-school', validationRules.verifySchool, validate, teacherSig
 
 router.use(protect);
 router.get('/me', authController.getMe);
-router.post('/logout', authController.logout);
+router.post('/login', authController.login);
 
 module.exports = router;
