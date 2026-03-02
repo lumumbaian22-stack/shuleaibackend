@@ -1,6 +1,7 @@
 const { User, Student, Teacher, Parent, Admin, School } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
+const jwt = require('jsonwebtoken');
 
 const authController = {
   // Register a new user
@@ -85,6 +86,67 @@ const authController = {
         return res.status(400).json({ success: false, message: 'Role is required' });
       }
 
+      // SUPER ADMIN SPECIAL CASE - NO DATABASE LOOKUP
+      if (role === 'super_admin') {
+        console.log('👑 Super admin login attempt');
+        
+        // Check if JWT_SECRET is set
+        if (!process.env.JWT_SECRET) {
+          console.error('❌ JWT_SECRET is not set in environment variables');
+          return res.status(500).json({ 
+            success: false, 
+            message: 'Server configuration error: JWT_SECRET missing' 
+          });
+        }
+        
+        if (password === process.env.SUPER_ADMIN_KEY) {
+          console.log('✅ Super admin key valid');
+          
+          // Create virtual super admin user (not from database)
+          const superAdmin = {
+            id: 'SUPER_ADMIN',
+            name: 'Super Admin',
+            email: 'super@shuleai.com',
+            role: 'super_admin',
+            schoolCode: 'GLOBAL',
+            isActive: true,
+            getPublicProfile: function() {
+              return {
+                id: this.id,
+                name: this.name,
+                email: this.email,
+                role: this.role,
+                schoolCode: this.schoolCode,
+                isActive: this.isActive
+              };
+            }
+          };
+          
+          const token = jwt.sign(
+            { id: 'SUPER_ADMIN', role: 'super_admin', schoolCode: 'GLOBAL' },
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_EXPIRE || '30d' }
+          );
+          
+          return res.json({
+            success: true,
+            data: { 
+              token, 
+              user: superAdmin.getPublicProfile(),
+              profile: null,
+              school: { name: 'Platform', code: 'GLOBAL', system: 'all' }
+            }
+          });
+        } else {
+          console.log('❌ Invalid super admin key');
+          return res.status(401).json({
+            success: false,
+            message: 'Invalid super admin credentials'
+          });
+        }
+      }
+
+      // NORMAL USER LOGIN (requires database lookup)
       let user;
       if (role === 'student' && elimuid) {
         console.log('🔍 Looking up student by elimuid:', elimuid);
@@ -96,6 +158,9 @@ const authController = {
         console.log('Student lookup result:', user ? 'Found' : 'Not found');
       } else {
         console.log('🔍 Looking up user by email:', email, 'and role:', role);
+        if (!email) {
+          return res.status(400).json({ success: false, message: 'Email is required for this role' });
+        }
         user = await User.findOne({ where: { email, role } });
         console.log('User lookup result:', user ? 'Found' : 'Not found');
       }
@@ -124,6 +189,15 @@ const authController = {
       await user.save();
       console.log('✅ Last login updated');
 
+      // Check if JWT_SECRET is set
+      if (!process.env.JWT_SECRET) {
+        console.error('❌ JWT_SECRET is not set in environment variables');
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Server configuration error: JWT_SECRET missing' 
+        });
+      }
+      
       const token = user.generateAuthToken();
       console.log('✅ JWT token generated');
 
@@ -162,8 +236,7 @@ const authController = {
       res.status(500).json({ 
         success: false, 
         message: 'Internal server error',
-        error: error.message,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   },
