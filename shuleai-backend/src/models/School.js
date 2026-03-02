@@ -2,16 +2,23 @@ const QRCode = require('qrcode');
 
 module.exports = (sequelize, DataTypes) => {
   const School = sequelize.define('School', {
-    // Primary key is automatically 'id', but we also have a unique schoolId
+    name: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      unique: true
+    },
     schoolId: {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true
     },
-    name: {
+    useCustomName: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    },
+    customName: {
       type: DataTypes.STRING,
-      allowNull: false,
-      unique: true
+      allowNull: true
     },
     lookupCodes: {
       type: DataTypes.ARRAY(DataTypes.STRING),
@@ -68,12 +75,7 @@ module.exports = (sequelize, DataTypes) => {
           const sequential = (count + 1).toString().padStart(5, '0');
           school.schoolId = `SCH-${year}-${sequential}`;
 
-          // Generate QR code
-          const qrData = {
-            schoolId: school.schoolId,
-            name: school.name,
-            createdAt: new Date()
-          };
+          const qrData = { schoolId: school.schoolId, name: school.name, createdAt: new Date() };
           school.qrCode = await QRCode.toDataURL(JSON.stringify(qrData));
           school.qrCodeData = {
             generated: new Date(),
