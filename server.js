@@ -4,6 +4,11 @@ const http = require('http');
 const socketio = require('socket.io');
 const { sequelize } = require('./src/models');
 
+// --- ADD THIS LINE RIGHT HERE ---
+// Tell Express to trust the proxy (Render's load balancer)
+app.set('trust proxy', 1);
+// --------------------------------
+
 const server = http.createServer(app);
 const io = socketio(server, {
   cors: { origin: process.env.FRONTEND_URL, credentials: true }
@@ -42,4 +47,5 @@ sequelize.sync({ alter: process.env.NODE_ENV === 'development' })
   .catch(err => {
     console.error('❌ Database sync failed:', err);
     process.exit(1);
+
   });
