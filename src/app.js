@@ -19,6 +19,12 @@ const publicRoutes = require('./routes/publicRoutes');
 
 const app = express();
 
+// --- ADD THIS LINE RIGHT HERE ---
+// This tells Express to trust the proxy (Render, Nginx, etc.)
+// Place it immediately after creating the app, before any middleware
+app.set('trust proxy', 1);
+// --------------------------------
+
 // Security
 app.use(helmet());
 app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
