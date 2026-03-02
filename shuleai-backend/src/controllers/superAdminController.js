@@ -15,7 +15,7 @@ exports.getOverview = async (req, res) => {
       pendingRequests: await SchoolNameRequest.count({ where: { status: 'pending' } }),
       users: await User.count()
     };
-    res.json({ success: true, data: stats });
+    res.json({ success: true, data: { stats } });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -26,7 +26,9 @@ exports.getOverview = async (req, res) => {
 // @access  Private/SuperAdmin
 exports.getSchools = async (req, res) => {
   try {
-    const schools = await School.findAll({ order: [['createdAt', 'DESC']] });
+    const schools = await School.findAll({ 
+      order: [['createdAt', 'DESC']] 
+    });
     res.json({ success: true, data: schools });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -39,19 +41,23 @@ exports.getSchools = async (req, res) => {
 exports.createSchool = async (req, res) => {
   try {
     const { name, system, address, contact } = req.body;
+    
+    // Create school
     const school = await School.create({
       name,
       system: system || '844',
       address,
       contact,
-      createdBy: req.user.id
+      createdBy: req.user.id,
+      useCustomName: false, // Default to off
+      customName: null
     });
 
     // Create default admin for the school
     const adminUser = await User.create({
       name: `Admin ${school.name}`,
-      email: `admin@${school.code.toLowerCase()}.edu`,
-      password: 'Admin123!',
+      email: `admin@${school.schoolId.toLowerCase()}.edu`,
+      password: 'Admin123!', // Should be changed on first login
       role: 'admin',
       schoolCode: school.code,
       isActive: true
@@ -63,7 +69,11 @@ exports.createSchool = async (req, res) => {
       managedSchools: [school.id]
     });
 
-    res.status(201).json({ success: true, data: school });
+    res.status(201).json({ 
+      success: true, 
+      message: 'School created successfully',
+      data: school 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -76,9 +86,24 @@ exports.updateSchool = async (req, res) => {
   try {
     const { id } = req.params;
     const school = await School.findByPk(id);
-    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    
+    if (!school) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'School not found' 
+      });
+    }
 
-    await school.update(req.body);
+    // Update allowed fields
+    const allowedFields = ['name', 'system', 'address', 'contact', 'settings', 'isActive', 'useCustomName', 'customName'];
+    allowedFields.forEach(field => {
+      if (req.body[field] !== undefined) {
+        school[field] = req.body[field];
+      }
+    });
+
+    await school.save();
+
     res.json({ success: true, data: school });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -92,13 +117,22 @@ exports.deleteSchool = async (req, res) => {
   try {
     const { id } = req.params;
     const school = await School.findByPk(id);
-    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    
+    if (!school) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'School not found' 
+      });
+    }
 
-    // Delete all related users (cascade handled by associations if set)
+    // Delete all related users
     await User.destroy({ where: { schoolCode: school.code } });
     await school.destroy();
 
-    res.json({ success: true, message: 'School deleted' });
+    res.json({ 
+      success: true, 
+      message: 'School and all associated data deleted' 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -111,7 +145,8 @@ exports.getPendingRequests = async (req, res) => {
   try {
     const requests = await SchoolNameRequest.findAll({
       where: { status: 'pending' },
-      include: [{ model: User, attributes: ['name', 'email'] }]
+      include: [{ model: User, attributes: ['name', 'email'] }],
+      order: [['createdAt', 'DESC']]
     });
     res.json({ success: true, data: requests });
   } catch (error) {
@@ -126,18 +161,27 @@ exports.approveRequest = async (req, res) => {
   try {
     const { id } = req.params;
     const request = await SchoolNameRequest.findByPk(id);
-    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
-
-    const school = await School.findOne({ where: { code: request.schoolCode } });
-    if (school) {
-      school.name = request.newName;
-      await school.save();
+    
+    if (!request) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Request not found' 
+      });
     }
 
+    // Update request status
     request.status = 'approved';
     request.reviewedBy = req.user.id;
     request.reviewedAt = new Date();
     await request.save();
+
+    // Update school with custom name but keep original for toggle
+    const school = await School.findOne({ where: { code: request.schoolCode } });
+    if (school) {
+      school.customName = request.newName;
+      school.useCustomName = true; // Auto-enable custom name
+      await school.save();
+    }
 
     // Notify requester
     await createAlert({
@@ -149,7 +193,10 @@ exports.approveRequest = async (req, res) => {
       message: `Your request to change school name to "${request.newName}" has been approved.`
     });
 
-    res.json({ success: true, message: 'Request approved' });
+    res.json({ 
+      success: true, 
+      message: 'Request approved' 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -163,7 +210,13 @@ exports.rejectRequest = async (req, res) => {
     const { id } = req.params;
     const { reason } = req.body;
     const request = await SchoolNameRequest.findByPk(id);
-    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
+    
+    if (!request) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Request not found' 
+      });
+    }
 
     request.status = 'rejected';
     request.rejectionReason = reason;
@@ -171,6 +224,7 @@ exports.rejectRequest = async (req, res) => {
     request.reviewedAt = new Date();
     await request.save();
 
+    // Notify requester
     await createAlert({
       userId: request.requestedBy,
       role: 'admin',
@@ -180,7 +234,10 @@ exports.rejectRequest = async (req, res) => {
       message: `Your request to change school name was rejected. Reason: ${reason || 'Not specified'}`
     });
 
-    res.json({ success: true, message: 'Request rejected' });
+    res.json({ 
+      success: true, 
+      message: 'Request rejected' 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -193,12 +250,21 @@ exports.updateBankDetails = async (req, res) => {
   try {
     const { schoolId } = req.params;
     const school = await School.findByPk(schoolId);
-    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    
+    if (!school) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'School not found' 
+      });
+    }
 
     school.bankDetails = req.body;
     await school.save();
 
-    res.json({ success: true, data: school.bankDetails });
+    res.json({ 
+      success: true, 
+      data: school.bankDetails 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
