@@ -86,18 +86,18 @@ const authController = {
         return res.status(400).json({ success: false, message: 'Role is required' });
       }
 
+      // Check if JWT_SECRET is set
+      if (!process.env.JWT_SECRET) {
+        console.error('❌ JWT_SECRET is not set in environment variables');
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Server configuration error: JWT_SECRET missing' 
+        });
+      }
+
       // SUPER ADMIN SPECIAL CASE - NO DATABASE LOOKUP
       if (role === 'super_admin') {
         console.log('👑 Super admin login attempt');
-        
-        // Check if JWT_SECRET is set
-        if (!process.env.JWT_SECRET) {
-          console.error('❌ JWT_SECRET is not set in environment variables');
-          return res.status(500).json({ 
-            success: false, 
-            message: 'Server configuration error: JWT_SECRET missing' 
-          });
-        }
         
         if (password === process.env.SUPER_ADMIN_KEY) {
           console.log('✅ Super admin key valid');
@@ -189,15 +189,6 @@ const authController = {
       await user.save();
       console.log('✅ Last login updated');
 
-      // Check if JWT_SECRET is set
-      if (!process.env.JWT_SECRET) {
-        console.error('❌ JWT_SECRET is not set in environment variables');
-        return res.status(500).json({ 
-          success: false, 
-          message: 'Server configuration error: JWT_SECRET missing' 
-        });
-      }
-      
       const token = user.generateAuthToken();
       console.log('✅ JWT token generated');
 
