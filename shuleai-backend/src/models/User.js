@@ -57,10 +57,15 @@ module.exports = (sequelize, DataTypes) => {
   };
 
   User.prototype.generateAuthToken = function() {
+    // Check if JWT_SECRET is set
+    if (!process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET environment variable is not set');
+    }
+    
     return jwt.sign(
       { id: this.id, role: this.role, schoolCode: this.schoolCode },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE }
+      { expiresIn: process.env.JWT_EXPIRE || '30d' }
     );
   };
 
