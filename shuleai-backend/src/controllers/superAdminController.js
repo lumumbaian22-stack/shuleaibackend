@@ -20,7 +20,9 @@ exports.getOverview = async (req, res) => {
 
 exports.getSchools = async (req, res) => {
   try {
-    const schools = await School.findAll({ order: [['createdAt', 'DESC']] });
+    const schools = await School.findAll({ 
+      order: [['createdAt', 'DESC']] 
+    });
     res.json({ success: true, data: schools });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -56,7 +58,11 @@ exports.createSchool = async (req, res) => {
       managedSchools: [school.id]
     });
 
-    res.status(201).json({ success: true, message: 'School created successfully', data: school });
+    res.status(201).json({ 
+      success: true, 
+      message: 'School created successfully', 
+      data: school 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -68,7 +74,10 @@ exports.updateSchool = async (req, res) => {
     const school = await School.findByPk(id);
     
     if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'School not found' 
+      });
     }
 
     const allowedFields = ['name', 'system', 'address', 'contact', 'settings', 'isActive', 'useCustomName', 'customName'];
@@ -91,13 +100,19 @@ exports.deleteSchool = async (req, res) => {
     const school = await School.findByPk(id);
     
     if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'School not found' 
+      });
     }
 
     await User.destroy({ where: { schoolCode: school.code } });
     await school.destroy();
 
-    res.json({ success: true, message: 'School and all associated data deleted' });
+    res.json({ 
+      success: true, 
+      message: 'School and all associated data deleted' 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -122,7 +137,10 @@ exports.approveRequest = async (req, res) => {
     const request = await SchoolNameRequest.findByPk(id);
     
     if (!request) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Request not found' 
+      });
     }
 
     request.status = 'approved';
@@ -146,7 +164,10 @@ exports.approveRequest = async (req, res) => {
       message: `Your request to change school name to "${request.newName}" has been approved.`
     });
 
-    res.json({ success: true, message: 'Request approved' });
+    res.json({ 
+      success: true, 
+      message: 'Request approved' 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -159,7 +180,10 @@ exports.rejectRequest = async (req, res) => {
     const request = await SchoolNameRequest.findByPk(id);
     
     if (!request) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Request not found' 
+      });
     }
 
     request.status = 'rejected';
@@ -177,7 +201,10 @@ exports.rejectRequest = async (req, res) => {
       message: `Your request to change school name was rejected. Reason: ${reason || 'Not specified'}`
     });
 
-    res.json({ success: true, message: 'Request rejected' });
+    res.json({ 
+      success: true, 
+      message: 'Request rejected' 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -189,13 +216,19 @@ exports.updateBankDetails = async (req, res) => {
     const school = await School.findByPk(schoolId);
     
     if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'School not found' 
+      });
     }
 
     school.bankDetails = req.body;
     await school.save();
 
-    res.json({ success: true, data: school.bankDetails });
+    res.json({ 
+      success: true, 
+      data: school.bankDetails 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
