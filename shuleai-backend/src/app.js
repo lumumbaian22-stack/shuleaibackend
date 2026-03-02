@@ -19,6 +19,9 @@ const publicRoutes = require('./routes/publicRoutes');
 
 const app = express();
 
+// Trust proxy (required for rate limiter on Render)
+app.set('trust proxy', 1);
+
 // Security
 app.use(helmet());
 
@@ -71,8 +74,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate limiting
-const limiter = rateLimit({ windowMs: 15*60*1000, max: 100 });
+// Rate limiting (now with trust proxy, it will work correctly)
+const limiter = rateLimit({ 
+  windowMs: 15 * 60 * 1000, 
+  max: 100,
+  // Optional: add a custom key generator for extra reliability
+  keyGenerator: (req) => {
+    return req.ip || req.connection.remoteAddress;
+  }
+});
 app.use('/api', limiter);
 
 // Body parsing
@@ -83,7 +93,7 @@ app.use(compression());
 
 // File upload
 app.use(fileUpload({
-  limits: { fileSize: process.env.MAX_FILE_SIZE || 50*1024*1024 },
+  limits: { fileSize: process.env.MAX_FILE_SIZE || 50 * 1024 * 1024 },
   useTempFiles: true,
   tempFileDir: '/tmp/',
   createParentPath: true
@@ -99,7 +109,7 @@ app.use(session({
   saveUninitialized: false,
   cookie: { 
     secure: process.env.NODE_ENV === 'production', 
-    maxAge: 7*24*60*60*1000,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
     sameSite: 'lax'
   }
 }));
