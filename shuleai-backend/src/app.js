@@ -21,15 +21,55 @@ const app = express();
 
 // Security
 app.use(helmet());
+
+// Debug: Log environment variables
+console.log('=== CORS DEBUG ===');
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('FRONTEND_URL from env:', process.env.FRONTEND_URL);
+console.log('==================');
+
+// Define allowed origins explicitly
 const allowedOrigins = [
   'http://localhost:3000',
+  'https://shuleai.live',
+  'https://www.shuleai.live',
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
+console.log('Allowed origins:', allowedOrigins);
+
+// CORS configuration with proper preflight handling
 app.use(cors({
-  origin: allowedOrigins,
-  credentials: true
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  optionsSuccessStatus: 200
 }));
+
+// Additional CORS headers middleware
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 // Rate limiting
 const limiter = rateLimit({ windowMs: 15*60*1000, max: 100 });
@@ -57,13 +97,30 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'session-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: process.env.NODE_ENV === 'production', maxAge: 7*24*60*60*1000 }
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production', 
+    maxAge: 7*24*60*60*1000,
+    sameSite: 'lax'
+  }
 }));
 
 // Static uploads
 const uploadDir = path.join(__dirname, '../uploads');
 require('fs').existsSync(uploadDir) || require('fs').mkdirSync(uploadDir, { recursive: true });
 app.use('/uploads', express.static(uploadDir));
+
+// Test endpoint to check CORS
+app.get('/cors-test', (req, res) => {
+  res.json({
+    message: 'CORS is working!',
+    yourOrigin: req.headers.origin,
+    allowedOrigins: allowedOrigins,
+    env: {
+      frontend_url: process.env.FRONTEND_URL,
+      node_env: process.env.NODE_ENV
+    }
+  });
+});
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -81,8 +138,12 @@ app.use((req, res) => res.status(404).json({ success: false, message: 'Route not
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(err.status || 500).json({ success: false, message: err.message });
+  console.error('Error stack:', err.stack);
+  res.status(err.status || 500).json({ 
+    success: false, 
+    message: err.message,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
 });
 
 module.exports = app;
