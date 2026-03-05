@@ -19,7 +19,8 @@ exports.register = async (req, res) => {
     // Check school exists (if schoolCode provided)
     let school = null;
     if (schoolCode) {
-      school = await School.findOne({ where: { code: schoolCode } });
+      // ===== CHANGED: 'code' to 'schoolId' =====
+      school = await School.findOne({ where: { schoolId: schoolCode } });
       if (!school) {
         return res.status(404).json({
           success: false,
@@ -155,7 +156,8 @@ exports.login = async (req, res) => {
       profile = await Admin.findOne({ where: { userId: user.id } });
     }
 
-    const school = await School.findOne({ where: { code: user.schoolCode } });
+    // ===== CHANGED: 'code' to 'schoolId' =====
+    const school = await School.findOne({ where: { schoolId: user.schoolCode } });
 
     res.json({
       success: true,
@@ -193,7 +195,8 @@ exports.getMe = async (req, res) => {
       profile = await Admin.findOne({ where: { userId: user.id } });
     }
 
-    const school = await School.findOne({ where: { code: user.schoolCode } });
+    // ===== CHANGED: 'code' to 'schoolId' =====
+    const school = await School.findOne({ where: { schoolId: user.schoolCode } });
 
     res.json({
       success: true,
