@@ -156,24 +156,31 @@ exports.login = async (req, res) => {
       profile = await Admin.findOne({ where: { userId: user.id } });
     }
 
-    // ===== CHANGED: 'code' to 'schoolId' =====
+       // FIXED: Use schoolId not code
     const school = await School.findOne({ where: { schoolId: user.schoolCode } });
 
     res.json({
       success: true,
       data: { 
         token, 
-        user: user.getPublicProfile(), 
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          phone: user.phone,
+          schoolCode: user.schoolCode // This is the schoolId
+        }, 
         profile, 
-        school 
+        school: school ? {
+          name: school.name,
+          schoolId: school.schoolId,
+          system: school.system
+        } : null
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -308,3 +315,4 @@ exports.resetPassword = async (req, res) => {
     });
   }
 };
+
