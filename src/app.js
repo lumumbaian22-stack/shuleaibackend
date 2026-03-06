@@ -18,8 +18,6 @@ const publicRoutes = require('./routes/publicRoutes');
 const superAdminRoutes = require('./routes/superAdminRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
-
-// NEW ROUTES - Add these
 const settingsRoutes = require('./routes/settingsRoutes');
 const teacherRoutes = require('./routes/teacherRoutes');
 const parentRoutes = require('./routes/parentRoutes');
@@ -70,16 +68,11 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('combined'));
 }
 
-// Session configuration
+// Session configuration - FIXED: Removed MongoDB dependency
 app.use(session({
   secret: process.env.SESSION_SECRET || 'session-secret',
   resave: false,
   saveUninitialized: false,
-  store: MongoStore.create({
-    mongoUrl: process.env.MONGODB_URI,
-    collectionName: 'sessions',
-    ttl: 14 * 24 * 60 * 60 // 14 days
-  }),
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
@@ -96,7 +89,7 @@ if (!require('fs').existsSync(uploadDir)) {
 // Static files
 app.use('/uploads', express.static(uploadDir));
 
-// API Routes - Main Routes
+// API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/duty', dutyRoutes);
@@ -104,8 +97,6 @@ app.use('/api/public', publicRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/analytics', analyticsRoutes);
-
-// NEW ROUTES - Settings, Teacher, Parent, Student
 app.use('/api/settings', settingsRoutes);
 app.use('/api/teacher', teacherRoutes);
 app.use('/api/parent', parentRoutes);
@@ -141,7 +132,6 @@ app.get('/', (req, res) => {
       superAdmin: '/api/super-admin',
       public: '/api/public'
     },
-    documentation: 'https://docs.shuleai.com',
     status: 'operational'
   });
 });
