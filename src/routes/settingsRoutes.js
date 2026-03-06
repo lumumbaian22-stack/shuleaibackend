@@ -8,11 +8,14 @@ const { School } = require('../models');
 // @access  Private
 router.get('/school', protect, async (req, res) => {
   try {
+    console.log('Looking for school with schoolId:', req.user.schoolCode);
+    
     const school = await School.findOne({ 
-      where: { code: req.user.schoolCode } 
+      where: { schoolId: req.user.schoolCode } // FIXED: Use schoolId not code
     });
     
     if (!school) {
+      console.log('School not found for schoolId:', req.user.schoolCode);
       return res.status(404).json({ 
         success: false, 
         message: 'School not found' 
@@ -23,7 +26,8 @@ router.get('/school', protect, async (req, res) => {
     res.json({
       curriculum: school.system || 'cbc',
       schoolName: school.name,
-      schoolLevel: 'secondary', // You can determine this from grades
+      schoolId: school.schoolId,
+      schoolLevel: 'secondary',
       terms: [
         { name: 'Term 1', startDate: '2024-01-15', endDate: '2024-04-12' },
         { name: 'Term 2', startDate: '2024-05-06', endDate: '2024-08-09' },
@@ -32,6 +36,7 @@ router.get('/school', protect, async (req, res) => {
       customSubjects: []
     });
   } catch (error) {
+    console.error('Settings error:', error);
     res.status(500).json({ 
       success: false, 
       message: error.message 
@@ -45,7 +50,7 @@ router.get('/school', protect, async (req, res) => {
 router.post('/school', protect, async (req, res) => {
   try {
     const school = await School.findOne({ 
-      where: { code: req.user.schoolCode } 
+      where: { schoolId: req.user.schoolCode } // FIXED: Use schoolId not code
     });
     
     if (!school) {
@@ -70,6 +75,7 @@ router.post('/school', protect, async (req, res) => {
       settings: {
         curriculum: school.system,
         schoolName: school.name,
+        schoolId: school.schoolId,
         schoolLevel: req.body.schoolLevel || 'secondary',
         terms: req.body.terms || [
           { name: 'Term 1', startDate: '2024-01-15', endDate: '2024-04-12' },
@@ -80,6 +86,7 @@ router.post('/school', protect, async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Settings update error:', error);
     res.status(500).json({ 
       success: false, 
       message: error.message 
