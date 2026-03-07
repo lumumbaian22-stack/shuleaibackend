@@ -1,4 +1,4 @@
-const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert } = require('../models');
+const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 
@@ -167,4 +167,5 @@ exports.getPayments = async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+
 };
