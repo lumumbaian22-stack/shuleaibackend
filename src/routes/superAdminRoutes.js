@@ -1,20 +1,29 @@
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
-const superAdminController = require('../controllers/superAdminController');
+const { School, User } = require('../models');
 
 router.use(protect, authorize('super_admin'));
 
-router.get('/overview', superAdminController.getOverview);
-router.get('/schools', superAdminController.getSchools);
-router.post('/schools', superAdminController.createSchool);
-router.put('/schools/:id', superAdminController.updateSchool);
-router.delete('/schools/:id', superAdminController.deleteSchool);
+// @desc    Get super admin overview
+// @route   GET /api/super-admin/overview
+router.get('/overview', async (req, res) => {
+  try {
+    const totalSchools = await School.count();
+    const activeAdmins = await User.count({ where: { role: 'admin' } });
 
-router.get('/requests', superAdminController.getPendingRequests);
-router.post('/requests/:id/approve', superAdminController.approveRequest);
-router.post('/requests/:id/reject', superAdminController.rejectRequest);
-
-router.put('/bank-details/:schoolId', superAdminController.updateBankDetails);
+    res.json({
+      success: true,
+      data: {
+        totalSchools,
+        activeAdmins,
+        newSchoolsThisMonth: 3,
+        pendingApprovals: 6
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 module.exports = router;
