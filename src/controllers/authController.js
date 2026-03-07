@@ -18,8 +18,17 @@ exports.register = async (req, res) => {
 
     // Check school exists (if schoolCode provided)
     let school = null;
-    if (schoolCode) {
-      // ===== CHANGED: 'code' to 'schoolId' =====
+    let finalSchoolCode = schoolCode;
+    
+    // For admin, create school first if no schoolCode provided
+    if (role === 'admin' && !schoolCode) {
+      // Create a new school
+      const newSchool = await School.create({
+        name: req.body.schoolName || `${name}'s School`,
+        system: req.body.curriculum || 'cbc'
+      });
+      finalSchoolCode = newSchool.schoolId;
+    } else if (schoolCode) {
       school = await School.findOne({ where: { schoolId: schoolCode } });
       if (!school) {
         return res.status(404).json({
@@ -27,6 +36,7 @@ exports.register = async (req, res) => {
           message: 'School not found with the provided code'
         });
       }
+      finalSchoolCode = schoolCode;
     }
 
     // Check if user already exists (if email provided)
@@ -40,77 +50,50 @@ exports.register = async (req, res) => {
       }
     }
 
-// Create user
-const user = await User.create({
-  name,
-  email: email || `${name.replace(/\s+/g, '.').toLowerCase()}@temp.edu`,
-  password,
-  role,
-  phone: phone || '',
-  schoolCode: schoolCode || 'SCH001'
-});
+    // Create user
+    const user = await User.create({
+      name,
+      email: email || `${name.replace(/\s+/g, '.').toLowerCase()}@temp.edu`,
+      password,
+      role,
+      phone: phone || '',
+      schoolCode: finalSchoolCode || 'SCH001'
+    });
 
-console.log('🔍 User created with role:', role); // ADD THIS
+    console.log('🔍 User created with role:', role);
 
-let profile = null;
+    let profile = null;
 
-// Create role-specific profile
-if (role === 'student') {
-  console.log('📝 Creating STUDENT profile'); // ADD THIS
-  profile = await Student.create({
-    userId: user.id,
-    elimuid: elimuid || null,
-    grade: grade || 'Not Assigned'
-  });
-} else if (role === 'teacher') {
-  console.log('📝 Creating TEACHER profile'); // ADD THIS
-  profile = await Teacher.create({
-    userId: user.id,
-    subjects: req.body.subjects || [],
-    classTeacher: req.body.classTeacher || null,
-    approvalStatus: 'pending'
-  });
-} else if (role === 'parent') {
-  console.log('📝 Creating PARENT profile'); // ADD THIS
-  profile = await Parent.create({
-    userId: user.id,
-    children: []
-  });
-} else if (role === 'admin') {
-  console.log('📝 Creating ADMIN profile'); // ADD THIS
-  profile = await Admin.create({
-    userId: user.id,
-    position: req.body.position || 'Administrator'
-  });
-} else {
-  console.log('❓ Unknown role:', role); // ADD THIS
-}
-    
-    
     // Create role-specific profile
     if (role === 'student') {
+      console.log('📝 Creating STUDENT profile');
       profile = await Student.create({
         userId: user.id,
         elimuid: elimuid || null,
         grade: grade || 'Not Assigned'
       });
     } else if (role === 'teacher') {
+      console.log('📝 Creating TEACHER profile');
       profile = await Teacher.create({
         userId: user.id,
         subjects: req.body.subjects || [],
         classTeacher: req.body.classTeacher || null,
-        approvalStatus: 'pending' // Teachers need approval
+        approvalStatus: 'pending'
       });
     } else if (role === 'parent') {
+      console.log('📝 Creating PARENT profile');
       profile = await Parent.create({
         userId: user.id,
         children: []
       });
     } else if (role === 'admin') {
+      console.log('📝 Creating ADMIN profile');
       profile = await Admin.create({
         userId: user.id,
         position: req.body.position || 'Administrator'
       });
+    } else {
+      console.log('❓ Unknown role:', role);
     }
 
     const token = user.generateAuthToken();
