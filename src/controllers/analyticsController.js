@@ -1,6 +1,7 @@
-const { Student, AcademicRecord, Attendance, School, Teacher } = require('../models');
+const { Student, AcademicRecord, Attendance, School, Teacher, User } = require('../models');
 const CurriculumAnalyticsEngine = require('../services/analytics/curriculumEngine');
 const moment = require('moment');
+const { Op } = require('sequelize'); // Add this line - it was missing
 
 // Helper to get date range
 const getDateRange = (period) => {
@@ -25,7 +26,8 @@ exports.getStudentAnalytics = async (req, res) => {
     const student = await Student.findByPk(studentId, { include: [{ model: User }] });
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
 
-    const school = await School.findOne({ where: { code: student.User.schoolCode } });
+    // FIXED: Changed from 'code' to 'schoolId'
+    const school = await School.findOne({ where: { schoolId: student.User.schoolCode } });
     const system = curriculum || school?.system || '844';
     const engine = new CurriculumAnalyticsEngine(system);
 
@@ -84,9 +86,10 @@ exports.getStudentAnalytics = async (req, res) => {
 // @access  Private/Teacher/Admin
 exports.getClassAnalytics = async (req, res) => {
   try {
-    const { classId } = req.params; // classId could be grade name
+    const { classId } = req.params;
     const { subject } = req.query;
 
+    // FIXED: Changed from 'schoolCode' to 'schoolId'
     const students = await Student.findAll({
       where: { grade: classId },
       include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
@@ -125,12 +128,22 @@ exports.getClassAnalytics = async (req, res) => {
 // @access  Private/Admin
 exports.getSchoolAnalytics = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
-    const students = await Student.findAll({ include: [{ model: User, where: { schoolCode: school.code } }] });
-    const teachers = await Teacher.findAll({ include: [{ model: User, where: { schoolCode: school.code } }] });
+    // FIXED: Changed from 'code' to 'schoolId'
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    
+    // FIXED: Changed from 'school.code' to 'school.schoolId'
+    const students = await Student.findAll({ 
+      include: [{ model: User, where: { schoolCode: school.schoolId } }] 
+    });
+    
+    // FIXED: Changed from 'school.code' to 'school.schoolId'
+    const teachers = await Teacher.findAll({ 
+      include: [{ model: User, where: { schoolCode: school.schoolId } }] 
+    });
 
+    // FIXED: Changed from 'school.code' to 'school.schoolId'
     const records = await AcademicRecord.findAll({
-      where: { schoolCode: school.code },
+      where: { schoolCode: school.schoolId },
       include: [{ model: Student }]
     });
 
@@ -155,6 +168,11 @@ exports.getSchoolAnalytics = async (req, res) => {
 
     const overallAvg = records.length ? records.reduce((a,b) => a + b.score, 0) / records.length : 0;
 
+    // FIXED: Changed from 'school.code' to 'school.schoolId'
+    const attendanceCount = await Attendance.count({ 
+      where: { schoolCode: school.schoolId } 
+    });
+
     res.json({
       success: true,
       data: {
@@ -165,7 +183,7 @@ exports.getSchoolAnalytics = async (req, res) => {
         gradeAverages,
         recentActivity: {
           academicRecords: records.length,
-          attendanceRecords: await Attendance.count({ where: { schoolCode: school.code } })
+          attendanceRecords: attendanceCount
         }
       }
     });
