@@ -22,8 +22,14 @@ exports.register = async (req, res) => {
     
     // For admin, create school first if no schoolCode provided
     if (role === 'admin' && !schoolCode) {
-      // Create a new school
+      // Generate a unique school ID manually
+      const year = new Date().getFullYear();
+      const schoolCount = await School.count();
+      const generatedSchoolId = `SCH-${year}-${(schoolCount + 1).toString().padStart(5, '0')}`;
+      
+      // Create a new school with explicit schoolId
       const newSchool = await School.create({
+        schoolId: generatedSchoolId,
         name: req.body.schoolName || `${name}'s School`,
         system: req.body.curriculum || 'cbc'
       });
