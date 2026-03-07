@@ -8,6 +8,8 @@ exports.register = async (req, res) => {
   try {
     const { name, email, password, role, phone, schoolCode, grade, elimuid } = req.body;
 
+    console.log('📝 Registration attempt:', { name, email, role, schoolCode });
+
     // Validate required fields
     if (!name || !password || !role) {
       return res.status(400).json({
@@ -16,26 +18,38 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Check school exists (if schoolCode provided)
-    let school = null;
+    // Handle school creation/lookup
     let finalSchoolCode = schoolCode;
     
     // For admin, create school first if no schoolCode provided
     if (role === 'admin' && !schoolCode) {
-      // Generate a unique school ID manually
+      console.log('🏫 Creating new school for admin:', name);
+      
+      // Generate a unique school ID
       const year = new Date().getFullYear();
       const schoolCount = await School.count();
       const generatedSchoolId = `SCH-${year}-${(schoolCount + 1).toString().padStart(5, '0')}`;
       
-      // Create a new school with explicit schoolId
-      const newSchool = await School.create({
-        schoolId: generatedSchoolId,
-        name: req.body.schoolName || `${name}'s School`,
-        system: req.body.curriculum || 'cbc'
-      });
-      finalSchoolCode = newSchool.schoolId;
+      try {
+        // Create a new school with explicit schoolId
+        const newSchool = await School.create({
+          schoolId: generatedSchoolId,
+          name: req.body.schoolName || `${name}'s School`,
+          system: req.body.curriculum || 'cbc'
+        });
+        
+        console.log('✅ School created:', newSchool.schoolId);
+        finalSchoolCode = newSchool.schoolId;
+      } catch (schoolError) {
+        console.error('❌ School creation failed:', schoolError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to create school: ' + schoolError.message
+        });
+      }
     } else if (schoolCode) {
-      school = await School.findOne({ where: { schoolId: schoolCode } });
+      // Verify existing school
+      const school = await School.findOne({ where: { schoolId: schoolCode } });
       if (!school) {
         return res.status(404).json({
           success: false,
@@ -45,7 +59,7 @@ exports.register = async (req, res) => {
       finalSchoolCode = schoolCode;
     }
 
-    // Check if user already exists (if email provided)
+    // Check if user already exists
     if (email) {
       const existing = await User.findOne({ where: { email } });
       if (existing) {
@@ -57,6 +71,8 @@ exports.register = async (req, res) => {
     }
 
     // Create user
+    console.log('👤 Creating user with schoolCode:', finalSchoolCode || 'SCH001');
+    
     const user = await User.create({
       name,
       email: email || `${name.replace(/\s+/g, '.').toLowerCase()}@temp.edu`,
@@ -66,7 +82,7 @@ exports.register = async (req, res) => {
       schoolCode: finalSchoolCode || 'SCH001'
     });
 
-    console.log('🔍 User created with role:', role);
+    console.log('✅ User created with ID:', user.id);
 
     let profile = null;
 
@@ -98,13 +114,11 @@ exports.register = async (req, res) => {
         userId: user.id,
         position: req.body.position || 'Administrator'
       });
-    } else {
-      console.log('❓ Unknown role:', role);
     }
 
     const token = user.generateAuthToken();
 
-    // Create welcome alert (internal only)
+    // Create welcome alert
     await createAlert({
       userId: user.id,
       role,
@@ -114,17 +128,31 @@ exports.register = async (req, res) => {
       message: 'Your account has been created.'
     });
 
+    // Return success with school info for admin
+    const responseData = {
+      token,
+      user: user.getPublicProfile(),
+      profile
+    };
+
+    // If this was an admin registration, include school info
+    if (role === 'admin' && finalSchoolCode) {
+      const school = await School.findOne({ where: { schoolId: finalSchoolCode } });
+      responseData.school = school ? {
+        name: school.name,
+        schoolId: school.schoolId,
+        system: school.system
+      } : null;
+    }
+
     res.status(201).json({
       success: true,
       message: 'Registration successful',
-      data: {
-        token,
-        user: user.getPublicProfile(),
-        profile
-      }
+      data: responseData
     });
+
   } catch (error) {
-    console.error('Registration error:', error);
+    console.error('❌ Registration error:', error);
     res.status(500).json({
       success: false,
       message: error.message || 'Registration failed'
@@ -139,17 +167,16 @@ exports.login = async (req, res) => {
   try {
     const { email, elimuid, password, role } = req.body;
     
+    console.log('🔐 Login attempt:', { email, elimuid, role });
+
     // SUPER ADMIN SPECIAL HANDLING
     if (role === 'super_admin') {
-      // Super admin doesn't need email - just check the key
       if (password === process.env.SUPER_ADMIN_KEY) {
-        // Find or create super admin
         let superAdmin = await User.findOne({ 
           where: { role: 'super_admin' } 
         });
         
         if (!superAdmin) {
-          // Create super admin if doesn't exist
           superAdmin = await User.create({
             name: 'Super Admin',
             email: process.env.SUPER_ADMIN_EMAIL || 'super@shuleai.com',
@@ -224,7 +251,6 @@ exports.login = async (req, res) => {
       profile = await Admin.findOne({ where: { userId: user.id } });
     }
 
-    // FIXED: Use schoolId not code
     const school = await School.findOne({ where: { schoolId: user.schoolCode } });
 
     res.json({
@@ -237,7 +263,7 @@ exports.login = async (req, res) => {
           email: user.email,
           role: user.role,
           phone: user.phone,
-          schoolCode: user.schoolCode // This is the schoolId
+          schoolCode: user.schoolCode
         }, 
         profile, 
         school: school ? {
@@ -247,6 +273,7 @@ exports.login = async (req, res) => {
         } : null
       }
     });
+
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -271,7 +298,6 @@ exports.getMe = async (req, res) => {
       profile = await Admin.findOne({ where: { userId: user.id } });
     }
 
-    // ===== CHANGED: 'code' to 'schoolId' =====
     const school = await School.findOne({ where: { schoolId: user.schoolCode } });
 
     res.json({
@@ -353,7 +379,6 @@ exports.changePassword = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
-    // Implementation for password reset (email would be sent here)
     res.json({ 
       success: true, 
       message: 'If your email exists, you will receive a password reset link' 
@@ -372,7 +397,6 @@ exports.forgotPassword = async (req, res) => {
 exports.resetPassword = async (req, res) => {
   try {
     const { token, newPassword } = req.body;
-    // Implementation for password reset
     res.json({ 
       success: true, 
       message: 'Password reset successful' 
