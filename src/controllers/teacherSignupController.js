@@ -33,7 +33,7 @@ exports.teacherSignup = async (req, res) => {
 
     const user = await User.create({
       name, email, password, role: 'teacher', phone,
-      schoolCode: school.code,
+      schoolCode: school.schoolId,
       isActive: autoApprove
     });
 
@@ -59,7 +59,7 @@ exports.teacherSignup = async (req, res) => {
       await school.save();
 
       // Notify admins (internal alerts)
-      const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.code } });
+      const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.schoolId } });
       for (const admin of admins) {
         await Alert.create({
           userId: admin.id,
@@ -123,7 +123,7 @@ exports.approveTeacher = async (req, res) => {
     const teacher = await Teacher.findByPk(teacherId, { include: [{ model: User }] });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
-    const school = await School.findOne({ where: { code: teacher.User.schoolCode } });
+    const school = await School.findOne({ where: { schoolId: teacher.User.schoolCode } });
 
     if (action === 'approve') {
       teacher.approvalStatus = 'approved';
@@ -173,7 +173,7 @@ exports.approveTeacher = async (req, res) => {
 
 exports.getPendingApprovals = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     const pending = await Teacher.findAll({
       where: { approvalStatus: 'pending' },
       include: [{ model: User, attributes: ['id','name','email','phone','createdAt'] }]
@@ -182,4 +182,5 @@ exports.getPendingApprovals = async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+
 };
