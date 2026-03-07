@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const { School, Teacher, Student, User } = require('../models');
 
-router.use(protect, authorize('admin'));
+router.use(protect, authorize('admin', 'super_admin'));
 
 // @desc    Get admin dashboard data
 // @route   GET /api/admin/dashboard
@@ -46,3 +46,4 @@ router.get('/dashboard', async (req, res) => {
 });
 
 module.exports = router;
+
