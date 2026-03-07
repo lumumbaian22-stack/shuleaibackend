@@ -47,13 +47,13 @@ exports.createSchool = async (req, res) => {
       createdBy: req.user.id
     });
 
-    // Create default admin for the school
+    // Create default admin for the school - FIXED: use school.schoolId instead of school.code
     const adminUser = await User.create({
       name: `Admin ${school.name}`,
-      email: `admin@${school.code.toLowerCase()}.edu`,
+      email: `admin@${school.schoolId.toLowerCase()}.edu`,
       password: 'Admin123!',
       role: 'admin',
-      schoolCode: school.code,
+      schoolCode: school.schoolId, // ✅ CHANGED: was school.code, now school.schoolId
       isActive: true
     });
 
@@ -94,8 +94,8 @@ exports.deleteSchool = async (req, res) => {
     const school = await School.findByPk(id);
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
-    // Delete all related users (cascade handled by associations if set)
-    await User.destroy({ where: { schoolCode: school.code } });
+    // Delete all related users - FIXED: use school.schoolId instead of school.code
+    await User.destroy({ where: { schoolCode: school.schoolId } }); // ✅ CHANGED: was school.code, now school.schoolId
     await school.destroy();
 
     res.json({ success: true, message: 'School deleted' });
@@ -128,7 +128,8 @@ exports.approveRequest = async (req, res) => {
     const request = await SchoolNameRequest.findByPk(id);
     if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
 
-    const school = await School.findOne({ where: { code: request.schoolCode } });
+    // FIXED: use schoolId instead of code
+    const school = await School.findOne({ where: { schoolId: request.schoolCode } }); // ✅ CHANGED: was { code: request.schoolCode }, now { schoolId: request.schoolCode }
     if (school) {
       school.name = request.newName;
       await school.save();
@@ -139,7 +140,6 @@ exports.approveRequest = async (req, res) => {
     request.reviewedAt = new Date();
     await request.save();
 
-    // Notify requester
     await createAlert({
       userId: request.requestedBy,
       role: 'admin',
