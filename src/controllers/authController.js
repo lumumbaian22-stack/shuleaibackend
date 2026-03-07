@@ -110,8 +110,15 @@ exports.register = async (req, res) => {
       });
     } else if (role === 'admin') {
       console.log('📝 Creating ADMIN profile');
+      
+      // Generate adminId manually
+      const year = new Date().getFullYear();
+      const adminCount = await Admin.count();
+      const generatedAdminId = `ADM-${year}-${(adminCount + 1).toString().padStart(4, '0')}`;
+      
       profile = await Admin.create({
         userId: user.id,
+        adminId: generatedAdminId,
         position: req.body.position || 'Administrator'
       });
     }
