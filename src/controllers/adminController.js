@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { User, Teacher, Student, Parent, School, Alert, Class } = require('../models'); // Class model may be added separately
+const { User, Teacher, Student, Parent, School, Alert, Class, SchoolNameRequest } = require('../models');
 const { createAlert } = require('../services/notificationService');
 
 // @desc    Get admin dashboard statistics
@@ -7,18 +7,31 @@ const { createAlert } = require('../services/notificationService');
 // @access  Private/Admin
 exports.getDashboardStats = async (req, res) => {
   try {
-    const schoolCode = req.user.schoolCode;
+    const schoolId = req.user.schoolCode; // This is actually the schoolId from user
 
     const stats = {
-      teachers: await Teacher.count({ include: [{ model: User, where: { schoolCode, role: 'teacher' } }] }),
-      students: await Student.count({ include: [{ model: User, where: { schoolCode, role: 'student' } }] }),
-      parents: await Parent.count({ include: [{ model: User, where: { schoolCode, role: 'parent' } }] }),
+      teachers: await Teacher.count({ 
+        include: [{ model: User, where: { schoolCode: schoolId, role: 'teacher' } }] 
+      }),
+      students: await Student.count({ 
+        include: [{ model: User, where: { schoolCode: schoolId, role: 'student' } }] 
+      }),
+      parents: await Parent.count({ 
+        include: [{ model: User, where: { schoolCode: schoolId, role: 'parent' } }] 
+      }),
       pendingApprovals: await Teacher.count({
-        include: [{ model: User, where: { schoolCode, role: 'teacher' } }],
+        include: [{ model: User, where: { schoolCode: schoolId, role: 'teacher' } }],
         where: { approvalStatus: 'pending' }
       }),
-      pendingNameRequests: await SchoolNameRequest.count({ where: { schoolCode, status: 'pending' } }),
-      recentAlerts: await Alert.count({ where: { role: 'admin', createdAt: { [Op.gte]: new Date(Date.now() - 7*24*60*60*1000) } } })
+      pendingNameRequests: await SchoolNameRequest.count({ 
+        where: { schoolCode: schoolId, status: 'pending' } 
+      }),
+      recentAlerts: await Alert.count({ 
+        where: { 
+          role: 'admin', 
+          createdAt: { [Op.gte]: new Date(Date.now() - 7*24*60*60*1000) } 
+        } 
+      })
     };
 
     res.json({ success: true, data: stats });
@@ -33,7 +46,11 @@ exports.getDashboardStats = async (req, res) => {
 exports.getAllTeachers = async (req, res) => {
   try {
     const teachers = await Teacher.findAll({
-      include: [{ model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id','name','email','phone','createdAt'] }],
+      include: [{ 
+        model: User, 
+        where: { schoolCode: req.user.schoolCode }, 
+        attributes: ['id','name','email','phone','createdAt'] 
+      }],
       order: [['createdAt', 'DESC']]
     });
     res.json({ success: true, data: teachers });
@@ -48,7 +65,11 @@ exports.getAllTeachers = async (req, res) => {
 exports.getAllStudents = async (req, res) => {
   try {
     const students = await Student.findAll({
-      include: [{ model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id','name','email','phone','createdAt'] }],
+      include: [{ 
+        model: User, 
+        where: { schoolCode: req.user.schoolCode }, 
+        attributes: ['id','name','email','phone','createdAt'] 
+      }],
       order: [['createdAt', 'DESC']]
     });
     res.json({ success: true, data: students });
@@ -63,7 +84,11 @@ exports.getAllStudents = async (req, res) => {
 exports.getAllParents = async (req, res) => {
   try {
     const parents = await Parent.findAll({
-      include: [{ model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id','name','email','phone','createdAt'] }],
+      include: [{ 
+        model: User, 
+        where: { schoolCode: req.user.schoolCode }, 
+        attributes: ['id','name','email','phone','createdAt'] 
+      }],
       order: [['createdAt', 'DESC']]
     });
     res.json({ success: true, data: parents });
@@ -77,7 +102,8 @@ exports.getAllParents = async (req, res) => {
 // @access  Private/Admin
 exports.getSchoolSettings = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    // ✅ FIXED: Use schoolId instead of code
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     res.json({ success: true, data: school });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -89,7 +115,8 @@ exports.getSchoolSettings = async (req, res) => {
 // @access  Private/Admin
 exports.updateSchoolSettings = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    // ✅ FIXED: Use schoolId instead of code
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
     const allowedFields = ['name', 'system', 'address', 'contact', 'settings', 'feeStructure', 'bankDetails'];
@@ -109,8 +136,9 @@ exports.updateSchoolSettings = async (req, res) => {
           type: 'system',
           severity: 'info',
           title: 'School Name Change',
-          message: `School ${school.code} changed name to ${req.body.name}`,
-          data: { schoolCode: school.code }
+          // ✅ FIXED: Use schoolId instead of code
+          message: `School ${school.schoolId} changed name to ${req.body.name}`,
+          data: { schoolCode: school.schoolId }
         });
       }
     }
@@ -127,10 +155,9 @@ exports.updateSchoolSettings = async (req, res) => {
 exports.createClass = async (req, res) => {
   try {
     const { name, teacherId } = req.body;
-    // Assuming a Class model exists
     const newClass = await Class.create({
       name,
-      schoolCode: req.user.schoolCode,
+      schoolId: req.user.schoolCode,
       teacherId
     });
     res.status(201).json({ success: true, data: newClass });
@@ -144,7 +171,7 @@ exports.createClass = async (req, res) => {
 // @access  Private/Admin
 exports.getClasses = async (req, res) => {
   try {
-    const classes = await Class.findAll({ where: { schoolCode: req.user.schoolCode } });
+    const classes = await Class.findAll({ where: { schoolId: req.user.schoolCode } });
     res.json({ success: true, data: classes });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
