@@ -9,19 +9,19 @@ router.use(protect, authorize('admin', 'super_admin'));
 // @route   GET /api/admin/dashboard
 router.get('/dashboard', async (req, res) => {
   try {
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     
     const totalStudents = await Student.count({
-      include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
+      include: [{ model: User, where: { schoolId: req.user.schoolCode } }]
     });
     
     const totalTeachers = await Teacher.count({
-      include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
+      include: [{ model: User, where: { schoolId: req.user.schoolCode } }]
     });
     
     const pendingTeachers = await Teacher.count({
       where: { approvalStatus: 'pending' },
-      include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
+      include: [{ model: User, where: { schoolId: req.user.schoolCode } }]
     });
 
     res.json({
@@ -46,4 +46,5 @@ router.get('/dashboard', async (req, res) => {
 });
 
 module.exports = router;
+
 
