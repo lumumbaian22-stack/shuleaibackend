@@ -40,17 +40,52 @@ exports.register = async (req, res) => {
       }
     }
 
-    // Create user
-    const user = await User.create({
-      name,
-      email: email || `${name.replace(/\s+/g, '.').toLowerCase()}@temp.edu`,
-      password,
-      role,
-      phone: phone || '',
-      schoolCode: schoolCode || 'SCH001' // Default school if none provided
-    });
+// Create user
+const user = await User.create({
+  name,
+  email: email || `${name.replace(/\s+/g, '.').toLowerCase()}@temp.edu`,
+  password,
+  role,
+  phone: phone || '',
+  schoolCode: schoolCode || 'SCH001'
+});
 
-    let profile = null;
+console.log('🔍 User created with role:', role); // ADD THIS
+
+let profile = null;
+
+// Create role-specific profile
+if (role === 'student') {
+  console.log('📝 Creating STUDENT profile'); // ADD THIS
+  profile = await Student.create({
+    userId: user.id,
+    elimuid: elimuid || null,
+    grade: grade || 'Not Assigned'
+  });
+} else if (role === 'teacher') {
+  console.log('📝 Creating TEACHER profile'); // ADD THIS
+  profile = await Teacher.create({
+    userId: user.id,
+    subjects: req.body.subjects || [],
+    classTeacher: req.body.classTeacher || null,
+    approvalStatus: 'pending'
+  });
+} else if (role === 'parent') {
+  console.log('📝 Creating PARENT profile'); // ADD THIS
+  profile = await Parent.create({
+    userId: user.id,
+    children: []
+  });
+} else if (role === 'admin') {
+  console.log('📝 Creating ADMIN profile'); // ADD THIS
+  profile = await Admin.create({
+    userId: user.id,
+    position: req.body.position || 'Administrator'
+  });
+} else {
+  console.log('❓ Unknown role:', role); // ADD THIS
+}
+    
     
     // Create role-specific profile
     if (role === 'student') {
