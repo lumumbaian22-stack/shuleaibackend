@@ -115,6 +115,50 @@ exports.login = async (req, res) => {
   try {
     const { email, elimuid, password, role } = req.body;
     
+    // SUPER ADMIN SPECIAL HANDLING
+    if (role === 'super_admin') {
+      // Super admin doesn't need email - just check the key
+      if (password === process.env.SUPER_ADMIN_KEY) {
+        // Find or create super admin
+        let superAdmin = await User.findOne({ 
+          where: { role: 'super_admin' } 
+        });
+        
+        if (!superAdmin) {
+          // Create super admin if doesn't exist
+          superAdmin = await User.create({
+            name: 'Super Admin',
+            email: process.env.SUPER_ADMIN_EMAIL || 'super@shuleai.com',
+            password: process.env.SUPER_ADMIN_KEY,
+            role: 'super_admin',
+            schoolCode: 'GLOBAL',
+            isActive: true
+          });
+        }
+
+        superAdmin.lastLogin = new Date();
+        await superAdmin.save();
+
+        const token = superAdmin.generateAuthToken();
+
+        return res.json({
+          success: true,
+          data: { 
+            token, 
+            user: superAdmin.getPublicProfile(),
+            profile: null,
+            school: null
+          }
+        });
+      } else {
+        return res.status(401).json({ 
+          success: false, 
+          message: 'Invalid super admin key' 
+        });
+      }
+    }
+
+    // Regular user login
     let user;
     if (role === 'student' && elimuid) {
       const student = await Student.findOne({ 
@@ -156,7 +200,7 @@ exports.login = async (req, res) => {
       profile = await Admin.findOne({ where: { userId: user.id } });
     }
 
-       // FIXED: Use schoolId not code
+    // FIXED: Use schoolId not code
     const school = await School.findOne({ where: { schoolId: user.schoolCode } });
 
     res.json({
@@ -180,6 +224,7 @@ exports.login = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -315,4 +360,3 @@ exports.resetPassword = async (req, res) => {
     });
   }
 };
-
