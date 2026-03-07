@@ -10,7 +10,9 @@ const { createAlert, createBulkAlerts } = require('../services/notificationServi
 exports.generateDutyRoster = async (req, res) => {
   try {
     const { startDate, endDate, type = 'auto' } = req.body;
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    // FIXED: changed 'code' to 'schoolId'
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    
     const teachers = await Teacher.findAll({
       where: { approvalStatus: 'approved' },
       include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
@@ -130,7 +132,8 @@ exports.getTodayDuty = async (req, res) => {
   try {
     const { date } = req.query;
     const targetDate = date ? moment(date) : moment();
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    // FIXED: changed 'code' to 'schoolId'
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
 
     const roster = await DutyRoster.findOne({
       where: {
@@ -162,7 +165,8 @@ exports.getTodayDuty = async (req, res) => {
 // @access  Private (all roles)
 exports.getWeeklyDuty = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    // FIXED: changed 'code' to 'schoolId'
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     const startOfWeek = moment().startOf('week');
     const endOfWeek = moment().endOf('week');
 
@@ -201,7 +205,8 @@ exports.checkInDuty = async (req, res) => {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    // FIXED: changed 'code' to 'schoolId'
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     const today = moment().format('YYYY-MM-DD');
 
     const roster = await DutyRoster.findOne({
@@ -243,7 +248,7 @@ exports.checkInDuty = async (req, res) => {
     }
 
     // Notify admins
-    const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.code } });
+    const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.schoolId } });
     for (const admin of admins) {
       await createAlert({
         userId: admin.id,
@@ -268,7 +273,8 @@ exports.checkOutDuty = async (req, res) => {
   try {
     const { location, notes } = req.body;
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    // FIXED: changed 'code' to 'schoolId'
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     const today = moment().format('YYYY-MM-DD');
 
     const roster = await DutyRoster.findOne({
@@ -297,7 +303,8 @@ exports.checkOutDuty = async (req, res) => {
 // @access  Private/Admin
 exports.getDutyStats = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    // FIXED: changed 'code' to 'schoolId'
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     const startOfMonth = moment().startOf('month');
     const endOfMonth = moment().endOf('month');
 
@@ -309,7 +316,7 @@ exports.getDutyStats = async (req, res) => {
     });
 
     const teachers = await Teacher.findAll({
-      include: [{ model: User, where: { schoolCode: school.code } }]
+      include: [{ model: User, where: { schoolCode: school.schoolId } }]
     });
 
     const stats = {
@@ -361,7 +368,8 @@ exports.requestDutySwap = async (req, res) => {
   try {
     const { dutyDate, reason, targetTeacherId } = req.body;
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    // FIXED: changed 'code' to 'schoolId'
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
 
     const roster = await DutyRoster.findOne({
       where: { schoolId: school.schoolId, date: moment(dutyDate).format('YYYY-MM-DD') }
@@ -372,7 +380,7 @@ exports.requestDutySwap = async (req, res) => {
     if (!duty) return res.status(403).json({ success: false, message: 'You are not on duty that day' });
 
     // Notify admin
-    const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.code } });
+    const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.schoolId } });
     for (const admin of admins) {
       await createAlert({
         userId: admin.id,
