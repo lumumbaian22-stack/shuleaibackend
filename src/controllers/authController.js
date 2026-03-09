@@ -1,9 +1,9 @@
-const { User, Student, Teacher, Parent, Admin, School } = require('../models');
+const { User, Student, Teacher, Parent, Admin, School, ApprovalRequest } = require('../models');
 const { createAlert } = require('../services/notificationService');
 
-// @desc    Register a new user (admin, teacher, parent, student)
+// @desc    Register a new user (admin, parent, student)
 // @route   POST /api/auth/register
-// @access  Public - NO AUTHENTICATION REQUIRED
+// @access  Public
 exports.register = async (req, res) => {
   try {
     const { name, email, password, role, phone, schoolCode, grade, elimuid } = req.body;
@@ -18,47 +18,6 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Handle school creation/lookup
-    let finalSchoolCode = schoolCode;
-    
-    // For admin, create school first if no schoolCode provided
-    if (role === 'admin' && !schoolCode) {
-      console.log('🏫 Creating new school for admin:', name);
-      
-      // Generate a unique school ID
-      const year = new Date().getFullYear();
-      const schoolCount = await School.count();
-      const generatedSchoolId = `SCH-${year}-${(schoolCount + 1).toString().padStart(5, '0')}`;
-      
-      try {
-        // Create a new school with explicit schoolId
-        const newSchool = await School.create({
-          schoolId: generatedSchoolId,
-          name: req.body.schoolName || `${name}'s School`,
-          system: req.body.curriculum || 'cbc'
-        });
-        
-        console.log('✅ School created:', newSchool.schoolId);
-        finalSchoolCode = newSchool.schoolId;
-      } catch (schoolError) {
-        console.error('❌ School creation failed:', schoolError);
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to create school: ' + schoolError.message
-        });
-      }
-    } else if (schoolCode) {
-      // Verify existing school
-      const school = await School.findOne({ where: { schoolId: schoolCode } });
-      if (!school) {
-        return res.status(404).json({
-          success: false,
-          message: 'School not found with the provided code'
-        });
-      }
-      finalSchoolCode = schoolCode;
-    }
-
     // Check if user already exists
     if (email) {
       const existing = await User.findOne({ where: { email } });
@@ -70,91 +29,206 @@ exports.register = async (req, res) => {
       }
     }
 
-    // Create user
-    console.log('👤 Creating user with schoolCode:', finalSchoolCode || 'SCH001');
-    
-    const user = await User.create({
-      name,
-      email: email || `${name.replace(/\s+/g, '.').toLowerCase()}@temp.edu`,
-      password,
-      role,
-      phone: phone || '',
-      schoolCode: finalSchoolCode || 'SCH001'
-    });
+    let finalSchoolCode = schoolCode;
+    let school = null;
+    let responseData = {};
 
-    console.log('✅ User created with ID:', user.id);
-
-    let profile = null;
-
-    // Create role-specific profile
-    if (role === 'student') {
-      console.log('📝 Creating STUDENT profile');
-      profile = await Student.create({
-        userId: user.id,
-        elimuid: elimuid || null,
-        grade: grade || 'Not Assigned'
-      });
-    } else if (role === 'teacher') {
-      console.log('📝 Creating TEACHER profile');
-      profile = await Teacher.create({
-        userId: user.id,
-        subjects: req.body.subjects || [],
-        classTeacher: req.body.classTeacher || null,
-        approvalStatus: 'pending'
-      });
-    } else if (role === 'parent') {
-      console.log('📝 Creating PARENT profile');
-      profile = await Parent.create({
-        userId: user.id,
-        children: []
-      });
-    } else if (role === 'admin') {
-      console.log('📝 Creating ADMIN profile');
+    // Handle different roles
+    if (role === 'admin') {
+      // ADMIN: Create school first
+      console.log('🏫 Creating new school for admin');
       
-      // Generate adminId manually
       const year = new Date().getFullYear();
+      const schoolCount = await School.count();
+      const generatedSchoolId = `SCH-${year}-${(schoolCount + 1).toString().padStart(5, '0')}`;
+      
+      school = await School.create({
+        schoolId: generatedSchoolId,
+        name: req.body.schoolName || `${name}'s School`,
+        system: req.body.curriculum || 'cbc'
+      });
+      
+      finalSchoolCode = school.schoolId;
+      
+      // Create user (inactive - pending approval)
+      const user = await User.create({
+        name,
+        email,
+        password,
+        role: 'admin',
+        phone: phone || '',
+        schoolCode: finalSchoolCode,
+        isActive: false
+      });
+
+      // Generate adminId
       const adminCount = await Admin.count();
       const generatedAdminId = `ADM-${year}-${(adminCount + 1).toString().padStart(4, '0')}`;
       
-      profile = await Admin.create({
+      const profile = await Admin.create({
         userId: user.id,
         adminId: generatedAdminId,
-        position: req.body.position || 'Administrator'
+        position: req.body.position || 'School Administrator'
+      });
+
+      // Create approval request
+      await ApprovalRequest.create({
+        schoolId: school.schoolId,
+        userId: user.id,
+        role: 'admin',
+        status: 'pending',
+        data: { name, email, schoolName: school.name }
+      });
+
+      // Notify super admins
+      const superAdmins = await User.findAll({ where: { role: 'super_admin' } });
+      for (const sa of superAdmins) {
+        await createAlert({
+          userId: sa.id,
+          role: 'super_admin',
+          type: 'approval',
+          severity: 'info',
+          title: 'New Admin Registration',
+          message: `${name} registered for ${school.name}`
+        });
+      }
+
+      const token = user.generateAuthToken();
+
+      responseData = {
+        token,
+        user: user.getPublicProfile(),
+        profile,
+        school: {
+          name: school.name,
+          schoolId: school.schoolId,
+          system: school.system
+        },
+        message: 'Registration submitted for super admin approval'
+      };
+
+    } else if (role === 'parent') {
+      // PARENT: Must provide schoolCode and child's elimuid
+      if (!schoolCode) {
+        return res.status(400).json({
+          success: false,
+          message: 'School code is required for parent registration'
+        });
+      }
+
+      school = await School.findOne({ where: { schoolId: schoolCode } });
+      if (!school) {
+        return res.status(404).json({
+          success: false,
+          message: 'School not found with provided code'
+        });
+      }
+
+      // Verify child exists with this elimuid
+      if (elimuid) {
+        const child = await Student.findOne({ 
+          where: { elimuid },
+          include: [{ model: User }]
+        });
+        
+        if (!child) {
+          return res.status(404).json({
+            success: false,
+            message: 'No student found with this ELIMUID'
+          });
+        }
+      }
+
+      const user = await User.create({
+        name,
+        email,
+        password,
+        role: 'parent',
+        phone: phone || '',
+        schoolCode,
+        isActive: true
+      });
+
+      const profile = await Parent.create({
+        userId: user.id,
+        children: []
+      });
+
+      const token = user.generateAuthToken();
+
+      responseData = {
+        token,
+        user: user.getPublicProfile(),
+        profile
+      };
+
+    } else if (role === 'student') {
+      // STUDENT: Usually created by teacher, but can self-register
+      if (!schoolCode) {
+        return res.status(400).json({
+          success: false,
+          message: 'School code is required for student registration'
+        });
+      }
+
+      school = await School.findOne({ where: { schoolId: schoolCode } });
+      if (!school) {
+        return res.status(404).json({
+          success: false,
+          message: 'School not found with provided code'
+        });
+      }
+
+      // Generate ELIMUID if not provided
+      const finalElimuid = elimuid || `ELIMU-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+
+      const user = await User.create({
+        name,
+        email: email || `${name.replace(/\s+/g, '.').toLowerCase()}@student.edu`,
+        password,
+        role: 'student',
+        phone: phone || '',
+        schoolCode,
+        isActive: true
+      });
+
+      const profile = await Student.create({
+        userId: user.id,
+        elimuid: finalElimuid,
+        grade: grade || 'Not Assigned'
+      });
+
+      const token = user.generateAuthToken();
+
+      responseData = {
+        token,
+        user: user.getPublicProfile(),
+        profile,
+        elimuid: finalElimuid
+      };
+
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid role specified'
       });
     }
 
-    const token = user.generateAuthToken();
-
     // Create welcome alert
     await createAlert({
-      userId: user.id,
+      userId: responseData.user.id,
       role,
       type: 'system',
-      severity: 'success',
-      title: 'Welcome to ShuleAI',
-      message: 'Your account has been created.'
+      severity: 'info',
+      title: role === 'admin' ? 'Registration Pending' : 'Welcome to ShuleAI',
+      message: role === 'admin' 
+        ? 'Your registration is pending super admin approval'
+        : 'Your account has been created successfully'
     });
-
-    // Return success with school info for admin
-    const responseData = {
-      token,
-      user: user.getPublicProfile(),
-      profile
-    };
-
-    // If this was an admin registration, include school info
-    if (role === 'admin' && finalSchoolCode) {
-      const school = await School.findOne({ where: { schoolId: finalSchoolCode } });
-      responseData.school = school ? {
-        name: school.name,
-        schoolId: school.schoolId,
-        system: school.system
-      } : null;
-    }
 
     res.status(201).json({
       success: true,
-      message: 'Registration successful',
+      message: responseData.message || 'Registration successful',
       data: responseData
     });
 
@@ -163,6 +237,153 @@ exports.register = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Registration failed'
+    });
+  }
+};
+
+// @desc    Teacher signup with school ID
+// @route   POST /api/auth/teacher/signup
+// @access  Public
+exports.teacherSignup = async (req, res) => {
+  try {
+    const { name, email, password, schoolId, subjects, qualification, classTeacher } = req.body;
+
+    console.log('📝 Teacher signup attempt:', { name, email, schoolId });
+
+    // Validate required fields
+    if (!name || !email || !password || !schoolId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email, password, and schoolId are required'
+      });
+    }
+
+    // Find the school
+    const school = await School.findOne({ where: { schoolId } });
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: 'School not found with provided ID'
+      });
+    }
+
+    // Check if user exists
+    const existing = await User.findOne({ where: { email } });
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email already in use'
+      });
+    }
+
+    // Create user (inactive - pending admin approval)
+    const user = await User.create({
+      name,
+      email,
+      password,
+      role: 'teacher',
+      schoolCode: school.schoolId,
+      isActive: false
+    });
+
+    // Generate employee ID
+    const year = new Date().getFullYear();
+    const teacherCount = await Teacher.count();
+    const employeeId = `TCH-${year}-${(teacherCount + 1).toString().padStart(4, '0')}`;
+
+    // Create teacher profile (pending)
+    const profile = await Teacher.create({
+      userId: user.id,
+      employeeId,
+      subjects: subjects || [],
+      classTeacher: classTeacher || null,
+      qualification,
+      approvalStatus: 'pending'
+    });
+
+    // Create approval request
+    await ApprovalRequest.create({
+      schoolId: school.schoolId,
+      userId: user.id,
+      role: 'teacher',
+      status: 'pending',
+      data: { name, email, subjects, qualification }
+    });
+
+    // Notify school admins
+    const admins = await User.findAll({ 
+      where: { 
+        role: 'admin',
+        schoolCode: school.schoolId
+      } 
+    });
+
+    for (const admin of admins) {
+      await createAlert({
+        userId: admin.id,
+        role: 'admin',
+        type: 'approval',
+        severity: 'info',
+        title: 'New Teacher Signup',
+        message: `${name} requested to join as teacher`
+      });
+    }
+
+    const token = user.generateAuthToken();
+
+    res.status(201).json({
+      success: true,
+      message: 'Teacher registration submitted for admin approval',
+      data: {
+        token,
+        user: user.getPublicProfile(),
+        profile,
+        school: {
+          name: school.name,
+          schoolId: school.schoolId
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Teacher signup error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Teacher signup failed'
+    });
+  }
+};
+
+// @desc    Verify school ID
+// @route   POST /api/auth/verify-school
+// @access  Public
+exports.verifySchoolId = async (req, res) => {
+  try {
+    const { schoolId } = req.body;
+
+    const school = await School.findOne({ 
+      where: { schoolId } 
+    });
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: 'School not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        schoolName: school.name,
+        schoolId: school.schoolId,
+        system: school.system
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -179,9 +400,7 @@ exports.login = async (req, res) => {
     // SUPER ADMIN SPECIAL HANDLING
     if (role === 'super_admin') {
       if (password === process.env.SUPER_ADMIN_KEY) {
-        let superAdmin = await User.findOne({ 
-          where: { role: 'super_admin' } 
-        });
+        let superAdmin = await User.findOne({ where: { role: 'super_admin' } });
         
         if (!superAdmin) {
           superAdmin = await User.create({
@@ -235,10 +454,15 @@ exports.login = async (req, res) => {
       });
     }
 
+    // Check if user is active (especially for pending approvals)
     if (!user.isActive) {
+      let message = 'Account is pending approval';
+      if (role === 'admin') message = 'Admin account pending super admin approval';
+      if (role === 'teacher') message = 'Teacher account pending school admin approval';
+      
       return res.status(403).json({ 
         success: false, 
-        message: 'Account is deactivated' 
+        message
       });
     }
 
@@ -270,7 +494,8 @@ exports.login = async (req, res) => {
           email: user.email,
           role: user.role,
           phone: user.phone,
-          schoolCode: user.schoolCode
+          schoolCode: user.schoolCode,
+          isActive: user.isActive
         }, 
         profile, 
         school: school ? {
@@ -386,6 +611,7 @@ exports.changePassword = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
+    // Implementation for password reset (email would be sent here)
     res.json({ 
       success: true, 
       message: 'If your email exists, you will receive a password reset link' 
@@ -404,6 +630,7 @@ exports.forgotPassword = async (req, res) => {
 exports.resetPassword = async (req, res) => {
   try {
     const { token, newPassword } = req.body;
+    // Implementation for password reset
     res.json({ 
       success: true, 
       message: 'Password reset successful' 
