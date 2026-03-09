@@ -18,6 +18,16 @@ exports.register = async (req, res) => {
       });
     }
 
+    // Define allowed roles for this endpoint
+    const allowedRoles = ['admin', 'parent', 'student'];
+    
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid role. Teachers must use /api/auth/teacher/signup`
+      });
+    }
+
     // Check if user already exists
     if (email) {
       const existing = await User.findOne({ where: { email } });
@@ -93,10 +103,8 @@ exports.register = async (req, res) => {
         });
       }
 
-      const token = user.generateAuthToken();
-
       responseData = {
-        token,
+        token: user.generateAuthToken(),
         user: user.getPublicProfile(),
         profile,
         school: {
@@ -108,7 +116,7 @@ exports.register = async (req, res) => {
       };
 
     } else if (role === 'parent') {
-      // PARENT: Must provide schoolCode and child's elimuid
+      // PARENT: Must provide schoolCode
       if (!schoolCode) {
         return res.status(400).json({
           success: false,
@@ -124,7 +132,7 @@ exports.register = async (req, res) => {
         });
       }
 
-      // Verify child exists with this elimuid
+      // Verify child exists if elimuid provided
       if (elimuid) {
         const child = await Student.findOne({ 
           where: { elimuid },
@@ -151,19 +159,17 @@ exports.register = async (req, res) => {
 
       const profile = await Parent.create({
         userId: user.id,
-        children: []
+        children: elimuid ? [elimuid] : []
       });
 
-      const token = user.generateAuthToken();
-
       responseData = {
-        token,
+        token: user.generateAuthToken(),
         user: user.getPublicProfile(),
         profile
       };
 
     } else if (role === 'student') {
-      // STUDENT: Usually created by teacher, but can self-register
+      // STUDENT: Must provide schoolCode
       if (!schoolCode) {
         return res.status(400).json({
           success: false,
@@ -198,20 +204,12 @@ exports.register = async (req, res) => {
         grade: grade || 'Not Assigned'
       });
 
-      const token = user.generateAuthToken();
-
       responseData = {
-        token,
+        token: user.generateAuthToken(),
         user: user.getPublicProfile(),
         profile,
         elimuid: finalElimuid
       };
-
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid role specified'
-      });
     }
 
     // Create welcome alert
@@ -329,13 +327,11 @@ exports.teacherSignup = async (req, res) => {
       });
     }
 
-    const token = user.generateAuthToken();
-
     res.status(201).json({
       success: true,
       message: 'Teacher registration submitted for admin approval',
       data: {
-        token,
+        token: user.generateAuthToken(),
         user: user.getPublicProfile(),
         profile,
         school: {
@@ -598,44 +594,6 @@ exports.changePassword = async (req, res) => {
     });
   } catch (error) {
     console.error('Change password error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
-    });
-  }
-};
-
-// @desc    Forgot password
-// @route   POST /api/auth/forgot-password
-// @access  Public
-exports.forgotPassword = async (req, res) => {
-  try {
-    const { email } = req.body;
-    // Implementation for password reset (email would be sent here)
-    res.json({ 
-      success: true, 
-      message: 'If your email exists, you will receive a password reset link' 
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
-    });
-  }
-};
-
-// @desc    Reset password
-// @route   POST /api/auth/reset-password
-// @access  Public
-exports.resetPassword = async (req, res) => {
-  try {
-    const { token, newPassword } = req.body;
-    // Implementation for password reset
-    res.json({ 
-      success: true, 
-      message: 'Password reset successful' 
-    });
-  } catch (error) {
     res.status(500).json({ 
       success: false, 
       message: error.message 
