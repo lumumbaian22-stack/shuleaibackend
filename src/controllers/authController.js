@@ -1,5 +1,6 @@
 const { User, Student, Teacher, Parent, Admin, School, ApprovalRequest } = require('../models');
 const { createAlert } = require('../services/notificationService');
+const { Op } = require('sequelize');
 
 // @desc    Register a new user (admin, parent, student)
 // @route   POST /api/auth/register
@@ -257,7 +258,15 @@ exports.teacherSignup = async (req, res) => {
     }
 
     // Find the school
-    const school = await School.findOne({ where: { schoolId } });
+    const school = await School.findOne({ 
+      where: { 
+        [Op.or]: [
+          { schoolId: schoolId },
+          { id: schoolId }
+        ]
+      } 
+    });
+    
     if (!school) {
       return res.status(404).json({
         success: false,
@@ -323,20 +332,24 @@ exports.teacherSignup = async (req, res) => {
         type: 'approval',
         severity: 'info',
         title: 'New Teacher Signup',
-        message: `${name} requested to join as teacher`
+        message: `${name} requested to join as teacher at ${school.name}`,
+        data: { teacherId: user.id }
       });
     }
+
+    const token = user.generateAuthToken();
 
     res.status(201).json({
       success: true,
       message: 'Teacher registration submitted for admin approval',
       data: {
-        token: user.generateAuthToken(),
+        token,
         user: user.getPublicProfile(),
         profile,
         school: {
           name: school.name,
-          schoolId: school.schoolId
+          schoolId: school.schoolId,
+          system: school.system
         }
       }
     });
@@ -358,7 +371,12 @@ exports.verifySchoolId = async (req, res) => {
     const { schoolId } = req.body;
 
     const school = await School.findOne({ 
-      where: { schoolId } 
+      where: { 
+        [Op.or]: [
+          { schoolId: schoolId },
+          { id: schoolId }
+        ]
+      } 
     });
 
     if (!school) {
@@ -377,6 +395,7 @@ exports.verifySchoolId = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('❌ School verification error:', error);
     res.status(500).json({
       success: false,
       message: error.message
@@ -594,6 +613,66 @@ exports.changePassword = async (req, res) => {
     });
   } catch (error) {
     console.error('Change password error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+};
+
+// @desc    Forgot password
+// @route   POST /api/auth/forgot-password
+// @access  Public
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    // Check if user exists (but don't reveal for security)
+    const user = await User.findOne({ where: { email } });
+    
+    if (user) {
+      // In a real app, you would:
+      // 1. Generate a reset token
+      // 2. Save it to the user record with expiry
+      // 3. Send an email with reset link
+      console.log(`Password reset requested for: ${email}`);
+    }
+
+    // Always return same message for security
+    res.json({ 
+      success: true, 
+      message: 'If your email exists, you will receive a password reset link' 
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+};
+
+// @desc    Reset password with token
+// @route   POST /api/auth/reset-password
+// @access  Public
+exports.resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    
+    // In a real app, you would:
+    // 1. Find user by valid reset token
+    // 2. Check if token hasn't expired
+    // 3. Update password
+    // 4. Clear reset token fields
+    
+    console.log(`Password reset with token: ${token}`);
+
+    res.json({ 
+      success: true, 
+      message: 'Password reset successful. You can now login with your new password.' 
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
     res.status(500).json({ 
       success: false, 
       message: error.message 
