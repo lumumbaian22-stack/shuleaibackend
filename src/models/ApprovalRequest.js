@@ -10,7 +10,7 @@ module.exports = (sequelize, DataTypes) => {
       references: { model: 'Users', key: 'id' }
     },
     role: {
-      type: DataTypes.ENUM('teacher', 'parent', 'student'),
+      type: DataTypes.ENUM('admin', 'teacher', 'parent', 'student'),  // Added 'admin'
       allowNull: false
     },
     status: {
