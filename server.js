@@ -3,7 +3,7 @@ const app = require('./src/app');
 const http = require('http');
 const socketio = require('socket.io');
 const { sequelize } = require('./src/models');
-const { Sequelize } = require('sequelize'); // <-- ADD THIS LINE
+const { Sequelize } = require('sequelize');
 
 // Function to generate short code (same as in School model)
 function generateShortCode() {
@@ -19,133 +19,172 @@ function generateShortCode() {
 // Check if we should just run migrations and exit
 if (process.env.RUN_MIGRATIONS === 'true') {
     console.log('🔧 Running migrations...');
-    
-    // Use raw SQL queries to avoid model synchronization issues
     const queryInterface = sequelize.getQueryInterface();
-    
-    // Step 1: Add shortCode column as nullable
-    queryInterface.addColumn('Schools', 'shortCode', {
-        type: Sequelize.STRING,
-        allowNull: true,
-        unique: true
-    })
-    .then(() => {
-        console.log('✅ Added shortCode column');
-        
-        // Step 2: Generate short codes using raw query to avoid model issues
-        return sequelize.query(
-            `SELECT id FROM "Schools" WHERE "shortCode" IS NULL`,
-            { type: Sequelize.QueryTypes.SELECT }
-        );
-    })
-    .then(async (schools) => {
-        console.log(`📝 Generating short codes for ${schools.length} existing schools...`);
-        
-        // Generate short codes one by one using raw updates
-        for (const school of schools) {
-            let shortCode = generateShortCode();
-            let isUnique = false;
-            
-            // Ensure uniqueness
-            while (!isUnique) {
-                const existing = await sequelize.query(
-                    `SELECT id FROM "Schools" WHERE "shortCode" = :shortCode`,
-                    { 
-                        replacements: { shortCode },
-                        type: Sequelize.QueryTypes.SELECT 
+
+    // Helper function to check if a column exists
+    async function columnExists(tableName, columnName) {
+        try {
+            const tableDescription = await queryInterface.describeTable(tableName);
+            return tableDescription.hasOwnProperty(columnName);
+        } catch (error) {
+            console.error(`Error describing table ${tableName}:`, error);
+            return false;
+        }
+    }
+
+    // Wrap everything in an async function to use await
+    (async () => {
+        try {
+            // 1. Add shortCode column only if it doesn't exist
+            if (!(await columnExists('Schools', 'shortCode'))) {
+                await queryInterface.addColumn('Schools', 'shortCode', {
+                    type: Sequelize.STRING,
+                    allowNull: true,
+                    unique: true
+                });
+                console.log('✅ Added shortCode column');
+            } else {
+                console.log('⏩ shortCode column already exists, skipping...');
+            }
+
+            // Get the School model (do this after potential column addition)
+            const { School } = require('./src/models');
+
+            // 2. Generate short codes for existing schools that don't have one
+            const schoolsWithoutCode = await School.findAll({ where: { shortCode: null } });
+            if (schoolsWithoutCode.length > 0) {
+                console.log(`📝 Generating short codes for ${schoolsWithoutCode.length} existing schools...`);
+                for (const school of schoolsWithoutCode) {
+                    let shortCode = generateShortCode();
+                    // Ensure uniqueness
+                    while (await School.findOne({ where: { shortCode } })) {
+                        shortCode = generateShortCode();
                     }
-                );
-                
-                if (existing.length === 0) {
-                    isUnique = true;
+                    school.shortCode = shortCode;
+                    await school.save();
+                }
+                console.log('✅ Short codes generated for all schools');
+            } else {
+                console.log('⏩ All schools already have short codes, skipping generation...');
+            }
+
+            // 3. Add status column only if it doesn't exist
+            if (!(await columnExists('Schools', 'status'))) {
+                await queryInterface.addColumn('Schools', 'status', {
+                    type: Sequelize.ENUM('pending', 'active', 'suspended', 'rejected'),
+                    defaultValue: 'pending'
+                });
+                console.log('✅ Added status column');
+            } else {
+                console.log('⏩ status column already exists, skipping...');
+            }
+
+            // 4. Set existing schools to active (only if status is null or pending)
+            const { School: SchoolModel } = require('./src/models');
+            await SchoolModel.update(
+                { status: 'active', isActive: true },
+                { where: { status: ['pending', null] } }
+            );
+            console.log('✅ Updated existing schools status to active');
+
+            // 5. Add approvedBy column only if it doesn't exist
+            if (!(await columnExists('Schools', 'approvedBy'))) {
+                await queryInterface.addColumn('Schools', 'approvedBy', {
+                    type: Sequelize.INTEGER,
+                    allowNull: true,
+                    references: { model: 'Users', key: 'id' },
+                    onDelete: 'SET NULL'
+                });
+                console.log('✅ Added approvedBy column');
+            } else {
+                console.log('⏩ approvedBy column already exists, skipping...');
+            }
+
+            // 6. Add approvedAt column only if it doesn't exist
+            if (!(await columnExists('Schools', 'approvedAt'))) {
+                await queryInterface.addColumn('Schools', 'approvedAt', {
+                    type: Sequelize.DATE,
+                    allowNull: true
+                });
+                console.log('✅ Added approvedAt column');
+            } else {
+                console.log('⏩ approvedAt column already exists, skipping...');
+            }
+
+            // 7. Add rejectionReason column only if it doesn't exist
+            if (!(await columnExists('Schools', 'rejectionReason'))) {
+                await queryInterface.addColumn('Schools', 'rejectionReason', {
+                    type: Sequelize.TEXT,
+                    allowNull: true
+                });
+                console.log('✅ Added rejectionReason column');
+            } else {
+                console.log('⏩ rejectionReason column already exists, skipping...');
+            }
+
+            // 8. Make schoolCode nullable in Users table
+            try {
+                // Check if column exists and its current nullable state
+                const usersColumns = await queryInterface.describeTable('Users');
+                if (usersColumns.schoolCode && usersColumns.schoolCode.allowNull === false) {
+                    await queryInterface.changeColumn('Users', 'schoolCode', {
+                        type: Sequelize.STRING,
+                        allowNull: true
+                    });
+                    console.log('✅ Updated Users table (schoolCode is now nullable)');
+                } else if (!usersColumns.schoolCode) {
+                    console.log('⚠️ schoolCode column not found in Users table');
                 } else {
-                    shortCode = generateShortCode();
+                    console.log('⏩ schoolCode column already nullable, skipping...');
+                }
+            } catch (changeError) {
+                console.log('⚠️ Note: Could not modify schoolCode column:', changeError.message);
+            }
+
+            // 9. Add indexes (check if they exist first - using try/catch as they're idempotent)
+            try {
+                await queryInterface.addIndex('Schools', ['shortCode'], {
+                    name: 'schools_short_code_idx',
+                    unique: true,
+                    where: { shortCode: { [Sequelize.Op.ne]: null } }
+                });
+                console.log('✅ Added index on shortCode');
+            } catch (indexError) {
+                if (indexError.name === 'SequelizeUniqueConstraintError') {
+                    console.log('⏩ Index on shortCode already exists, skipping...');
+                } else {
+                    console.log('⚠️ Index creation note:', indexError.message);
                 }
             }
-            
-            // Update the school with the unique short code
-            await sequelize.query(
-                `UPDATE "Schools" SET "shortCode" = :shortCode WHERE id = :id`,
-                { 
-                    replacements: { shortCode, id: school.id },
-                    type: Sequelize.QueryTypes.UPDATE 
+
+            try {
+                await queryInterface.addIndex('Schools', ['status'], {
+                    name: 'schools_status_idx'
+                });
+                console.log('✅ Added index on status');
+            } catch (indexError) {
+                if (indexError.name === 'SequelizeUniqueConstraintError') {
+                    console.log('⏩ Index on status already exists, skipping...');
+                } else {
+                    console.log('⚠️ Index creation note:', indexError.message);
                 }
-            );
+            }
+
+            console.log('🎉 All migrations completed successfully!');
+            console.log('📊 Summary:');
+            console.log('   - Added all required columns');
+            console.log(`   - Generated short codes for existing schools`);
+            console.log('   - Updated school statuses');
+            console.log('   - Added database indexes');
+            console.log('\n✅ Migration process complete. You can now remove RUN_MIGRATIONS env variable and redeploy.');
+            process.exit(0);
+
+        } catch (err) {
+            console.error('❌ Migration failed with error:', err);
+            console.error('Stack trace:', err.stack);
+            process.exit(1);
         }
-        
-        console.log('✅ Short codes generated');
-        
-        // Step 3: Now add status column
-        return queryInterface.addColumn('Schools', 'status', {
-            type: Sequelize.ENUM('pending', 'active', 'suspended', 'rejected'),
-            defaultValue: 'pending'
-        });
-    })
-    .then(() => {
-        console.log('✅ Added status column');
-        
-        // Step 4: Set existing schools to active
-        return sequelize.query(
-            `UPDATE "Schools" SET status = 'active', "isActive" = true WHERE status IS NULL`,
-            { type: Sequelize.QueryTypes.UPDATE }
-        );
-    })
-    .then(() => {
-        console.log('✅ Updated existing schools to active');
-        
-        // Step 5: Add approvedBy column
-        return queryInterface.addColumn('Schools', 'approvedBy', {
-            type: Sequelize.INTEGER,
-            allowNull: true,
-            references: { model: 'Users', key: 'id' },
-            onDelete: 'SET NULL'
-        });
-    })
-    .then(() => {
-        console.log('✅ Added approvedBy column');
-        
-        // Step 6: Add approvedAt column
-        return queryInterface.addColumn('Schools', 'approvedAt', {
-            type: Sequelize.DATE,
-            allowNull: true
-        });
-    })
-    .then(() => {
-        console.log('✅ Added approvedAt column');
-        
-        // Step 7: Add rejectionReason column
-        return queryInterface.addColumn('Schools', 'rejectionReason', {
-            type: Sequelize.TEXT,
-            allowNull: true
-        });
-    })
-    .then(() => {
-        console.log('✅ Added rejectionReason column');
-        
-        // Step 8: Make schoolCode nullable in Users table
-        return queryInterface.changeColumn('Users', 'schoolCode', {
-            type: Sequelize.STRING,
-            allowNull: true
-        });
-    })
-    .then(() => {
-        console.log('✅ Updated Users table');
-        
-        // Step 9: Add indexes
-        return Promise.all([
-            queryInterface.addIndex('Schools', ['shortCode']),
-            queryInterface.addIndex('Schools', ['status'])
-        ]);
-    })
-    .then(() => {
-        console.log('✅ Added indexes');
-        console.log('🎉 All migrations completed successfully!');
-        process.exit(0);
-    })
-    .catch(err => {
-        console.error('❌ Migration failed:', err);
-        process.exit(1);
-    });
+    })(); // Execute the async function immediately
     
 } else {
     // Normal server startup
