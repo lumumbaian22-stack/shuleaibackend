@@ -3,6 +3,7 @@ const app = require('./src/app');
 const http = require('http');
 const socketio = require('socket.io');
 const { sequelize } = require('./src/models');
+const { Sequelize } = require('sequelize'); // <-- ADD THIS LINE
 
 // Function to generate short code (same as in School model)
 function generateShortCode() {
@@ -154,3 +155,4 @@ if (process.env.RUN_MIGRATIONS === 'true') {
             process.exit(1);
         });
 }
+
