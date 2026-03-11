@@ -20,95 +20,129 @@ function generateShortCode() {
 if (process.env.RUN_MIGRATIONS === 'true') {
     console.log('🔧 Running migrations...');
     
-    // First, add the columns as nullable
-    sequelize.getQueryInterface().addColumn('Schools', 'shortCode', {
+    // Use raw SQL queries to avoid model synchronization issues
+    const queryInterface = sequelize.getQueryInterface();
+    
+    // Step 1: Add shortCode column as nullable
+    queryInterface.addColumn('Schools', 'shortCode', {
         type: Sequelize.STRING,
         allowNull: true,
         unique: true
-    }).then(() => {
+    })
+    .then(() => {
         console.log('✅ Added shortCode column');
         
-        // Get the School model
-        const { School } = require('./src/models');
-        
-        // Generate short codes for existing schools
-        return School.findAll({ where: { shortCode: null } });
-    }).then(async (schools) => {
+        // Step 2: Generate short codes using raw query to avoid model issues
+        return sequelize.query(
+            `SELECT id FROM "Schools" WHERE "shortCode" IS NULL`,
+            { type: Sequelize.QueryTypes.SELECT }
+        );
+    })
+    .then(async (schools) => {
         console.log(`📝 Generating short codes for ${schools.length} existing schools...`);
         
+        // Generate short codes one by one using raw updates
         for (const school of schools) {
             let shortCode = generateShortCode();
+            let isUnique = false;
+            
             // Ensure uniqueness
-            while (await School.findOne({ where: { shortCode } })) {
-                shortCode = generateShortCode();
+            while (!isUnique) {
+                const existing = await sequelize.query(
+                    `SELECT id FROM "Schools" WHERE "shortCode" = :shortCode`,
+                    { 
+                        replacements: { shortCode },
+                        type: Sequelize.QueryTypes.SELECT 
+                    }
+                );
+                
+                if (existing.length === 0) {
+                    isUnique = true;
+                } else {
+                    shortCode = generateShortCode();
+                }
             }
-            school.shortCode = shortCode;
-            await school.save();
+            
+            // Update the school with the unique short code
+            await sequelize.query(
+                `UPDATE "Schools" SET "shortCode" = :shortCode WHERE id = :id`,
+                { 
+                    replacements: { shortCode, id: school.id },
+                    type: Sequelize.QueryTypes.UPDATE 
+                }
+            );
         }
         
         console.log('✅ Short codes generated');
         
-        // Now add status column
-        return sequelize.getQueryInterface().addColumn('Schools', 'status', {
+        // Step 3: Now add status column
+        return queryInterface.addColumn('Schools', 'status', {
             type: Sequelize.ENUM('pending', 'active', 'suspended', 'rejected'),
             defaultValue: 'pending'
         });
-    }).then(() => {
+    })
+    .then(() => {
         console.log('✅ Added status column');
         
-        // Set existing schools to active (since they were working before)
-        const { School } = require('./src/models');
-        return School.update(
-            { status: 'active', isActive: true },
-            { where: {} }
+        // Step 4: Set existing schools to active
+        return sequelize.query(
+            `UPDATE "Schools" SET status = 'active', "isActive" = true WHERE status IS NULL`,
+            { type: Sequelize.QueryTypes.UPDATE }
         );
-    }).then(() => {
+    })
+    .then(() => {
         console.log('✅ Updated existing schools to active');
         
-        // Add approvedBy column
-        return sequelize.getQueryInterface().addColumn('Schools', 'approvedBy', {
+        // Step 5: Add approvedBy column
+        return queryInterface.addColumn('Schools', 'approvedBy', {
             type: Sequelize.INTEGER,
             allowNull: true,
             references: { model: 'Users', key: 'id' },
             onDelete: 'SET NULL'
         });
-    }).then(() => {
+    })
+    .then(() => {
         console.log('✅ Added approvedBy column');
         
-        // Add approvedAt column
-        return sequelize.getQueryInterface().addColumn('Schools', 'approvedAt', {
+        // Step 6: Add approvedAt column
+        return queryInterface.addColumn('Schools', 'approvedAt', {
             type: Sequelize.DATE,
             allowNull: true
         });
-    }).then(() => {
+    })
+    .then(() => {
         console.log('✅ Added approvedAt column');
         
-        // Add rejectionReason column
-        return sequelize.getQueryInterface().addColumn('Schools', 'rejectionReason', {
+        // Step 7: Add rejectionReason column
+        return queryInterface.addColumn('Schools', 'rejectionReason', {
             type: Sequelize.TEXT,
             allowNull: true
         });
-    }).then(() => {
+    })
+    .then(() => {
         console.log('✅ Added rejectionReason column');
         
-        // Make schoolCode nullable in Users table
-        return sequelize.getQueryInterface().changeColumn('Users', 'schoolCode', {
+        // Step 8: Make schoolCode nullable in Users table
+        return queryInterface.changeColumn('Users', 'schoolCode', {
             type: Sequelize.STRING,
             allowNull: true
         });
-    }).then(() => {
+    })
+    .then(() => {
         console.log('✅ Updated Users table');
         
-        // Add indexes
+        // Step 9: Add indexes
         return Promise.all([
-            sequelize.getQueryInterface().addIndex('Schools', ['shortCode']),
-            sequelize.getQueryInterface().addIndex('Schools', ['status'])
+            queryInterface.addIndex('Schools', ['shortCode']),
+            queryInterface.addIndex('Schools', ['status'])
         ]);
-    }).then(() => {
+    })
+    .then(() => {
         console.log('✅ Added indexes');
         console.log('🎉 All migrations completed successfully!');
         process.exit(0);
-    }).catch(err => {
+    })
+    .catch(err => {
         console.error('❌ Migration failed:', err);
         process.exit(1);
     });
@@ -155,4 +189,3 @@ if (process.env.RUN_MIGRATIONS === 'true') {
             process.exit(1);
         });
 }
-
