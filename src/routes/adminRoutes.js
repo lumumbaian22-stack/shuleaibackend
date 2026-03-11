@@ -11,7 +11,7 @@ router.use(protect, authorize('admin', 'super_admin'));
 router.get('/approvals/pending', teacherSignupController.getPendingApprovals);
 router.post('/teachers/:teacherId/approve', validationRules.approveTeacher, validate, teacherSignupController.approveTeacher);
 router.post('/duty/generate', dutyController.generateDutyRoster);
-router.get('/duty/stats', dutyController.getDutyStats);
+//router.get('/duty/stats', dutyController.getDutyStats);
 
 // NEW: Fairness and analytics routes
 router.get('/duty/fairness-report', dutyController.getFairnessReport);
@@ -21,5 +21,6 @@ router.get('/duty/teacher-workload', dutyController.getTeacherWorkload);
 
 
 module.exports = router;
+
 
 
