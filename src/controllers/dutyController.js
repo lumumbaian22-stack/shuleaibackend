@@ -1,0 +1,404 @@
+const { Op } = require('sequelize');
+const { DutyRoster, Teacher, School, User, Alert } = require('../models');
+const moment = require('moment');
+const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
+const { createAlert, createBulkAlerts } = require('../services/notificationService');
+const dutyFairness = require('../utils/dutyFairness');
+
+// @desc    Generate duty roster with fairness balancing
+// @route   POST /api/admin/duty/generate
+// @access  Private/Admin
+exports.generateDutyRoster = async (req, res) => {
+  try {
+    const { startDate, endDate, type = 'auto' } = req.body;
+    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    
+    const start = moment(startDate || new Date());
+    const end = moment(endDate || moment().add(7, 'days'));
+    const days = end.diff(start, 'days') + 1;
+
+    const dutySlots = ['morning', 'lunch', 'afternoon'];
+    const rosters = [];
+    const alerts = [];
+    const understaffedAlerts = [];
+
+    // Reset weekly counts if Monday
+    if (moment().day() === 1) {
+      await Teacher.update(
+        { 'statistics.weeklyDutyCount': 0 },
+        { where: { approvalStatus: 'approved' } }
+      );
+    }
+
+    for (let i = 0; i < days; i++) {
+      const currentDate = moment(start).add(i, 'days');
+      if (currentDate.day() === 0) continue; // skip Sunday
+
+      const dateStr = currentDate.format('YYYY-MM-DD');
+      const dayOfWeek = currentDate.format('dddd').toLowerCase();
+
+      // Check if roster already exists
+      const existing = await DutyRoster.findOne({
+        where: { schoolId: school.schoolId, date: dateStr }
+      });
+      if (existing) {
+        rosters.push(existing);
+        continue;
+      }
+
+      const dayDuties = [];
+
+      // Assign duties for each slot
+      for (const slot of dutySlots) {
+        const required = school.settings.dutyManagement?.teachersPerSlot?.[slot] || 
+                        (slot === 'lunch' ? 3 : 2);
+
+        const { assigned, conflicts, shortage } = await dutyFairness.assignDutyFairly(
+          school.schoolId,
+          dateStr,
+          slot,
+          required
+        );
+
+        // Add assigned duties
+        assigned.forEach(teacher => {
+          dayDuties.push({
+            teacherId: teacher.id,
+            teacherName: teacher.User.name,
+            type: slot,
+            area: DUTY_AREAS[slot],
+            timeSlot: DUTY_TIME_SLOTS[slot],
+            status: 'scheduled'
+          });
+
+          // Update teacher statistics
+          dutyFairness.updateTeacherDutyStats(teacher.id, 'assign');
+
+          // Create alert for teacher
+          alerts.push({
+            userId: teacher.User.id,
+            role: 'teacher',
+            type: 'duty',
+            severity: 'info',
+            title: 'Duty Assignment',
+            message: `You are assigned to ${slot} duty on ${currentDate.format('MMM Do')}`,
+            data: { date: dateStr, dutyType: slot, area: DUTY_AREAS[slot] }
+          });
+        });
+
+        // Track understaffed slots
+        if (shortage > 0) {
+          understaffedAlerts.push({
+            date: dateStr,
+            slot,
+            required,
+            assigned: assigned.length,
+            shortage
+          });
+        }
+      }
+
+      if (dayDuties.length) {
+        const roster = await DutyRoster.create({
+          schoolId: school.schoolId,
+          date: dateStr,
+          duties: dayDuties,
+          createdBy: req.user.id,
+          metadata: { 
+            generationMethod: type,
+            generatedAt: new Date()
+          }
+        });
+        rosters.push(roster);
+      }
+    }
+
+    // Create all alerts in bulk
+    if (alerts.length > 0) {
+      await Alert.bulkCreate(alerts);
+    }
+
+    // Check for understaffed areas and alert admin
+    const understaffed = await dutyFairness.checkUnderstaffedAreas(
+      school.schoolId,
+      moment().format('YYYY-MM-DD')
+    );
+
+    if (understaffed.length > 0) {
+      const admins = await User.findAll({ 
+        where: { 
+          role: 'admin', 
+          schoolCode: school.code 
+        } 
+      });
+
+      for (const admin of admins) {
+        await createAlert({
+          userId: admin.id,
+          role: 'admin',
+          type: 'duty',
+          severity: 'warning',
+          title: 'Understaffed Areas Detected',
+          message: `${understaffed.length} areas need more teachers`,
+          data: { understaffed }
+        });
+      }
+    }
+
+    // Send real-time updates via WebSocket
+    if (global.io) {
+      global.io.to(`school-${school.schoolId}`).emit('duty-roster-updated', {
+        message: 'New duty roster generated',
+        count: rosters.length
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Generated ${rosters.length} rosters`, 
+      data: {
+        rosters,
+        understaffed: understaffedAlerts,
+        stats: {
+          totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0),
+          totalAlerts: alerts.length,
+          understaffedCount: understaffedAlerts.length
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Duty generation error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get duty fairness report
+// @route   GET /api/admin/duty/fairness-report
+// @access  Private/Admin
+exports.getFairnessReport = async (req, res) => {
+  try {
+    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    const teachers = await Teacher.findAll({
+      where: { approvalStatus: 'approved' },
+      include: [{ model: User, attributes: ['name', 'email'] }]
+    });
+
+    const startOfMonth = moment().startOf('month').format('YYYY-MM-DD');
+    const endOfMonth = moment().endOf('month').format('YYYY-MM-DD');
+
+    const rosters = await DutyRoster.findAll({
+      where: {
+        schoolId: school.schoolId,
+        date: { [Op.between]: [startOfMonth, endOfMonth] }
+      }
+    });
+
+    // Calculate statistics per teacher
+    const teacherStats = teachers.map(teacher => {
+      const teacherDuties = rosters.flatMap(r => 
+        r.duties.filter(d => d.teacherId === teacher.id)
+      );
+
+      const completed = teacherDuties.filter(d => d.status === 'completed').length;
+      const missed = teacherDuties.filter(d => d.status === 'missed').length;
+      const scheduled = teacherDuties.length;
+
+      return {
+        teacherId: teacher.id,
+        teacherName: teacher.User.name,
+        department: teacher.department || 'general',
+        scheduled,
+        completed,
+        missed,
+        completionRate: scheduled ? ((completed / scheduled) * 100).toFixed(1) : 0,
+        monthlyDutyCount: teacher.statistics?.monthlyDutyCount || 0,
+        reliabilityScore: teacher.statistics?.reliabilityScore || 100,
+        preferences: teacher.dutyPreferences
+      };
+    });
+
+    // Calculate department stats
+    const departmentStats = {};
+    teacherStats.forEach(stat => {
+      const dept = stat.department;
+      if (!departmentStats[dept]) {
+        departmentStats[dept] = {
+          teachers: 0,
+          totalDuties: 0,
+          completedDuties: 0,
+          missedDuties: 0
+        };
+      }
+      departmentStats[dept].teachers++;
+      departmentStats[dept].totalDuties += stat.scheduled;
+      departmentStats[dept].completedDuties += stat.completed;
+      departmentStats[dept].missedDuties += stat.missed;
+    });
+
+    // Calculate fairness score (standard deviation of duty distribution)
+    const dutyCounts = teacherStats.map(t => t.scheduled);
+    const mean = dutyCounts.reduce((a, b) => a + b, 0) / dutyCounts.length || 0;
+    const variance = dutyCounts.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / dutyCounts.length;
+    const stdDev = Math.sqrt(variance);
+    const fairnessScore = Math.max(0, Math.min(100, 100 - (stdDev / mean * 100) || 100));
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: moment().format('MMMM YYYY'),
+          start: startOfMonth,
+          end: endOfMonth
+        },
+        summary: {
+          totalTeachers: teachers.length,
+          totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0),
+          fairnessScore: fairnessScore.toFixed(1),
+          understaffedDays: await checkUnderstaffedDays(school.schoolId, startOfMonth, endOfMonth)
+        },
+        departmentStats,
+        teacherStats: teacherStats.sort((a, b) => a.scheduled - b.scheduled),
+        recommendations: generateRecommendations(teacherStats, departmentStats)
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Manual duty adjustment
+// @route   POST /api/admin/duty/adjust
+// @access  Private/Admin
+exports.manualAdjustDuty = async (req, res) => {
+  try {
+    const { date, teacherId, newTeacherId, dutyType, reason } = req.body;
+    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+
+    const roster = await DutyRoster.findOne({
+      where: { schoolId: school.schoolId, date }
+    });
+
+    if (!roster) {
+      return res.status(404).json({ success: false, message: 'Roster not found' });
+    }
+
+    // Find and update the duty
+    const dutyIndex = roster.duties.findIndex(
+      d => d.teacherId === parseInt(teacherId) && d.type === dutyType
+    );
+
+    if (dutyIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Duty not found' });
+    }
+
+    const oldTeacherId = roster.duties[dutyIndex].teacherId;
+    
+    // Update duty
+    roster.duties[dutyIndex].teacherId = parseInt(newTeacherId);
+    roster.duties[dutyIndex].teacherName = req.body.newTeacherName;
+    roster.duties[dutyIndex].adjustedBy = req.user.id;
+    roster.duties[dutyIndex].adjustedAt = new Date();
+    roster.duties[dutyIndex].adjustmentReason = reason;
+
+    await roster.save();
+
+    // Update statistics
+    await dutyFairness.updateTeacherDutyStats(oldTeacherId, 'unassign');
+    await dutyFairness.updateTeacherDutyStats(newTeacherId, 'assign');
+
+    // Notify affected teachers
+    const alerts = [
+      {
+        userId: oldTeacherId,
+        role: 'teacher',
+        type: 'duty',
+        severity: 'info',
+        title: 'Duty Adjustment',
+        message: `Your duty on ${moment(date).format('MMM Do')} has been reassigned.`
+      },
+      {
+        userId: newTeacherId,
+        role: 'teacher',
+        type: 'duty',
+        severity: 'info',
+        title: 'New Duty Assignment',
+        message: `You have been assigned to ${dutyType} duty on ${moment(date).format('MMM Do')}.`
+      }
+    ];
+
+    await Alert.bulkCreate(alerts);
+
+    res.json({
+      success: true,
+      message: 'Duty adjusted successfully',
+      data: roster.duties[dutyIndex]
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Helper functions
+async function checkUnderstaffedDays(schoolId, startDate, endDate) {
+  const rosters = await DutyRoster.findAll({
+    where: {
+      schoolId,
+      date: { [Op.between]: [startDate, endDate] }
+    }
+  });
+
+  const understaffedDays = [];
+  const requiredPerArea = { morning: 2, lunch: 3, afternoon: 2 };
+
+  rosters.forEach(roster => {
+    const areaCount = {};
+    roster.duties.forEach(d => {
+      areaCount[d.type] = (areaCount[d.type] || 0) + 1;
+    });
+
+    const missing = [];
+    Object.entries(requiredPerArea).forEach(([area, required]) => {
+      if ((areaCount[area] || 0) < required) {
+        missing.push(area);
+      }
+    });
+
+    if (missing.length > 0) {
+      understaffedDays.push({
+        date: roster.date,
+        missingAreas: missing
+      });
+    }
+  });
+
+  return understaffedDays;
+}
+
+function generateRecommendations(teacherStats, departmentStats) {
+  const recommendations = [];
+
+  // Find overworked teachers
+  const avgDuties = teacherStats.reduce((a, b) => a + b.scheduled, 0) / teacherStats.length;
+  const overworked = teacherStats.filter(t => t.scheduled > avgDuties * 1.5);
+  if (overworked.length > 0) {
+    recommendations.push({
+      type: 'workload_balance',
+      message: `${overworked.length} teachers have above-average duty load`,
+      teachers: overworked.map(t => t.teacherName)
+    });
+  }
+
+  // Find understaffed departments
+  Object.entries(departmentStats).forEach(([dept, stats]) => {
+    const deptAvg = stats.totalDuties / stats.teachers;
+    if (deptAvg > 10) {
+      recommendations.push({
+        type: 'department_overload',
+        department: dept,
+        message: `${dept} department has high duty load (${deptAvg.toFixed(1)} per teacher)`
+      });
+    }
+  });
+
+  return recommendations;
+}
