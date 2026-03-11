@@ -1,33 +1,45 @@
-const { Sequelize } = require('sequelize');
 require('dotenv').config();
+const app = require('./src/app');
+const http = require('http');
+const socketio = require('socket.io');
+const { sequelize } = require('./src/models');
 
-const sequelize = process.env.DATABASE_URL
-  ? new Sequelize(process.env.DATABASE_URL, {
-      dialect: 'postgres',
-      logging: process.env.NODE_ENV === 'development' ? console.log : false,
-      dialectOptions: {
-        ssl: {
-          require: true,
-          rejectUnauthorized: false // Keep this as false for Render's self-signed cert
-        }
-      }
-    })
-  : new Sequelize(
-      process.env.DB_NAME,
-      process.env.DB_USER,
-      process.env.DB_PASSWORD,
-      {
-        host: process.env.DB_HOST,
-        port: process.env.DB_PORT || 5432,
-        dialect: 'postgres',
-        logging: process.env.NODE_ENV === 'development' ? console.log : false,
-        dialectOptions: {
-          ssl: {
-            require: true,
-            rejectUnauthorized: false // Keep this as false for Render's self-signed cert
-          }
-        }
-      }
-    );
+const server = http.createServer(app);
+const io = socketio(server, {
+  cors: { origin: process.env.FRONTEND_URL, credentials: true }
+});
+global.io = io;
 
-module.exports = sequelize;
+io.on('connection', (socket) => {
+  socket.on('join', (userId) => {
+    if (userId) socket.join(`user-${userId}`);
+  });
+
+  socket.on('private-message', (data) => {
+    io.to(`user-${data.to}`).emit('private-message', {
+      from: socket.userId,
+      message: data.message,
+      timestamp: new Date()
+    });
+  });
+
+  socket.on('typing', (data) => {
+    socket.to(`user-${data.to}`).emit('typing', {
+      from: socket.userId,
+      isTyping: data.isTyping
+    });
+  });
+});
+
+const PORT = process.env.PORT || 5000;
+
+sequelize.sync({ alter: process.env.NODE_ENV === 'development' })
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`✅ Server running on port ${PORT}`);
+    });
+  })
+  .catch(err => {
+    console.error('❌ Database sync failed:', err);
+    process.exit(1);
+  });
