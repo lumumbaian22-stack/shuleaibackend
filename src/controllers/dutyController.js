@@ -521,3 +521,229 @@ exports.getTeacherWorkload = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// Add these with your other exports at the bottom of the file
+// or include them in the file if missing
+
+// @desc    Get today's duty
+// @route   GET /api/duty/today
+// @access  Private
+exports.getTodayDuty = async (req, res) => {
+  try {
+    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    const today = moment().format('YYYY-MM-DD');
+    
+    const roster = await DutyRoster.findOne({
+      where: { schoolId: school.schoolId, date: today }
+    });
+
+    if (!roster) {
+      return res.json({ success: true, data: { duties: [], message: 'No duty today' } });
+    }
+
+    // Add isOnDuty flag for teacher
+    const duties = roster.duties.map(d => ({
+      ...d,
+      isOnDuty: req.user.role === 'teacher' && d.teacherId === req.user.id,
+      checkedIn: !!d.checkedIn,
+      checkedOut: !!d.checkedOut
+    }));
+
+    res.json({ success: true, data: { date: today, duties } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get weekly duty schedule
+// @route   GET /api/duty/week
+// @access  Private
+exports.getWeeklyDuty = async (req, res) => {
+  try {
+    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    const startOfWeek = moment().startOf('week');
+    const endOfWeek = moment().endOf('week');
+
+    const rosters = await DutyRoster.findAll({
+      where: {
+        schoolId: school.schoolId,
+        date: { [Op.between]: [startOfWeek.format('YYYY-MM-DD'), endOfWeek.format('YYYY-MM-DD')] }
+      },
+      order: [['date', 'ASC']]
+    });
+
+    const weekly = [];
+    for (let i = 0; i < 7; i++) {
+      const day = moment().startOf('week').add(i, 'days');
+      const dayRoster = rosters.find(r => r.date === day.format('YYYY-MM-DD'));
+      weekly.push({
+        date: day.format('YYYY-MM-DD'),
+        dayName: day.format('dddd'),
+        isToday: day.isSame(moment(), 'day'),
+        duties: dayRoster ? dayRoster.duties : []
+      });
+    }
+
+    res.json({ success: true, data: weekly });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Teacher check-in for duty
+// @route   POST /api/duty/check-in
+// @access  Private/Teacher
+exports.checkInDuty = async (req, res) => {
+  try {
+    const { location, notes } = req.body;
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
+    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    const today = moment().format('YYYY-MM-DD');
+
+    const roster = await DutyRoster.findOne({
+      where: { schoolId: school.schoolId, date: today }
+    });
+    if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
+
+    const dutyIndex = roster.duties.findIndex(d => d.teacherId === teacher.id);
+    if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
+
+    // Check time window
+    const currentTime = moment();
+    const slot = roster.duties[dutyIndex].timeSlot;
+    const start = moment(slot.start, 'HH:mm');
+    const end = moment(slot.end, 'HH:mm');
+    const window = school.settings?.dutyManagement?.checkInWindow || 15;
+    
+    if (!currentTime.isBetween(start.clone().subtract(window, 'minutes'), end.clone().add(window, 'minutes'))) {
+      return res.status(400).json({ success: false, message: `Check-in only allowed within ${window} minutes of duty time` });
+    }
+
+    roster.duties[dutyIndex].checkedIn = {
+      at: new Date(),
+      by: req.user.id,
+      location: location || 'School'
+    };
+    roster.duties[dutyIndex].status = 'completed';
+    roster.duties[dutyIndex].notes = notes || '';
+    await roster.save();
+
+    // Update teacher's personal duty record
+    const teacherDuty = (teacher.duties || []).find(d => moment(d.date).isSame(moment(), 'day'));
+    if (teacherDuty) {
+      teacherDuty.status = 'completed';
+      teacherDuty.completedAt = new Date();
+      teacherDuty.checkedIn = { at: new Date(), location };
+      teacher.statistics.dutiesCompleted = (teacher.statistics.dutiesCompleted || 0) + 1;
+      teacher.updateReliabilityScore();
+      await teacher.save();
+    }
+
+    // Notify admins
+    const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.code } });
+    for (const admin of admins) {
+      await createAlert({
+        userId: admin.id,
+        role: 'admin',
+        type: 'duty',
+        severity: 'info',
+        title: 'Teacher Checked In',
+        message: `${teacher.User.name} checked in for ${roster.duties[dutyIndex].type} duty.`
+      });
+    }
+
+    res.json({ success: true, message: 'Checked in successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Teacher check-out from duty
+// @route   POST /api/duty/check-out
+// @access  Private/Teacher
+exports.checkOutDuty = async (req, res) => {
+  try {
+    const { location, notes } = req.body;
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    const today = moment().format('YYYY-MM-DD');
+
+    const roster = await DutyRoster.findOne({
+      where: { schoolId: school.schoolId, date: today }
+    });
+    if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
+
+    const dutyIndex = roster.duties.findIndex(d => d.teacherId === teacher.id);
+    if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
+
+    roster.duties[dutyIndex].checkedOut = {
+      at: new Date(),
+      by: req.user.id,
+      location: location || 'School'
+    };
+    await roster.save();
+
+    res.json({ success: true, message: 'Checked out successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Update teacher duty preferences
+// @route   PUT /api/duty/preferences
+// @access  Private/Teacher
+exports.updateDutyPreferences = async (req, res) => {
+  try {
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
+    teacher.dutyPreferences = {
+      ...teacher.dutyPreferences,
+      ...req.body
+    };
+    await teacher.save();
+
+    res.json({ success: true, data: teacher.dutyPreferences });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Request duty swap
+// @route   POST /api/duty/request-swap
+// @access  Private/Teacher
+exports.requestDutySwap = async (req, res) => {
+  try {
+    const { dutyDate, reason, targetTeacherId } = req.body;
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+
+    const roster = await DutyRoster.findOne({
+      where: { schoolId: school.schoolId, date: moment(dutyDate).format('YYYY-MM-DD') }
+    });
+    if (!roster) return res.status(404).json({ success: false, message: 'No duty on that date' });
+
+    const duty = roster.duties.find(d => d.teacherId === teacher.id);
+    if (!duty) return res.status(403).json({ success: false, message: 'You are not on duty that day' });
+
+    // Notify admin
+    const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.code } });
+    for (const admin of admins) {
+      await createAlert({
+        userId: admin.id,
+        role: 'admin',
+        type: 'duty',
+        severity: 'info',
+        title: 'Duty Swap Request',
+        message: `${teacher.User.name} requests to swap duty on ${moment(dutyDate).format('MMM Do')}. Reason: ${reason}`,
+        data: { teacherId: teacher.id, dutyDate, targetTeacherId, reason }
+      });
+    }
+
+    res.json({ success: true, message: 'Swap request sent to admin' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
