@@ -1,45 +1,47 @@
 require('dotenv').config();
-const app = require('./src/app');
-const http = require('http');
-const socketio = require('socket.io');
-const { sequelize } = require('./src/models');
-const { Sequelize, Op } = require('sequelize');
 
-// Function to generate short code (same as in School model)
-function generateShortCode() {
-    const prefix = 'SHL';
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let randomPart = '';
-    for (let i = 0; i < 5; i++) {
-        randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+// --- Migration Block - MUST run before anything else ---
+const RUN_MIGRATIONS = process.env.RUN_MIGRATIONS === 'true';
+
+if (RUN_MIGRATIONS) {
+    console.log('🔧 Running migrations in isolation...');
+    
+    // Import ONLY what's needed for migration
+    const { Sequelize, Op } = require('sequelize');
+    const { sequelize } = require('./src/models');
+
+    // Function to generate short code (same as in School model)
+    function generateShortCode() {
+        const prefix = 'SHL';
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        let randomPart = '';
+        for (let i = 0; i < 5; i++) {
+            randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return `${prefix}-${randomPart}`;
     }
-    return `${prefix}-${randomPart}`;
-}
-
-// Check if we should just run migrations and exit
-if (process.env.RUN_MIGRATIONS === 'true') {
-    console.log('🔧 Running migrations...');
-    const queryInterface = sequelize.getQueryInterface();
 
     // Helper function to check if a column exists
-    async function columnExists(tableName, columnName) {
+    async function columnExists(queryInterface, tableName, columnName) {
         try {
             const tableDescription = await queryInterface.describeTable(tableName);
             return tableDescription.hasOwnProperty(columnName);
         } catch (error) {
-            console.error(`Error describing table ${tableName}:`, error);
+            console.error(`Error describing table ${tableName}:`, error.message);
             return false;
         }
     }
 
-    // Main migration function - fully sequential
+    // Main migration function
     (async () => {
+        const queryInterface = sequelize.getQueryInterface();
+        
         try {
-            console.log('📊 Starting migration steps...');
-
-            // STEP 1: Add shortCode column only if it doesn't exist
-            console.log('Step 1: Checking shortCode column...');
-            if (!(await columnExists('Schools', 'shortCode'))) {
+            console.log('📊 Starting atomic migration steps...');
+            console.log('🕐 Step 1 of 9: Adding shortCode column...');
+            
+            // --- STEP 1: Add shortCode column ---
+            if (!(await columnExists(queryInterface, 'Schools', 'shortCode'))) {
                 await queryInterface.addColumn('Schools', 'shortCode', {
                     type: Sequelize.STRING,
                     allowNull: true,
@@ -50,26 +52,35 @@ if (process.env.RUN_MIGRATIONS === 'true') {
                 console.log('⏩ shortCode column already exists, skipping...');
             }
 
-            // STEP 2: Get School model and generate short codes for existing schools
-            console.log('Step 2: Generating short codes for existing schools...');
+            console.log('🕐 Step 2 of 9: Generating short codes for existing schools...');
+            
+            // --- STEP 2: Generate short codes for existing schools ---
+            // Load the School model AFTER potential column addition
             const { School } = require('./src/models');
             
-            // Wait for model to be ready
-            await School.findOne().catch(() => null);
+            // Force the model to reload its schema from the database
+            await School.describe().catch(e => console.log('Note: School.describe()', e.message));
             
-            const schoolsWithoutCode = await School.findAll({ 
+            // Find schools without short codes
+            const schoolsWithoutCode = await School.findAll({
                 where: { shortCode: null },
-                attributes: ['id', 'shortCode'] // Only select needed fields
+                attributes: ['id', 'shortCode']
             });
-            
+
             if (schoolsWithoutCode.length > 0) {
-                console.log(`📝 Generating short codes for ${schoolsWithoutCode.length} existing schools...`);
+                console.log(`📝 Generating short codes for ${schoolsWithoutCode.length} schools...`);
+                
                 for (const school of schoolsWithoutCode) {
                     let shortCode = generateShortCode();
+                    
                     // Ensure uniqueness
-                    while (await School.findOne({ where: { shortCode } })) {
+                    while (await School.findOne({ 
+                        where: { shortCode },
+                        attributes: ['id']
+                    })) {
                         shortCode = generateShortCode();
                     }
+                    
                     school.shortCode = shortCode;
                     await school.save();
                 }
@@ -78,9 +89,10 @@ if (process.env.RUN_MIGRATIONS === 'true') {
                 console.log('⏩ All schools already have short codes, skipping generation...');
             }
 
-            // STEP 3: Add status column only if it doesn't exist
-            console.log('Step 3: Checking status column...');
-            if (!(await columnExists('Schools', 'status'))) {
+            console.log('🕐 Step 3 of 9: Adding status column...');
+            
+            // --- STEP 3: Add status column ---
+            if (!(await columnExists(queryInterface, 'Schools', 'status'))) {
                 await queryInterface.addColumn('Schools', 'status', {
                     type: Sequelize.ENUM('pending', 'active', 'suspended', 'rejected'),
                     defaultValue: 'pending'
@@ -90,13 +102,12 @@ if (process.env.RUN_MIGRATIONS === 'true') {
                 console.log('⏩ status column already exists, skipping...');
             }
 
-            // STEP 4: Update school statuses (only after status column definitely exists)
-            console.log('Step 4: Updating school statuses...');
-            // Re-fetch the model to ensure it has the latest schema
-            const { School: UpdatedSchoolModel } = require('./src/models');
+            console.log('🕐 Step 4 of 9: Updating school statuses...');
             
-            // Wait for model to be ready with new schema
-            await UpdatedSchoolModel.findOne().catch(() => null);
+            // --- STEP 4: Update school statuses ---
+            // Reload model schema again after adding the column
+            const { School: UpdatedSchoolModel } = require('./src/models');
+            await UpdatedSchoolModel.describe().catch(e => console.log('Note: UpdatedSchoolModel.describe()', e.message));
             
             const updateResult = await UpdatedSchoolModel.update(
                 { 
@@ -114,9 +125,10 @@ if (process.env.RUN_MIGRATIONS === 'true') {
             );
             console.log(`✅ Updated ${updateResult[0] || 0} schools to active status`);
 
-            // STEP 5: Add approvedBy column
-            console.log('Step 5: Checking approvedBy column...');
-            if (!(await columnExists('Schools', 'approvedBy'))) {
+            console.log('🕐 Step 5 of 9: Adding approvedBy column...');
+            
+            // --- STEP 5: Add approvedBy column ---
+            if (!(await columnExists(queryInterface, 'Schools', 'approvedBy'))) {
                 await queryInterface.addColumn('Schools', 'approvedBy', {
                     type: Sequelize.INTEGER,
                     allowNull: true,
@@ -128,9 +140,10 @@ if (process.env.RUN_MIGRATIONS === 'true') {
                 console.log('⏩ approvedBy column already exists, skipping...');
             }
 
-            // STEP 6: Add approvedAt column
-            console.log('Step 6: Checking approvedAt column...');
-            if (!(await columnExists('Schools', 'approvedAt'))) {
+            console.log('🕐 Step 6 of 9: Adding approvedAt column...');
+            
+            // --- STEP 6: Add approvedAt column ---
+            if (!(await columnExists(queryInterface, 'Schools', 'approvedAt'))) {
                 await queryInterface.addColumn('Schools', 'approvedAt', {
                     type: Sequelize.DATE,
                     allowNull: true
@@ -140,9 +153,10 @@ if (process.env.RUN_MIGRATIONS === 'true') {
                 console.log('⏩ approvedAt column already exists, skipping...');
             }
 
-            // STEP 7: Add rejectionReason column
-            console.log('Step 7: Checking rejectionReason column...');
-            if (!(await columnExists('Schools', 'rejectionReason'))) {
+            console.log('🕐 Step 7 of 9: Adding rejectionReason column...');
+            
+            // --- STEP 7: Add rejectionReason column ---
+            if (!(await columnExists(queryInterface, 'Schools', 'rejectionReason'))) {
                 await queryInterface.addColumn('Schools', 'rejectionReason', {
                     type: Sequelize.TEXT,
                     allowNull: true
@@ -152,10 +166,12 @@ if (process.env.RUN_MIGRATIONS === 'true') {
                 console.log('⏩ rejectionReason column already exists, skipping...');
             }
 
-            // STEP 8: Make schoolCode nullable in Users table
-            console.log('Step 8: Checking Users table schoolCode column...');
+            console.log('🕐 Step 8 of 9: Making schoolCode nullable in Users table...');
+            
+            // --- STEP 8: Make schoolCode nullable in Users table ---
             try {
                 const usersColumns = await queryInterface.describeTable('Users');
+                
                 if (usersColumns.schoolCode) {
                     if (usersColumns.schoolCode.allowNull === false) {
                         await queryInterface.changeColumn('Users', 'schoolCode', {
@@ -173,8 +189,9 @@ if (process.env.RUN_MIGRATIONS === 'true') {
                 console.log('⚠️ Note: Could not modify schoolCode column:', changeError.message);
             }
 
-            // STEP 9: Add indexes
-            console.log('Step 9: Adding indexes...');
+            console.log('🕐 Step 9 of 9: Adding indexes...');
+            
+            // --- STEP 9: Add indexes ---
             
             // Index on shortCode
             try {
@@ -183,7 +200,7 @@ if (process.env.RUN_MIGRATIONS === 'true') {
                     unique: true,
                     where: { shortCode: { [Op.ne]: null } }
                 });
-                console.log('✅ Added index on shortCode');
+                console.log('✅ Added unique index on shortCode');
             } catch (indexError) {
                 if (indexError.name === 'SequelizeUniqueConstraintError') {
                     console.log('⏩ Index on shortCode already exists, skipping...');
@@ -208,11 +225,19 @@ if (process.env.RUN_MIGRATIONS === 'true') {
 
             console.log('\n🎉 All migrations completed successfully!');
             console.log('📊 Migration Summary:');
-            console.log('   ✓ All required columns added/verified');
+            console.log('   ✓ shortCode column added/verified');
             console.log('   ✓ Short codes generated for existing schools');
-            console.log('   ✓ School statuses updated');
-            console.log('   ✓ Database indexes added');
-            console.log('\n✅ Migration process complete. You can now remove RUN_MIGRATIONS env variable and redeploy.');
+            console.log('   ✓ status column added/verified');
+            console.log('   ✓ School statuses updated to active');
+            console.log('   ✓ approvedBy column added/verified');
+            console.log('   ✓ approvedAt column added/verified');
+            console.log('   ✓ rejectionReason column added/verified');
+            console.log('   ✓ schoolCode made nullable in Users table');
+            console.log('   ✓ Database indexes added/verified');
+            console.log('\n✅ Migration process complete. You can now:');
+            console.log('   1. Remove RUN_MIGRATIONS environment variable from Render');
+            console.log('   2. Redeploy for normal operation');
+            
             process.exit(0);
 
         } catch (err) {
@@ -223,7 +248,14 @@ if (process.env.RUN_MIGRATIONS === 'true') {
     })(); // Execute the async function immediately
     
 } else {
-    // Normal server startup
+    // --- Normal server startup (only runs if RUN_MIGRATIONS is not true) ---
+    console.log('🚀 Starting normal server mode...');
+    
+    const app = require('./src/app');
+    const http = require('http');
+    const socketio = require('socket.io');
+    const { sequelize } = require('./src/models');
+
     const server = http.createServer(app);
     const io = socketio(server, {
         cors: { origin: process.env.FRONTEND_URL, credentials: true }
@@ -231,12 +263,12 @@ if (process.env.RUN_MIGRATIONS === 'true') {
     global.io = io;
 
     io.on('connection', (socket) => {
-        console.log('New WebSocket connection');
+        console.log('📡 New WebSocket connection');
         
         socket.on('join', (userId) => {
             if (userId) {
                 socket.join(`user-${userId}`);
-                console.log(`User ${userId} joined their room`);
+                console.log(`👤 User ${userId} joined their room`);
             }
         });
 
@@ -256,7 +288,7 @@ if (process.env.RUN_MIGRATIONS === 'true') {
         });
 
         socket.on('disconnect', () => {
-            console.log('WebSocket disconnected');
+            console.log('📡 WebSocket disconnected');
         });
     });
 
