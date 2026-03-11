@@ -8,7 +8,7 @@ const sequelize = process.env.DATABASE_URL
       dialectOptions: {
         ssl: {
           require: true,
-          rejectUnauthorized: false // for Render's self-signed cert
+          rejectUnauthorized: false // This is the critical line for Render
         }
       }
     })
@@ -18,9 +18,15 @@ const sequelize = process.env.DATABASE_URL
       process.env.DB_PASSWORD,
       {
         host: process.env.DB_HOST,
-        port: process.env.DB_PORT,
+        port: process.env.DB_PORT || 5432,
         dialect: 'postgres',
         logging: process.env.NODE_ENV === 'development' ? console.log : false,
+        dialectOptions: {
+          ssl: {
+            require: true,
+            rejectUnauthorized: false // This is the critical line for Render
+          }
+        }
       }
     );
 
