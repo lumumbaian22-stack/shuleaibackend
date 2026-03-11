@@ -14,9 +14,10 @@ router.put('/preferences', authorize('teacher'), dutyController.updateDutyPrefer
 router.post('/request-swap', authorize('teacher'), dutyController.requestDutySwap);
 
 // New routes - comment out until fully implemented
-// router.get('/fairness-report', authorize('admin'), dutyController.getFairnessReport);
-// router.post('/adjust', authorize('admin'), dutyController.manualAdjustDuty);
-// router.get('/understaffed', authorize('admin'), dutyController.getUnderstaffedAreas);
-// router.get('/teacher-workload', authorize('admin'), dutyController.getTeacherWorkload);
+ router.get('/fairness-report', authorize('admin'), dutyController.getFairnessReport);
+ router.post('/adjust', authorize('admin'), dutyController.manualAdjustDuty);
+ router.get('/understaffed', authorize('admin'), dutyController.getUnderstaffedAreas);
+ router.get('/teacher-workload', authorize('admin'), dutyController.getTeacherWorkload);
 
 module.exports = router;
+
