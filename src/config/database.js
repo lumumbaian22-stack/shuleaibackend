@@ -1,14 +1,17 @@
 const { Sequelize } = require('sequelize');
 require('dotenv').config();
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 const sequelize = process.env.DATABASE_URL
   ? new Sequelize(process.env.DATABASE_URL, {
       dialect: 'postgres',
-      logging: process.env.NODE_ENV === 'development' ? console.log : false,
+      logging: !isProduction,
+      ssl: true,
       dialectOptions: {
         ssl: {
           require: true,
-          rejectUnauthorized: false // This is the critical line for Render
+          rejectUnauthorized: false
         }
       }
     })
@@ -20,11 +23,12 @@ const sequelize = process.env.DATABASE_URL
         host: process.env.DB_HOST,
         port: process.env.DB_PORT || 5432,
         dialect: 'postgres',
-        logging: process.env.NODE_ENV === 'development' ? console.log : false,
+        logging: !isProduction,
+        ssl: true,
         dialectOptions: {
           ssl: {
             require: true,
-            rejectUnauthorized: false // This is the critical line for Render
+            rejectUnauthorized: false
           }
         }
       }
