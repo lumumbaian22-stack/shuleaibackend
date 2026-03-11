@@ -304,4 +304,53 @@ exports.approveRequest = async (req, res) => {
   }
 };
 
-// @desc    Re
+// @desc    Reject a school name request
+// @route   POST /api/super-admin/requests/:id/reject
+// @access  Private/SuperAdmin
+exports.rejectRequest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const request = await SchoolNameRequest.findByPk(id);
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
+
+    request.status = 'rejected';
+    request.rejectionReason = reason;
+    request.reviewedBy = req.user.id;
+    request.reviewedAt = new Date();
+    await request.save();
+
+    await createAlert({
+      userId: request.requestedBy,
+      role: 'admin',
+      type: 'system',
+      severity: 'warning',
+      title: 'School Name Request Rejected',
+      message: `Your request to change school name was rejected. Reason: ${reason || 'Not specified'}`
+    });
+
+    res.json({ success: true, message: 'Request rejected' });
+  } catch (error) {
+    console.error('Reject request error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Update bank details for a school
+// @route   PUT /api/super-admin/bank-details/:schoolId
+// @access  Private/SuperAdmin
+exports.updateBankDetails = async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const school = await School.findByPk(schoolId);
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+
+    school.bankDetails = req.body;
+    await school.save();
+
+    res.json({ success: true, data: school.bankDetails });
+  } catch (error) {
+    console.error('Update bank details error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
