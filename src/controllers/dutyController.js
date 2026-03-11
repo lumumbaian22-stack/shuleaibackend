@@ -3,6 +3,64 @@ const { DutyRoster, Teacher, School, User, Alert } = require('../models');
 const moment = require('moment');
 const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
 const { createAlert, createBulkAlerts } = require('../services/notificationService');
+const Department = require('../models/Department');
+
+// @desc    Create department for a school
+// @route   POST /api/super-admin/schools/:schoolId/departments
+// @access  Private/SuperAdmin
+exports.createDepartment = async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const school = await School.findOne({ where: { schoolId } });
+    if (!school) {
+      return res.status(404).json({ success: false, message: 'School not found' });
+    }
+
+    const department = await Department.create({
+      ...req.body,
+      schoolId: school.schoolId
+    });
+
+    res.status(201).json({ success: true, data: department });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get school departments
+// @route   GET /api/super-admin/schools/:schoolId/departments
+// @access  Private/SuperAdmin
+exports.getSchoolDepartments = async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const departments = await Department.findAll({
+      where: { schoolId },
+      include: [{ model: Teacher, as: 'teachers' }]
+    });
+
+    res.json({ success: true, data: departments });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Update department
+// @route   PUT /api/super-admin/departments/:deptId
+// @access  Private/SuperAdmin
+exports.updateDepartment = async (req, res) => {
+  try {
+    const { deptId } = req.params;
+    const department = await Department.findByPk(deptId);
+    if (!department) {
+      return res.status(404).json({ success: false, message: 'Department not found' });
+    }
+
+    await department.update(req.body);
+    res.json({ success: true, data: department });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 // @desc    Generate duty roster (auto or manual)
 // @route   POST /api/admin/duty/generate
@@ -398,3 +456,4 @@ exports.requestDutySwap = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
