@@ -402,3 +402,45 @@ function generateRecommendations(teacherStats, departmentStats) {
 
   return recommendations;
 }
+
+// @desc    Get duty statistics (for admin)
+// @route   GET /api/admin/duty/stats
+// @access  Private/Admin
+exports.getDutyStats = async (req, res) => {
+  try {
+    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    const startOfMonth = moment().startOf('month');
+    const endOfMonth = moment().endOf('month');
+
+    const rosters = await DutyRoster.findAll({
+      where: {
+        schoolId: school.schoolId,
+        date: { [Op.between]: [startOfMonth.format('YYYY-MM-DD'), endOfMonth.format('YYYY-MM-DD')] }
+      }
+    });
+
+    const teachers = await Teacher.findAll({
+      include: [{ model: User, where: { schoolCode: school.code } }]
+    });
+
+    const stats = {
+      totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0),
+      completedDuties: rosters.reduce((acc, r) => acc + r.duties.filter(d => d.status === 'completed').length, 0),
+      missedDuties: rosters.reduce((acc, r) => acc + r.duties.filter(d => d.status === 'missed').length, 0),
+      teacherPerformance: teachers.map(t => {
+        const teacherDuties = rosters.flatMap(r => r.duties.filter(d => d.teacherId === t.id));
+        const completed = teacherDuties.filter(d => d.status === 'completed').length;
+        return {
+          teacherName: t.User.name,
+          assigned: teacherDuties.length,
+          completed,
+          rate: teacherDuties.length ? (completed / teacherDuties.length * 100).toFixed(1) : 0
+        };
+      })
+    };
+
+    res.json({ success: true, data: stats });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
