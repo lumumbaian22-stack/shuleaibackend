@@ -10,13 +10,27 @@ module.exports = (sequelize, DataTypes) => {
     schoolId: {
       type: DataTypes.STRING,
       allowNull: false,
-      unique: true
+      unique: true,
+      defaultValue: () => {
+        const year = new Date().getFullYear();
+        const random = Math.floor(Math.random() * 10000).toString().padStart(5, '0');
+        return `SCH-${year}-${random}`;
+      }
     },
     // Short, easy-to-type code for teachers (e.g., SHL-A7K29)
     shortCode: {
       type: DataTypes.STRING,
       allowNull: false,
-      unique: true
+      unique: true,
+      defaultValue: () => {
+        const prefix = 'SHL';
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed confusing chars (0,1,I,O)
+        let randomPart = '';
+        for (let i = 0; i < 5; i++) {
+          randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return `${prefix}-${randomPart}`;
+      }
     },
     name: {
       type: DataTypes.STRING,
@@ -81,33 +95,42 @@ module.exports = (sequelize, DataTypes) => {
   }, {
     timestamps: true,
     hooks: {
-      beforeCreate: async (school) => {
-        // Generate schoolId (SCH-2024-00001 format)
-        if (!school.schoolId) {
-          const year = new Date().getFullYear();
-          const count = await School.count();
-          const sequential = (count + 1).toString().padStart(5, '0');
-          school.schoolId = `SCH-${year}-${sequential}`;
-        }
-        
-        // Generate short, easy-to-type code for teachers
-        if (!school.shortCode) {
-          school.shortCode = generateShortCode();
-        }
+      beforeCreate: async (school, options) => {
+        try {
+          // Only generate if not already set (override defaults if needed)
+          if (!school.schoolId || school.schoolId.startsWith('SCH-') === false) {
+            const year = new Date().getFullYear();
+            const count = await School.count();
+            const sequential = (count + 1).toString().padStart(5, '0');
+            school.schoolId = `SCH-${year}-${sequential}`;
+            console.log('Generated schoolId in hook:', school.schoolId);
+          }
+          
+          // Only generate if not already set
+          if (!school.shortCode) {
+            school.shortCode = generateShortCode();
+            console.log('Generated shortCode in hook:', school.shortCode);
+          }
 
-        // Generate QR code
-        const qrData = {
-          schoolId: school.schoolId,
-          shortCode: school.shortCode,
-          name: school.name,
-          createdAt: new Date()
-        };
-        school.qrCode = await QRCode.toDataURL(JSON.stringify(qrData));
-        school.qrCodeData = {
-          generated: new Date(),
-          expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-          active: true
-        };
+          // Generate QR code
+          if (!school.qrCode) {
+            const qrData = {
+              schoolId: school.schoolId,
+              shortCode: school.shortCode,
+              name: school.name,
+              createdAt: new Date()
+            };
+            school.qrCode = await QRCode.toDataURL(JSON.stringify(qrData));
+            school.qrCodeData = {
+              generated: new Date(),
+              expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+              active: true
+            };
+          }
+        } catch (error) {
+          console.error('Error in School.beforeCreate hook:', error);
+          // Don't throw - let the defaults handle it
+        }
       }
     }
   });
@@ -115,7 +138,7 @@ module.exports = (sequelize, DataTypes) => {
   // Generate short, memorable code (e.g., SHL-A7K29)
   function generateShortCode() {
     const prefix = 'SHL';
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed confusing chars (0,1,I,O)
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let randomPart = '';
     for (let i = 0; i < 5; i++) {
       randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
