@@ -8,15 +8,24 @@ module.exports = (sequelize, DataTypes) => {
     elimuid: {
       type: DataTypes.STRING,
       allowNull: false,
-      unique: true
+      unique: true,
+      defaultValue: () => {
+        const year = new Date().getFullYear();
+        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+        return `ELI-${year}-${random}`;
+      }
     },
     grade: {
       type: DataTypes.STRING,
-      allowNull: false
+      allowNull: false,
+      defaultValue: 'Not Assigned'
     },
     dateOfBirth: DataTypes.DATE,
     gender: DataTypes.ENUM('male', 'female', 'other'),
-    enrollmentDate: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    enrollmentDate: { 
+      type: DataTypes.DATE, 
+      defaultValue: DataTypes.NOW 
+    },
     status: {
       type: DataTypes.ENUM('active', 'inactive', 'graduated', 'transferred'),
       defaultValue: 'active'
@@ -42,10 +51,11 @@ module.exports = (sequelize, DataTypes) => {
     timestamps: true,
     hooks: {
       beforeCreate: async (student) => {
-        if (!student.elimuid) {
+        if (!student.elimuid || student.elimuid.startsWith('ELI-') === false) {
           const year = new Date().getFullYear();
           const count = await Student.count();
-          student.elimuid = `ELIMU-${year}-${(count + 1).toString().padStart(4, '0')}`;
+          student.elimuid = `ELI-${year}-${(count + 1).toString().padStart(4, '0')}`;
+          console.log('Generated elimuid:', student.elimuid);
         }
       }
     }
