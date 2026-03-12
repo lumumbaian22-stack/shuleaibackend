@@ -8,9 +8,9 @@ const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const fileUpload = require('express-fileupload');
 const path = require('path');
-const { sequelize } = require('./models'); // FIXED: removed 'src/'
+const { sequelize } = require('./models'); // This is correct (already in src)
 
-// Routes
+// Routes - all relative to src
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const dutyRoutes = require('./routes/dutyRoutes');
@@ -57,7 +57,7 @@ app.use(session({
   cookie: { secure: process.env.NODE_ENV === 'production', maxAge: 7*24*60*60*1000 }
 }));
 
-// Static uploads
+// Static uploads - adjust path to go up one level
 const uploadDir = path.join(__dirname, '../uploads');
 require('fs').existsSync(uploadDir) || require('fs').mkdirSync(uploadDir, { recursive: true });
 app.use('/uploads', express.static(uploadDir));
@@ -67,10 +67,9 @@ app.get('/health', (req, res) => {
   res.json({ success: true, timestamp: new Date().toISOString() });
 });
 
-// FIXED: Test database connection with correct model path
 app.get('/api/test/db', async (req, res) => {
   try {
-    const { School } = require('./models'); // FIXED: removed 'src/'
+    const { School } = require('./models');
     const count = await School.count();
     res.json({ 
       success: true, 
@@ -82,16 +81,14 @@ app.get('/api/test/db', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: 'Database error',
-      error: error.message,
-      stack: error.stack
+      error: error.message
     });
   }
 });
 
-// FIXED: Test school creation with correct model path
 app.post('/api/test/create-school', async (req, res) => {
   try {
-    const { School } = require('./models'); // FIXED: removed 'src/'
+    const { School } = require('./models');
     
     const testSchool = await School.create({
       name: 'Test School ' + Date.now(),
@@ -112,9 +109,7 @@ app.post('/api/test/create-school', async (req, res) => {
     console.error('Test school creation error:', error);
     res.status(500).json({
       success: false,
-      error: error.message,
-      stack: error.stack,
-      errors: error.errors
+      error: error.message
     });
   }
 });
