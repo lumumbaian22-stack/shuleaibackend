@@ -1,33 +1,135 @@
-const { Teacher, Student, AcademicRecord, Attendance, User, Class } = require('../models');
-const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
-const csv = require('csv-parser');
-const fs = require('fs');
+const { User, Teacher, School, ApprovalRequest, Alert } = require('../models');
+const QRCode = require('qrcode');
 
-// @desc    Approve teacher and generate employee ID
-// @route   POST /api/admin/teachers/:teacherId/approve
-// @access  Private/Admin
+exports.teacherSignup = async (req, res) => {
+  try {
+    const { name, email, password, phone, schoolId, qualification, subjects, classTeacher } = req.body;
+
+    const school = await School.findOne({ 
+      where: {
+        [Op.or]: [
+          { schoolId },
+          { lookupCodes: { [Op.contains]: [schoolId] } },
+          { qrCode: schoolId }
+        ]
+      }
+    });
+    if (!school) {
+      return res.status(404).json({ success: false, message: 'Invalid school ID' });
+    }
+
+    if (!school.settings.allowTeacherSignup) {
+      return res.status(403).json({ success: false, message: 'School not accepting signups' });
+    }
+
+    const existing = await User.findOne({ where: { email } });
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'Email already exists' });
+    }
+
+    const emailDomain = email.split('@')[1];
+    const autoApprove = school.settings.autoApproveDomains.includes(emailDomain);
+
+    const user = await User.create({
+      name, email, password, role: 'teacher', phone,
+      schoolCode: school.schoolId, // FIXED: using school.schoolId, not school.code
+      isActive: autoApprove
+    });
+
+    const teacher = await Teacher.create({
+      userId: user.id,
+      subjects: subjects || [],
+      classTeacher: classTeacher || null,
+      qualification,
+      approvalStatus: autoApprove ? 'approved' : 'pending',
+      approvedAt: autoApprove ? new Date() : null
+    });
+
+    if (!autoApprove) {
+      await ApprovalRequest.create({
+        schoolId: school.schoolId, // FIXED: using school.schoolId
+        userId: user.id,
+        role: 'teacher',
+        data: { name, email, phone, qualification, subjects, classTeacher },
+        metadata: { ipAddress: req.ip, userAgent: req.headers['user-agent'] }
+      });
+
+      school.stats.pendingApprovals = (school.stats.pendingApprovals || 0) + 1;
+      await school.save();
+
+      // Notify admins - FIXED: using school.schoolId
+      const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.schoolId } });
+      for (const admin of admins) {
+        await Alert.create({
+          userId: admin.id,
+          role: 'admin',
+          type: 'approval',
+          severity: 'info',
+          title: 'New Teacher Signup',
+          message: `${name} requested to join.`,
+          data: { teacherId: teacher.id }
+        });
+      }
+    }
+
+    const qrData = { teacherId: teacher.id, name, school: school.name };
+    const qrCode = await QRCode.toDataURL(JSON.stringify(qrData));
+
+    res.status(201).json({
+      success: true,
+      message: autoApprove ? 'Signup successful' : 'Pending approval',
+      data: { userId: user.id, name, email, school: school.name, status: teacher.approvalStatus, qrCode }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.verifySchoolId = async (req, res) => {
+  try {
+    const { schoolId } = req.body;
+    const school = await School.findOne({
+      where: {
+        [Op.or]: [
+          { schoolId },
+          { lookupCodes: { [Op.contains]: [schoolId] } },
+          { qrCode: schoolId }
+        ]
+      }
+    });
+    if (!school) {
+      return res.status(404).json({ success: false, message: 'Invalid school ID' });
+    }
+    res.json({
+      success: true,
+      data: {
+        schoolName: school.name,
+        schoolId: school.schoolId,
+        requiresApproval: school.settings.requireApproval,
+        autoApproveDomains: school.settings.autoApproveDomains
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.approveTeacher = async (req, res) => {
   try {
     const { teacherId } = req.params;
     const { action, rejectionReason } = req.body;
 
-    const teacher = await Teacher.findByPk(teacherId, { 
-      include: [{ model: User }] 
-    });
-    
+    const teacher = await Teacher.findByPk(teacherId, { include: [{ model: User }] });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
+    // FIXED: using school.schoolId, not school.code
     const school = await School.findOne({ where: { schoolId: teacher.User.schoolCode } });
 
     if (action === 'approve') {
       teacher.approvalStatus = 'approved';
       teacher.approvedBy = req.user.id;
       teacher.approvedAt = new Date();
-      
-      // Employee ID is auto-generated by the model hook
-      // No need to set it manually
-      
       teacher.User.isActive = true;
       await teacher.User.save();
 
@@ -35,14 +137,18 @@ exports.approveTeacher = async (req, res) => {
       school.stats.teachers = (school.stats.teachers || 0) + 1;
       await school.save();
 
-      await createAlert({
+      await ApprovalRequest.update(
+        { status: 'approved', reviewedBy: req.user.id, reviewedAt: new Date() },
+        { where: { userId: teacher.User.id } }
+      );
+
+      await Alert.create({
         userId: teacher.User.id,
         role: 'teacher',
         type: 'system',
         severity: 'success',
         title: 'Account Approved',
-        message: `Your account has been approved. Your Employee ID is: ${teacher.employeeId}`,
-        data: { employeeId: teacher.employeeId }
+        message: `Your account has been approved.`
       });
     } else {
       teacher.approvalStatus = 'rejected';
@@ -53,230 +159,38 @@ exports.approveTeacher = async (req, res) => {
       school.stats.pendingApprovals = Math.max(0, (school.stats.pendingApprovals || 0) - 1);
       await school.save();
 
-      await createAlert({
-        userId: teacher.User.id,
-        role: 'teacher',
-        type: 'system',
-        severity: 'warning',
-        title: 'Account Rejected',
-        message: `Your account was rejected. Reason: ${rejectionReason || 'Not specified'}`
-      });
+      await ApprovalRequest.update(
+        { status: 'rejected', reviewedBy: req.user.id, reviewedAt: new Date(), rejectionReason },
+        { where: { userId: teacher.User.id } }
+      );
     }
     await teacher.save();
 
-    res.json({ 
-      success: true, 
-      message: `Teacher ${action}d`,
-      data: { 
-        employeeId: teacher.employeeId,
-        approvalStatus: teacher.approvalStatus 
-      }
-    });
-  } catch (error) {
-    console.error('Approve teacher error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Get teacher's classes/students
-// @route   GET /api/teacher/students
-// @access  Private/Teacher
-exports.getMyStudents = async (req, res) => {
-  try {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher profile not found' });
-
-    // Assuming teacher has a classTeacher field
-    const students = await Student.findAll({
-      where: { grade: teacher.classTeacher },
-      include: [{ model: User, attributes: ['id','name','email','phone'] }]
-    });
-
-    res.json({ success: true, data: students });
+    res.json({ success: true, message: `Teacher ${action}d` });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Enter marks for a student
-// @route   POST /api/teacher/marks
-// @access  Private/Teacher
-exports.enterMarks = async (req, res) => {
+exports.getPendingApprovals = async (req, res) => {
   try {
-    const { studentId, subject, score, assessmentType, assessmentName, date, term, year } = req.body;
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-
-    const record = await AcademicRecord.create({
-      studentId,
-      schoolCode: req.user.schoolCode,
-      term: term || 'Term 1',
-      year: year || new Date().getFullYear(),
-      subject,
-      assessmentType,
-      assessmentName,
-      score,
-      teacherId: teacher.id,
-      date: date || new Date(),
-      isPublished: true
-    });
-
-    // Check for performance alerts (using curriculumEngine later)
-    // For now, create a simple alert if score < 50
-    if (score < 50) {
-      const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-      await createAlert({
-        userId: student.userId,
-        role: 'student',
-        type: 'academic',
-        severity: 'warning',
-        title: 'Low Score Alert',
-        message: `You scored ${score}% in ${subject}. Please review.`
-      });
-
-      // Also alert parents
-      const parents = await student.getParents({ include: [{ model: User }] });
-      for (const p of parents) {
-        await createAlert({
-          userId: p.userId,
-          role: 'parent',
-          type: 'academic',
-          severity: 'warning',
-          title: `Low Score: ${student.User.name}`,
-          message: `${student.User.name} scored ${score}% in ${subject}.`
-        });
-      }
+    // FIXED: using schoolId, not code
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    if (!school) {
+      return res.status(404).json({ success: false, message: 'School not found' });
     }
 
-    res.status(201).json({ success: true, data: record });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Take attendance
-// @route   POST /api/teacher/attendance
-// @access  Private/Teacher
-exports.takeAttendance = async (req, res) => {
-  try {
-    const { studentId, date, status, reason } = req.body;
-    const [attendance, created] = await Attendance.findOrCreate({
-      where: { studentId, date },
-      defaults: { studentId, date, status, reason, schoolCode: req.user.schoolCode, reportedBy: req.user.id }
+    const pending = await Teacher.findAll({
+      where: { approvalStatus: 'pending' },
+      include: [{ 
+        model: User, 
+        where: { schoolCode: school.schoolId }, // FIXED: using school.schoolId
+        attributes: ['id','name','email','phone','createdAt'] 
+      }]
     });
-
-    if (!created) {
-      attendance.status = status;
-      attendance.reason = reason;
-      await attendance.save();
-    }
-
-    // Alert if absent
-    if (status === 'absent') {
-      const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-      await createAlert({
-        userId: student.userId,
-        role: 'student',
-        type: 'attendance',
-        severity: 'info',
-        title: 'Absence Recorded',
-        message: `You were marked absent on ${date}.`
-      });
-    }
-
-    res.json({ success: true, data: attendance });
+    res.json({ success: true, data: { teachers: pending, total: pending.length } });
   } catch (error) {
+    console.error('Get pending approvals error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
-};
-
-// @desc    Add a comment about a student
-// @route   POST /api/teacher/comment
-// @access  Private/Teacher
-exports.addComment = async (req, res) => {
-  try {
-    const { studentId, comment } = req.body;
-    // This could be stored in a separate Comments table
-    // For now, just create an alert for parent
-    const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-    const parents = await student.getParents({ include: [{ model: User }] });
-    for (const p of parents) {
-      await createAlert({
-        userId: p.userId,
-        role: 'parent',
-        type: 'system',
-        severity: 'info',
-        title: `Teacher Comment: ${student.User.name}`,
-        message: comment
-      });
-    }
-
-    res.json({ success: true, message: 'Comment sent to parents' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Upload CSV of marks
-// @route   POST /api/teacher/upload/marks
-// @access  Private/Teacher
-exports.uploadMarksCSV = async (req, res) => {
-  if (!req.files || !req.files.file) {
-    return res.status(400).json({ success: false, message: 'No file uploaded' });
-  }
-
-  const file = req.files.file;
-  const filePath = `/tmp/${Date.now()}-${file.name}`;
-  await file.mv(filePath);
-
-  const results = [];
-  const errors = [];
-
-  fs.createReadStream(filePath)
-    .pipe(csv())
-    .on('data', (data) => results.push(data))
-    .on('end', async () => {
-      fs.unlinkSync(filePath);
-
-      const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-      for (const row of results) {
-        try {
-          // Expecting columns: studentId or elimuid, subject, score, date, assessmentType
-          const student = await Student.findOne({
-            where: {
-              [Op.or]: [
-                { id: row.studentId },
-                { elimuid: row.elimuid }
-              ]
-            }
-          });
-          if (!student) {
-            errors.push({ row, error: 'Student not found' });
-            continue;
-          }
-
-          await AcademicRecord.create({
-            studentId: student.id,
-            schoolCode: req.user.schoolCode,
-            term: row.term || 'Term 1',
-            year: row.year || new Date().getFullYear(),
-            subject: row.subject,
-            assessmentType: row.assessmentType || 'test',
-            assessmentName: row.assessmentName,
-            score: parseInt(row.score),
-            teacherId: teacher.id,
-            date: row.date || new Date(),
-            isPublished: true
-          });
-        } catch (err) {
-          errors.push({ row, error: err.message });
-        }
-      }
-
-      res.json({
-        success: true,
-        message: `Processed ${results.length} records with ${errors.length} errors`,
-        errors
-      });
-    });
-
 };
