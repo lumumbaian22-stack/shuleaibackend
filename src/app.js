@@ -8,9 +8,9 @@ const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const fileUpload = require('express-fileupload');
 const path = require('path');
-const { sequelize } = require('./models'); // This is correct (already in src)
+const { sequelize } = require('./models');
 
-// Routes - all relative to src
+// Routes
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const dutyRoutes = require('./routes/dutyRoutes');
@@ -57,12 +57,12 @@ app.use(session({
   cookie: { secure: process.env.NODE_ENV === 'production', maxAge: 7*24*60*60*1000 }
 }));
 
-// Static uploads - adjust path to go up one level
+// Static uploads
 const uploadDir = path.join(__dirname, '../uploads');
 require('fs').existsSync(uploadDir) || require('fs').mkdirSync(uploadDir, { recursive: true });
 app.use('/uploads', express.static(uploadDir));
 
-// ============ TEST ENDPOINTS ============
+// ============ TEST ENDPOINTS (Place BEFORE all routes) ============
 app.get('/health', (req, res) => {
   res.json({ success: true, timestamp: new Date().toISOString() });
 });
@@ -126,7 +126,7 @@ app.use('/api/student', studentRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/upload', uploadRoutes);
 
-// 404
+// 404 handler - This must be AFTER all routes
 app.use((req, res) => {
   console.log('404 Not Found:', req.method, req.url);
   res.status(404).json({ success: false, message: 'Route not found' });
