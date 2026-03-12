@@ -146,4 +146,36 @@ app.use((err, req, res, next) => {
   });
 });
 
+// TEMPORARY TEST ENDPOINT - Remove after confirming fix
+app.post('/api/test/create-school', async (req, res) => {
+  try {
+    const { School } = require('./src/models');
+    
+    const testSchool = await School.create({
+      name: 'Test School ' + Date.now(),
+      system: 'cbc',
+      status: 'pending'
+    });
+    
+    res.json({
+      success: true,
+      school: {
+        id: testSchool.id,
+        schoolId: testSchool.schoolId,
+        shortCode: testSchool.shortCode,
+        name: testSchool.name
+      }
+    });
+  } catch (error) {
+    console.error('Test school creation error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack,
+      errors: error.errors
+    });
+  }
+});
+
 module.exports = app;
+
