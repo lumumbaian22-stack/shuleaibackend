@@ -1,4 +1,4 @@
-const { Teacher, Student, AcademicRecord, Attendance, User, Class } = require('../models');
+const { Teacher, Student, AcademicRecord, Attendance, User, Parent } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 const csv = require('csv-parser');
@@ -10,19 +10,33 @@ const fs = require('fs');
 exports.getDashboard = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher profile not found' });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher profile not found' });
+    }
 
-    const students = await Student.findAll({
-      where: { grade: teacher.classTeacher },
-      include: [{ model: User, attributes: ['id','name','email','phone'] }]
-    });
+    // Get students if teacher has a class
+    let students = [];
+    if (teacher.classTeacher) {
+      students = await Student.findAll({
+        where: { grade: teacher.classTeacher },
+        include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+      });
+    }
 
-    const todayDuty = await getTodayDuty(req.user.id);
+    // Get today's duty
+    const todayDuty = await exports.getTodayDuty(req.user.id);
 
     res.json({
       success: true,
       data: {
-        teacher: req.user.getPublicProfile(),
+        teacher: {
+          id: teacher.id,
+          employeeId: teacher.employeeId,
+          subjects: teacher.subjects,
+          classTeacher: teacher.classTeacher,
+          department: teacher.department
+        },
+        user: req.user.getPublicProfile(),
         students: students,
         todayDuty: todayDuty,
         stats: {
@@ -32,92 +46,32 @@ exports.getDashboard = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Get dashboard error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Get teacher's classes/students
+// @desc    Get teacher's students
 // @route   GET /api/teacher/students
 // @access  Private/Teacher
 exports.getMyStudents = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher profile not found' });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher profile not found' });
+    }
 
-    // Assuming teacher has a classTeacher field
-    const students = await Student.findAll({
-      where: { grade: teacher.classTeacher },
-      include: [{ model: User, attributes: ['id','name','email','phone'] }]
-    });
+    let students = [];
+    if (teacher.classTeacher) {
+      students = await Student.findAll({
+        where: { grade: teacher.classTeacher },
+        include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+      });
+    }
 
     res.json({ success: true, data: students });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Add a new student
-// @route   POST /api/teacher/students
-// @access  Private/Teacher
-exports.addStudent = async (req, res) => {
-  try {
-    const { name, grade, parentEmail, dateOfBirth, gender } = req.body;
-    
-    // Create user for student
-    const user = await User.create({
-      name,
-      email: null, // Students might not have email
-      password: Math.random().toString(36).slice(-8), // Random password
-      role: 'student',
-      schoolCode: req.user.schoolCode,
-      isActive: true
-    });
-
-    // Create student profile
-    const student = await Student.create({
-      userId: user.id,
-      grade: grade,
-      dateOfBirth: dateOfBirth,
-      gender: gender
-    });
-
-    // If parent email provided, create parent account or link existing
-    if (parentEmail) {
-      let parent = await Parent.findOne({ 
-        include: [{ model: User, where: { email: parentEmail } }]
-      });
-
-      if (!parent) {
-        // Create new parent
-        const parentUser = await User.create({
-          name: `Parent of ${name}`,
-          email: parentEmail,
-          password: Math.random().toString(36).slice(-8),
-          role: 'parent',
-          schoolCode: req.user.schoolCode,
-          isActive: true
-        });
-
-        parent = await Parent.create({
-          userId: parentUser.id,
-          relationship: 'guardian'
-        });
-      }
-
-      // Link parent to student
-      await parent.addStudent(student);
-    }
-
-    res.status(201).json({
-      success: true,
-      message: 'Student added successfully',
-      data: {
-        id: student.id,
-        elimuid: student.elimuid,
-        name: user.name
-      }
-    });
-  } catch (error) {
+    console.error('Get my students error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -128,7 +82,11 @@ exports.addStudent = async (req, res) => {
 exports.enterMarks = async (req, res) => {
   try {
     const { studentId, subject, score, assessmentType, assessmentName, date, term, year } = req.body;
+    
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
 
     const record = await AcademicRecord.create({
       studentId,
@@ -136,42 +94,51 @@ exports.enterMarks = async (req, res) => {
       term: term || 'Term 1',
       year: year || new Date().getFullYear(),
       subject,
-      assessmentType,
-      assessmentName,
+      assessmentType: assessmentType || 'test',
+      assessmentName: assessmentName || `${subject} ${assessmentType || 'test'}`,
       score,
       teacherId: teacher.id,
       date: date || new Date(),
       isPublished: true
     });
 
-    // Check for performance alerts
+    // Check for performance alerts (score < 50)
     if (score < 50) {
-      const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-      await createAlert({
-        userId: student.userId,
-        role: 'student',
-        type: 'academic',
-        severity: 'warning',
-        title: 'Low Score Alert',
-        message: `You scored ${score}% in ${subject}. Please review.`
+      const student = await Student.findByPk(studentId, { 
+        include: [{ model: User, attributes: ['id', 'name'] }] 
       });
-
-      // Also alert parents
-      const parents = await student.getParents({ include: [{ model: User }] });
-      for (const p of parents) {
+      
+      if (student) {
         await createAlert({
-          userId: p.userId,
-          role: 'parent',
+          userId: student.userId,
+          role: 'student',
           type: 'academic',
           severity: 'warning',
-          title: `Low Score: ${student.User.name}`,
-          message: `${student.User.name} scored ${score}% in ${subject}.`
+          title: 'Low Score Alert',
+          message: `You scored ${score}% in ${subject}. Please review.`
         });
+
+        // Also alert parents
+        const parents = await student.getParents({ 
+          include: [{ model: User, attributes: ['id'] }] 
+        });
+        
+        for (const parent of parents) {
+          await createAlert({
+            userId: parent.userId,
+            role: 'parent',
+            type: 'academic',
+            severity: 'warning',
+            title: `Low Score: ${student.User.name}`,
+            message: `${student.User.name} scored ${score}% in ${subject}.`
+          });
+        }
       }
     }
 
     res.status(201).json({ success: true, data: record });
   } catch (error) {
+    console.error('Enter marks error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -182,9 +149,17 @@ exports.enterMarks = async (req, res) => {
 exports.takeAttendance = async (req, res) => {
   try {
     const { studentId, date, status, reason } = req.body;
+    
     const [attendance, created] = await Attendance.findOrCreate({
       where: { studentId, date },
-      defaults: { studentId, date, status, reason, schoolCode: req.user.schoolCode, reportedBy: req.user.id }
+      defaults: { 
+        studentId, 
+        date, 
+        status, 
+        reason, 
+        schoolCode: req.user.schoolCode, 
+        reportedBy: req.user.id 
+      }
     });
 
     if (!created) {
@@ -195,19 +170,25 @@ exports.takeAttendance = async (req, res) => {
 
     // Alert if absent
     if (status === 'absent') {
-      const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-      await createAlert({
-        userId: student.userId,
-        role: 'student',
-        type: 'attendance',
-        severity: 'info',
-        title: 'Absence Recorded',
-        message: `You were marked absent on ${date}.`
+      const student = await Student.findByPk(studentId, { 
+        include: [{ model: User, attributes: ['id', 'name'] }] 
       });
+      
+      if (student) {
+        await createAlert({
+          userId: student.userId,
+          role: 'student',
+          type: 'attendance',
+          severity: 'info',
+          title: 'Absence Recorded',
+          message: `You were marked absent on ${date}.`
+        });
+      }
     }
 
     res.json({ success: true, data: attendance });
   } catch (error) {
+    console.error('Take attendance error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -218,12 +199,22 @@ exports.takeAttendance = async (req, res) => {
 exports.addComment = async (req, res) => {
   try {
     const { studentId, comment } = req.body;
-    const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-    const parents = await student.getParents({ include: [{ model: User }] });
     
-    for (const p of parents) {
+    const student = await Student.findByPk(studentId, { 
+      include: [{ model: User, attributes: ['id', 'name'] }] 
+    });
+    
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    const parents = await student.getParents({ 
+      include: [{ model: User, attributes: ['id', 'name'] }] 
+    });
+    
+    for (const parent of parents) {
       await createAlert({
-        userId: p.userId,
+        userId: parent.userId,
         role: 'parent',
         type: 'system',
         severity: 'info',
@@ -234,6 +225,7 @@ exports.addComment = async (req, res) => {
 
     res.json({ success: true, message: 'Comment sent to parents' });
   } catch (error) {
+    console.error('Add comment error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -248,77 +240,106 @@ exports.uploadMarksCSV = async (req, res) => {
 
   const file = req.files.file;
   const filePath = `/tmp/${Date.now()}-${file.name}`;
-  await file.mv(filePath);
+  
+  try {
+    await file.mv(filePath);
 
-  const results = [];
-  const errors = [];
+    const results = [];
+    const errors = [];
 
-  fs.createReadStream(filePath)
-    .pipe(csv())
-    .on('data', (data) => results.push(data))
-    .on('end', async () => {
-      fs.unlinkSync(filePath);
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
 
-      const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-      for (const row of results) {
-        try {
-          const student = await Student.findOne({
-            where: {
-              [Op.or]: [
-                { id: row.studentId },
-                { elimuid: row.elimuid }
-              ]
+    const readStream = fs.createReadStream(filePath)
+      .pipe(csv())
+      .on('data', (data) => results.push(data))
+      .on('end', async () => {
+        // Process each row
+        for (const row of results) {
+          try {
+            // Find student by ID or ELIMUID
+            const student = await Student.findOne({
+              where: {
+                [Op.or]: [
+                  { id: row.studentId },
+                  { elimuid: row.elimuid }
+                ]
+              }
+            });
+
+            if (!student) {
+              errors.push({ row, error: 'Student not found' });
+              continue;
             }
-          });
-          if (!student) {
-            errors.push({ row, error: 'Student not found' });
-            continue;
+
+            await AcademicRecord.create({
+              studentId: student.id,
+              schoolCode: req.user.schoolCode,
+              term: row.term || 'Term 1',
+              year: row.year || new Date().getFullYear(),
+              subject: row.subject,
+              assessmentType: row.assessmentType || 'test',
+              assessmentName: row.assessmentName || `${row.subject} ${row.assessmentType || 'test'}`,
+              score: parseInt(row.score),
+              teacherId: teacher.id,
+              date: row.date || new Date(),
+              isPublished: true
+            });
+          } catch (err) {
+            errors.push({ row, error: err.message });
           }
-
-          await AcademicRecord.create({
-            studentId: student.id,
-            schoolCode: req.user.schoolCode,
-            term: row.term || 'Term 1',
-            year: row.year || new Date().getFullYear(),
-            subject: row.subject,
-            assessmentType: row.assessmentType || 'test',
-            assessmentName: row.assessmentName,
-            score: parseInt(row.score),
-            teacherId: teacher.id,
-            date: row.date || new Date(),
-            isPublished: true
-          });
-        } catch (err) {
-          errors.push({ row, error: err.message });
         }
-      }
 
-      res.json({
-        success: true,
-        message: `Processed ${results.length} records with ${errors.length} errors`,
-        errors
+        // Clean up temp file
+        fs.unlinkSync(filePath);
+
+        res.json({
+          success: true,
+          message: `Processed ${results.length} records with ${errors.length} errors`,
+          data: {
+            total: results.length,
+            successful: results.length - errors.length,
+            errors: errors
+          }
+        });
       });
+
+    readStream.on('error', (error) => {
+      console.error('CSV read error:', error);
+      fs.unlinkSync(filePath);
+      res.status(500).json({ success: false, message: 'Error reading CSV file' });
     });
+
+  } catch (error) {
+    console.error('Upload marks CSV error:', error);
+    // Clean up temp file if it exists
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 
-// Helper function to get today's duty
-async function getTodayDuty(userId) {
+// @desc    Get today's duty for a teacher
+// @route   GET /api/teacher/today-duty (optional, can be used internally)
+// @access  Private/Teacher
+exports.getTodayDuty = async (userId) => {
   try {
-    const { DutyRoster } = require('../models');
     const teacher = await Teacher.findOne({ where: { userId } });
     if (!teacher) return null;
 
+    const { DutyRoster } = require('../models');
     const today = new Date().toISOString().split('T')[0];
+    
     const roster = await DutyRoster.findOne({
       where: {
-        date: today,
-        duties: {
-          [Op.contains]: [{ teacherId: teacher.id }]
-        }
+        date: today
       }
     });
 
-    if (roster) {
+    if (roster && roster.duties) {
       const duty = roster.duties.find(d => d.teacherId === teacher.id);
       return duty || null;
     }
@@ -327,4 +348,4 @@ async function getTodayDuty(userId) {
     console.error('Error getting today duty:', error);
     return null;
   }
-}
+};
