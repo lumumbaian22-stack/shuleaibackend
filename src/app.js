@@ -15,68 +15,21 @@ const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const dutyRoutes = require('./routes/dutyRoutes');
 const publicRoutes = require('./routes/publicRoutes');
-// ... other routes
+const superAdminRoutes = require('./routes/superAdminRoutes');
+const teacherRoutes = require('./routes/teacherRoutes');
+const parentRoutes = require('./routes/parentRoutes');
+const studentRoutes = require('./routes/studentRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
+const uploadRoutes = require('./routes/uploadRoutes');
 
 const app = express();
 
 // Security
 app.use(helmet());
-
-// ============ UPDATED CORS CONFIGURATION ============
-const allowedOrigins = [
-    'https://shuleai.live',
-    'http://localhost:3000',
-    'http://localhost:5000',
-    'https://shuleaibackend-32h1.onrender.com',
-    process.env.FRONTEND_URL
-].filter(Boolean); // Remove any undefined values
-
-const corsOptions = {
-    origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps, curl, etc)
-        if (!origin) return callback(null, true);
-        
-        if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
-            callback(null, true);
-        } else {
-            console.log('Blocked origin:', origin); // For debugging
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-    credentials: true,
-    optionsSuccessStatus: 200
-};
-
-app.use(cors(corsOptions));
-
-// Handle preflight requests for all routes
-app.options('*', cors(corsOptions));
-
-// Additional headers middleware
-app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin) || !origin) {
-        res.header('Access-Control-Allow-Origin', origin || '*');
-    }
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-    
-    next();
-});
-// ============ END CORS CONFIGURATION ============
+app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
 
 // Rate limiting
-const limiter = rateLimit({ 
-    windowMs: 15*60*1000, 
-    max: 100,
-    skip: (req) => req.method === 'OPTIONS' // Skip preflight requests
-});
+const limiter = rateLimit({ windowMs: 15*60*1000, max: 100 });
 app.use('/api', limiter);
 
 // Body parsing
@@ -101,11 +54,7 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'session-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { 
-    secure: process.env.NODE_ENV === 'production', 
-    maxAge: 7*24*60*60*1000,
-    sameSite: 'lax' // Important for cross-origin requests
-  }
+  cookie: { secure: process.env.NODE_ENV === 'production', maxAge: 7*24*60*60*1000 }
 }));
 
 // Static uploads
@@ -113,40 +62,12 @@ const uploadDir = path.join(__dirname, '../uploads');
 require('fs').existsSync(uploadDir) || require('fs').mkdirSync(uploadDir, { recursive: true });
 app.use('/uploads', express.static(uploadDir));
 
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/duty', dutyRoutes);
-app.use('/api/public', publicRoutes);
-// ... other routes
-
+// ============ TEST ENDPOINTS (Place BEFORE other routes) ============
 app.get('/health', (req, res) => {
   res.json({ success: true, timestamp: new Date().toISOString() });
 });
 
-// 404
-app.use((req, res) => res.status(404).json({ success: false, message: 'Route not found' }));
-
-// Error handler
-app.use((err, req, res, next) => {
-  console.error('Error:', err.stack);
-  
-  // Handle CORS errors specifically
-  if (err.message === 'Not allowed by CORS') {
-    return res.status(403).json({ 
-      success: false, 
-      message: 'CORS error: Origin not allowed',
-      allowedOrigins: allowedOrigins.filter(o => o) 
-    });
-  }
-  
-  res.status(err.status || 500).json({ 
-    success: false, 
-    message: err.message 
-  });
-});
-
-// TEMPORARY TEST ENDPOINT - Remove after confirming fix
+// TEMPORARY TEST ENDPOINT - Test school creation
 app.post('/api/test/create-school', async (req, res) => {
   try {
     const { School } = require('./src/models');
@@ -177,5 +98,50 @@ app.post('/api/test/create-school', async (req, res) => {
   }
 });
 
-module.exports = app;
+// TEMPORARY TEST ENDPOINT - Test database connection
+app.get('/api/test/db', async (req, res) => {
+  try {
+    const { School } = require('./src/models');
+    const count = await School.count();
+    res.json({ 
+      success: true, 
+      message: 'Database connected',
+      schoolCount: count
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      message: 'Database error',
+      error: error.message 
+    });
+  }
+});
 
+// ============ ROUTES ============
+app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/duty', dutyRoutes);
+app.use('/api/public', publicRoutes);
+app.use('/api/super-admin', superAdminRoutes);
+app.use('/api/teacher', teacherRoutes);
+app.use('/api/parent', parentRoutes);
+app.use('/api/student', studentRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/upload', uploadRoutes);
+
+// 404
+app.use((req, res) => {
+  console.log('404 Not Found:', req.method, req.url);
+  res.status(404).json({ success: false, message: 'Route not found' });
+});
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('Error:', err.stack);
+  res.status(err.status || 500).json({ 
+    success: false, 
+    message: err.message || 'Internal server error'
+  });
+});
+
+module.exports = app;
