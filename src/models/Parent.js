@@ -8,7 +8,12 @@ module.exports = (sequelize, DataTypes) => {
     parentId: {
       type: DataTypes.STRING,
       allowNull: false,
-      unique: true
+      unique: true,
+      defaultValue: () => {
+        const year = new Date().getFullYear();
+        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+        return `PAR-${year}-${random}`;
+      }
     },
     occupation: DataTypes.STRING,
     relationship: {
@@ -27,10 +32,11 @@ module.exports = (sequelize, DataTypes) => {
     timestamps: true,
     hooks: {
       beforeCreate: async (parent) => {
-        if (!parent.parentId) {
+        if (!parent.parentId || parent.parentId.startsWith('PAR-') === false) {
           const year = new Date().getFullYear();
           const count = await Parent.count();
-          parent.parentId = `PID-${year}-${(count + 1).toString().padStart(4, '0')}`;
+          parent.parentId = `PAR-${year}-${(count + 1).toString().padStart(4, '0')}`;
+          console.log('Generated parentId:', parent.parentId);
         }
       }
     }
