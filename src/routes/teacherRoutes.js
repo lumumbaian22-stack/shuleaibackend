@@ -8,7 +8,6 @@ router.use(protect, authorize('teacher'));
 
 // Student management
 router.get('/students', teacherController.getMyStudents);
-router.post('/students', teacherController.addStudent); // Make sure this exists in teacherController
 router.post('/marks', teacherController.enterMarks);
 router.post('/attendance', teacherController.takeAttendance);
 router.post('/comment', teacherController.addComment);
@@ -16,7 +15,7 @@ router.post('/comment', teacherController.addComment);
 // CSV upload
 router.post('/upload/marks', teacherController.uploadMarksCSV);
 
-// Dashboard - if you need a specific dashboard endpoint
+// Dashboard (optional)
 router.get('/dashboard', teacherController.getDashboard);
 
 module.exports = router;
