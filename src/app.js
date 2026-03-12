@@ -21,10 +21,62 @@ const app = express();
 
 // Security
 app.use(helmet());
-app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
+
+// ============ UPDATED CORS CONFIGURATION ============
+const allowedOrigins = [
+    'https://shuleai.live',
+    'http://localhost:3000',
+    'http://localhost:5000',
+    'https://shuleaibackend-32h1.onrender.com',
+    process.env.FRONTEND_URL
+].filter(Boolean); // Remove any undefined values
+
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps, curl, etc)
+        if (!origin) return callback(null, true);
+        
+        if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+            callback(null, true);
+        } else {
+            console.log('Blocked origin:', origin); // For debugging
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+    optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+
+// Handle preflight requests for all routes
+app.options('*', cors(corsOptions));
+
+// Additional headers middleware
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin) || !origin) {
+        res.header('Access-Control-Allow-Origin', origin || '*');
+    }
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+    
+    next();
+});
+// ============ END CORS CONFIGURATION ============
 
 // Rate limiting
-const limiter = rateLimit({ windowMs: 15*60*1000, max: 100 });
+const limiter = rateLimit({ 
+    windowMs: 15*60*1000, 
+    max: 100,
+    skip: (req) => req.method === 'OPTIONS' // Skip preflight requests
+});
 app.use('/api', limiter);
 
 // Body parsing
@@ -49,7 +101,11 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'session-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: process.env.NODE_ENV === 'production', maxAge: 7*24*60*60*1000 }
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production', 
+    maxAge: 7*24*60*60*1000,
+    sameSite: 'lax' // Important for cross-origin requests
+  }
 }));
 
 // Static uploads
@@ -73,8 +129,21 @@ app.use((req, res) => res.status(404).json({ success: false, message: 'Route not
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(err.status || 500).json({ success: false, message: err.message });
+  console.error('Error:', err.stack);
+  
+  // Handle CORS errors specifically
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ 
+      success: false, 
+      message: 'CORS error: Origin not allowed',
+      allowedOrigins: allowedOrigins.filter(o => o) 
+    });
+  }
+  
+  res.status(err.status || 500).json({ 
+    success: false, 
+    message: err.message 
+  });
 });
 
 module.exports = app;
