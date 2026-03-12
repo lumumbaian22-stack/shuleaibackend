@@ -1,5 +1,3 @@
-const bcrypt = require('bcryptjs');
-
 module.exports = (sequelize, DataTypes) => {
   const Teacher = sequelize.define('Teacher', {
     userId: {
@@ -10,18 +8,28 @@ module.exports = (sequelize, DataTypes) => {
     employeeId: {
       type: DataTypes.STRING,
       allowNull: false,
-      unique: true
+      unique: true,
+      defaultValue: () => {
+        const year = new Date().getFullYear();
+        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+        return `TCH-${year}-${random}`;
+      }
     },
-    subjects: DataTypes.ARRAY(DataTypes.STRING),
+    subjects: {
+      type: DataTypes.ARRAY(DataTypes.STRING),
+      defaultValue: []
+    },
     department: {
       type: DataTypes.STRING,
-      allowNull: true,
       defaultValue: 'general'
     },
     classTeacher: DataTypes.STRING,
     qualification: DataTypes.STRING,
     specialization: DataTypes.STRING,
-    dateJoined: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    dateJoined: { 
+      type: DataTypes.DATE, 
+      defaultValue: DataTypes.NOW 
+    },
     approvalStatus: {
       type: DataTypes.ENUM('pending', 'approved', 'rejected', 'suspended'),
       defaultValue: 'pending'
@@ -53,7 +61,10 @@ module.exports = (sequelize, DataTypes) => {
         saturday: []
       }
     },
-    reminders: { type: DataTypes.JSONB, defaultValue: [] },
+    reminders: { 
+      type: DataTypes.JSONB, 
+      defaultValue: [] 
+    },
     statistics: {
       type: DataTypes.JSONB,
       defaultValue: { 
@@ -70,14 +81,14 @@ module.exports = (sequelize, DataTypes) => {
     timestamps: true,
     hooks: {
       beforeCreate: async (teacher) => {
-        if (!teacher.employeeId) {
+        if (!teacher.employeeId || teacher.employeeId.startsWith('TCH-') === false) {
           const year = new Date().getFullYear();
           const count = await Teacher.count();
           teacher.employeeId = `TCH-${year}-${(count + 1).toString().padStart(4, '0')}`;
+          console.log('Generated employeeId:', teacher.employeeId);
         }
       },
       afterUpdate: async (teacher) => {
-        // Update reliability score whenever duties are updated
         if (teacher.changed('duties')) {
           teacher.updateReliabilityScore();
         }
@@ -103,7 +114,6 @@ module.exports = (sequelize, DataTypes) => {
   Teacher.prototype.checkTimetableConflict = function(dayOfWeek, dutyTime) {
     const daySchedule = this.timetable?.[dayOfWeek.toLowerCase()] || [];
     
-    // Parse duty time (assuming format "HH:mm")
     const [dutyHour, dutyMinute] = dutyTime.split(':').map(Number);
     const dutyMinutes = dutyHour * 60 + dutyMinute;
     
