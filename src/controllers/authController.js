@@ -41,70 +41,45 @@ const authController = {
     }
   },
 
-const QRCode = require('qrcode');
+// Admin signup - creates pending school
+adminSignup: async (req, res) => {
+  try {
+    const { 
+      name, email, password, phone, 
+      schoolName, schoolLevel, curriculum, 
+      address, contact 
+    } = req.body;
 
-module.exports = (sequelize, DataTypes) => {
-  const School = sequelize.define('School', {
-    id: {
-      type: DataTypes.INTEGER,
-      primaryKey: true,
-      autoIncrement: true
-    },
-    schoolId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      unique: true,
-      defaultValue: () => {
-        const year = new Date().getFullYear();
-        const random = Math.floor(Math.random() * 10000).toString().padStart(5, '0');
-        return `SCH-${year}-${random}`;
-      }
-    },
-    // Short, easy-to-type code for teachers (e.g., SHL-A7K29)
-    shortCode: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      unique: true,
-      defaultValue: () => {
-        const prefix = 'SHL';
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed confusing chars (0,1,I,O)
-        let randomPart = '';
-        for (let i = 0; i < 5; i++) {
-          randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return `${prefix}-${randomPart}`;
-      }
-    },
-    name: {
-      type: DataTypes.STRING,
-      allowNull: false
-    },
-    lookupCodes: {
-      type: DataTypes.ARRAY(DataTypes.STRING),
-      defaultValue: []
-    },
-    qrCode: DataTypes.TEXT,
-    qrCodeData: DataTypes.JSONB,
-    system: {
-      type: DataTypes.ENUM('844', 'cbc', 'british', 'american'),
-      defaultValue: '844'
-    },
-    address: DataTypes.JSONB,
-    contact: DataTypes.JSONB,
-    status: {
-      type: DataTypes.ENUM('pending', 'active', 'suspended', 'rejected'),
-      defaultValue: 'pending'
-    },
-    approvedBy: DataTypes.INTEGER,
-    approvedAt: DataTypes.DATE,
-    rejectionReason: DataTypes.TEXT,
-    settings: {
-      type: DataTypes.JSONB,
-      defaultValue: {
+    // Validate required fields
+    if (!name || !email || !password || !schoolName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required fields' 
+      });
+    }
+
+    // Check if email already exists
+    const existing = await User.findOne({ where: { email } });
+    if (existing) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Email already in use' 
+      });
+    }
+
+    // Create school (pending status) - let the model defaults handle schoolId and shortCode
+    const school = await School.create({
+      name: schoolName,
+      system: curriculum || 'cbc',
+      address: address || {},
+      contact: contact || { phone, email },
+      status: 'pending',
+      isActive: false,
+      settings: {
         allowTeacherSignup: true,
         requireApproval: true,
         autoApproveDomains: [],
-        schoolLevel: 'secondary',
+        schoolLevel: schoolLevel || 'secondary',
         dutyManagement: {
           enabled: true,
           reminderHours: 24,
@@ -112,93 +87,82 @@ module.exports = (sequelize, DataTypes) => {
           checkInWindow: 15
         }
       }
-    },
-    feeStructure: {
-      type: DataTypes.JSONB,
-      defaultValue: { term1: 0, term2: 0, term3: 0, registration: 0 }
-    },
-    bankDetails: {
-      type: DataTypes.JSONB,
-      defaultValue: {
-        bankName: 'Equity Bank',
-        accountName: 'ShuleAI Schools',
-        accountNumber: '1234567890',
-        branch: 'Head Office'
-      }
-    },
-    stats: {
-      type: DataTypes.JSONB,
-      defaultValue: { students: 0, teachers: 0, parents: 0, classes: 0, pendingApprovals: 0 }
-    },
-    createdBy: DataTypes.INTEGER,
-    isActive: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false
-    }
-  }, {
-    timestamps: true,
-    hooks: {
-      beforeCreate: async (school, options) => {
-        try {
-          // Only generate if not already set (override defaults if needed)
-          if (!school.schoolId || school.schoolId.startsWith('SCH-') === false) {
-            const year = new Date().getFullYear();
-            const count = await School.count();
-            const sequential = (count + 1).toString().padStart(5, '0');
-            school.schoolId = `SCH-${year}-${sequential}`;
-            console.log('Generated schoolId in hook:', school.schoolId);
-          }
-          
-          // Only generate if not already set
-          if (!school.shortCode) {
-            school.shortCode = generateShortCode();
-            console.log('Generated shortCode in hook:', school.shortCode);
-          }
+    });
 
-          // Generate QR code
-          if (!school.qrCode) {
-            const qrData = {
-              schoolId: school.schoolId,
-              shortCode: school.shortCode,
-              name: school.name,
-              createdAt: new Date()
-            };
-            school.qrCode = await QRCode.toDataURL(JSON.stringify(qrData));
-            school.qrCodeData = {
-              generated: new Date(),
-              expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-              active: true
-            };
-          }
-        } catch (error) {
-          console.error('Error in School.beforeCreate hook:', error);
-          // Don't throw - let the defaults handle it
+    console.log('School created:', {
+      id: school.id,
+      schoolId: school.schoolId,
+      shortCode: school.shortCode
+    });
+
+    // Create admin user (inactive until school approved)
+    const user = await User.create({
+      name,
+      email,
+      password,
+      role: 'admin',
+      phone,
+      schoolCode: school.schoolId,
+      isActive: false // Admin inactive until school approved
+    });
+
+    // Create admin profile
+    await Admin.create({
+      userId: user.id,
+      position: 'School Administrator',
+      managedSchools: [school.id]
+    });
+
+    // Notify super admins about new school registration
+    const superAdmins = await User.findAll({ where: { role: 'super_admin' } });
+    for (const sa of superAdmins) {
+      await createAlert({
+        userId: sa.id,
+        role: 'super_admin',
+        type: 'approval',
+        severity: 'info',
+        title: 'New School Registration',
+        message: `${schoolName} (${school.shortCode}) pending approval`,
+        data: { schoolId: school.id, adminId: user.id }
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Registration successful. School pending approval by super admin.',
+      data: {
+        schoolId: school.schoolId,
+        shortCode: school.shortCode,
+        qrCode: school.qrCode,
+        status: school.status
+      }
+    });
+  } catch (error) {
+    console.error('Admin signup error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      errors: error.errors
+    });
+    
+    // Send more detailed error in development
+    const errorResponse = process.env.NODE_ENV === 'development' 
+      ? { 
+          message: error.message, 
+          details: error.errors?.map(e => ({
+            field: e.path,
+            message: e.message,
+            value: e.value
+          }))
         }
-      }
-    }
-  });
-
-  // Generate short, memorable code (e.g., SHL-A7K29)
-  function generateShortCode() {
-    const prefix = 'SHL';
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let randomPart = '';
-    for (let i = 0; i < 5; i++) {
-      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return `${prefix}-${randomPart}`;
+      : { message: 'Registration failed. Please try again.' };
+    
+    res.status(500).json({ 
+      success: false, 
+      ...errorResponse
+    });
   }
-
-  School.prototype.validateAccessCode = function(code) {
-    return code === this.schoolId || 
-           code === this.shortCode ||
-           (this.lookupCodes && this.lookupCodes.includes(code)) ||
-           code === this.qrCode;
-  };
-
-  return School;
-};,
-
+},
   // Teacher signup with school short code
   teacherSignup: async (req, res) => {
     try {
