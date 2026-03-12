@@ -1,8 +1,12 @@
 require('dotenv').config();
-const app = require('./app'); // This is correct
+const path = require('path');
+
+// Correct path to app.js in src folder
+const app = require('./src/app');  // FIXED: Added src/ prefix
+
 const http = require('http');
 const socketio = require('socket.io');
-const { sequelize } = require('./src/models');
+const { sequelize } = require('./src/models'); // FIXED: Added src/ prefix
 
 // Check if we should just run migrations and exit
 if (process.env.RUN_MIGRATIONS === 'true') {
