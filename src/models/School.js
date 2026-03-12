@@ -11,20 +11,19 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true,
-      defaultValue: () => {
+      defaultValue: function() {
         const year = new Date().getFullYear();
         const random = Math.floor(Math.random() * 10000).toString().padStart(5, '0');
         return `SCH-${year}-${random}`;
       }
     },
-    // Short, easy-to-type code for teachers (e.g., SHL-A7K29)
     shortCode: {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true,
-      defaultValue: () => {
+      defaultValue: function() {
         const prefix = 'SHL';
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed confusing chars (0,1,I,O)
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
         let randomPart = '';
         for (let i = 0; i < 5; i++) {
           randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -95,63 +94,29 @@ module.exports = (sequelize, DataTypes) => {
   }, {
     timestamps: true,
     hooks: {
-      beforeCreate: async (school, options) => {
+      beforeCreate: async (school) => {
         try {
-          // Only generate if not already set (override defaults if needed)
-          if (!school.schoolId || school.schoolId.startsWith('SCH-') === false) {
-            const year = new Date().getFullYear();
-            const count = await School.count();
-            const sequential = (count + 1).toString().padStart(5, '0');
-            school.schoolId = `SCH-${year}-${sequential}`;
-            console.log('Generated schoolId in hook:', school.schoolId);
-          }
-          
-          // Only generate if not already set
-          if (!school.shortCode) {
-            school.shortCode = generateShortCode();
-            console.log('Generated shortCode in hook:', school.shortCode);
-          }
-
           // Generate QR code
-          if (!school.qrCode) {
-            const qrData = {
-              schoolId: school.schoolId,
-              shortCode: school.shortCode,
-              name: school.name,
-              createdAt: new Date()
-            };
-            school.qrCode = await QRCode.toDataURL(JSON.stringify(qrData));
-            school.qrCodeData = {
-              generated: new Date(),
-              expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-              active: true
-            };
-          }
+          const qrData = {
+            schoolId: school.schoolId,
+            shortCode: school.shortCode,
+            name: school.name,
+            createdAt: new Date()
+          };
+          school.qrCode = await QRCode.toDataURL(JSON.stringify(qrData));
+          school.qrCodeData = {
+            generated: new Date(),
+            expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+            active: true
+          };
+          console.log('QR code generated for school:', school.schoolId);
         } catch (error) {
-          console.error('Error in School.beforeCreate hook:', error);
-          // Don't throw - let the defaults handle it
+          console.error('Error generating QR code:', error);
+          // Don't throw - school can still be created without QR code
         }
       }
     }
   });
-
-  // Generate short, memorable code (e.g., SHL-A7K29)
-  function generateShortCode() {
-    const prefix = 'SHL';
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let randomPart = '';
-    for (let i = 0; i < 5; i++) {
-      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return `${prefix}-${randomPart}`;
-  }
-
-  School.prototype.validateAccessCode = function(code) {
-    return code === this.schoolId || 
-           code === this.shortCode ||
-           (this.lookupCodes && this.lookupCodes.includes(code)) ||
-           code === this.qrCode;
-  };
 
   return School;
 };
