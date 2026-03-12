@@ -1,8 +1,27 @@
 require('dotenv').config();
-const app = require('./app'); // This is correct
+const path = require('path');
+
+// Try to find app.js in the current directory
+let app;
+try {
+  // Try with .js extension
+  app = require('./app.js');
+  console.log('✅ Found app.js');
+} catch (err) {
+  try {
+    // Try without extension
+    app = require('./app');
+    console.log('✅ Found app (no extension)');
+  } catch (err2) {
+    console.error('❌ Cannot find app.js. Current directory:', __dirname);
+    console.error('Files in current directory:', require('fs').readdirSync(__dirname));
+    process.exit(1);
+  }
+}
+
 const http = require('http');
 const socketio = require('socket.io');
-const { sequelize } = require('./models'); // FIXED: should be './models' not './src/models'
+const { sequelize } = require('./models');
 
 // Check if we should just run migrations and exit
 if (process.env.RUN_MIGRATIONS === 'true') {
