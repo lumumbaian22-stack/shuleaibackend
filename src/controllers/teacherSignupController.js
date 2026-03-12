@@ -4,19 +4,21 @@ const QRCode = require('qrcode');
 
 exports.teacherSignup = async (req, res) => {
   try {
-    const { name, email, password, phone, schoolId, qualification, subjects, classTeacher } = req.body;
+    const { name, email, password, phone, schoolCode, qualification, subjects, classTeacher } = req.body;
 
+    // Find school by short code or schoolId
     const school = await School.findOne({ 
       where: {
         [Op.or]: [
-          { schoolId },
-          { lookupCodes: { [Op.contains]: [schoolId] } },
-          { qrCode: schoolId }
+          { shortCode: schoolCode },
+          { schoolId: schoolCode },
+          { lookupCodes: { [Op.contains]: [schoolCode] } }
         ]
       }
     });
+    
     if (!school) {
-      return res.status(404).json({ success: false, message: 'Invalid school ID' });
+      return res.status(404).json({ success: false, message: 'Invalid school code' });
     }
 
     if (!school.settings.allowTeacherSignup) {
@@ -29,11 +31,15 @@ exports.teacherSignup = async (req, res) => {
     }
 
     const emailDomain = email.split('@')[1];
-    const autoApprove = school.settings.autoApproveDomains.includes(emailDomain);
+    const autoApprove = school.settings.autoApproveDomains?.includes(emailDomain) || false;
 
     const user = await User.create({
-      name, email, password, role: 'teacher', phone,
-      schoolCode: school.code,
+      name, 
+      email, 
+      password, 
+      role: 'teacher', 
+      phone,
+      schoolCode: school.schoolId, // Using schoolId, not code
       isActive: autoApprove
     });
 
@@ -48,7 +54,7 @@ exports.teacherSignup = async (req, res) => {
 
     if (!autoApprove) {
       await ApprovalRequest.create({
-        schoolId: school.schoolId,
+        schoolId: school.schoolId, // Using schoolId, not code
         userId: user.id,
         role: 'teacher',
         data: { name, email, phone, qualification, subjects, classTeacher },
@@ -58,8 +64,14 @@ exports.teacherSignup = async (req, res) => {
       school.stats.pendingApprovals = (school.stats.pendingApprovals || 0) + 1;
       await school.save();
 
-      // Notify admins (internal alerts)
-      const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.code } });
+      // Notify admins - using school.schoolId
+      const admins = await User.findAll({ 
+        where: { 
+          role: 'admin', 
+          schoolCode: school.schoolId // Using schoolId, not code
+        } 
+      });
+      
       for (const admin of admins) {
         await Alert.create({
           userId: admin.id,
@@ -79,38 +91,59 @@ exports.teacherSignup = async (req, res) => {
     res.status(201).json({
       success: true,
       message: autoApprove ? 'Signup successful' : 'Pending approval',
-      data: { userId: user.id, name, email, school: school.name, status: teacher.approvalStatus, qrCode }
+      data: { 
+        userId: user.id, 
+        name, 
+        email, 
+        school: school.name, 
+        status: teacher.approvalStatus, 
+        qrCode 
+      }
     });
   } catch (error) {
+    console.error('Teacher signup error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-exports.verifySchoolId = async (req, res) => {
+exports.verifySchoolCode = async (req, res) => {
   try {
-    const { schoolId } = req.body;
+    const { schoolCode } = req.body;
+    
     const school = await School.findOne({
       where: {
         [Op.or]: [
-          { schoolId },
-          { lookupCodes: { [Op.contains]: [schoolId] } },
-          { qrCode: schoolId }
+          { shortCode: schoolCode },
+          { schoolId: schoolCode },
+          { lookupCodes: { [Op.contains]: [schoolCode] } }
         ]
       }
     });
+    
     if (!school) {
-      return res.status(404).json({ success: false, message: 'Invalid school ID' });
+      return res.status(404).json({ success: false, message: 'Invalid school code' });
     }
+
+    // Check if school is active
+    if (school.status !== 'active') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'School is pending approval. Please try again later.' 
+      });
+    }
+
     res.json({
       success: true,
       data: {
         schoolName: school.name,
         schoolId: school.schoolId,
+        shortCode: school.shortCode,
         requiresApproval: school.settings.requireApproval,
-        autoApproveDomains: school.settings.autoApproveDomains
+        autoApproveDomains: school.settings.autoApproveDomains || []
       }
     });
   } catch (error) {
+    console.error('Verify school code error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -120,10 +153,22 @@ exports.approveTeacher = async (req, res) => {
     const { teacherId } = req.params;
     const { action, rejectionReason } = req.body;
 
-    const teacher = await Teacher.findByPk(teacherId, { include: [{ model: User }] });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+    const teacher = await Teacher.findByPk(teacherId, { 
+      include: [{ model: User }] 
+    });
+    
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
 
-    const school = await School.findOne({ where: { code: teacher.User.schoolCode } });
+    // Find school using schoolId from user
+    const school = await School.findOne({ 
+      where: { schoolId: teacher.User.schoolCode } 
+    });
+
+    if (!school) {
+      return res.status(404).json({ success: false, message: 'School not found' });
+    }
 
     if (action === 'approve') {
       teacher.approvalStatus = 'approved';
@@ -147,7 +192,8 @@ exports.approveTeacher = async (req, res) => {
         type: 'system',
         severity: 'success',
         title: 'Account Approved',
-        message: `Your account has been approved.`
+        message: `Your account has been approved. Your Employee ID is: ${teacher.employeeId}`,
+        data: { employeeId: teacher.employeeId }
       });
     } else {
       teacher.approvalStatus = 'rejected';
@@ -162,24 +208,63 @@ exports.approveTeacher = async (req, res) => {
         { status: 'rejected', reviewedBy: req.user.id, reviewedAt: new Date(), rejectionReason },
         { where: { userId: teacher.User.id } }
       );
+
+      await Alert.create({
+        userId: teacher.User.id,
+        role: 'teacher',
+        type: 'system',
+        severity: 'warning',
+        title: 'Account Rejected',
+        message: `Your account was rejected. Reason: ${rejectionReason || 'Not specified'}`
+      });
     }
+    
     await teacher.save();
 
-    res.json({ success: true, message: `Teacher ${action}d` });
+    res.json({ 
+      success: true, 
+      message: `Teacher ${action}d`,
+      data: { 
+        employeeId: teacher.employeeId,
+        approvalStatus: teacher.approvalStatus 
+      }
+    });
   } catch (error) {
+    console.error('Approve teacher error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
 exports.getPendingApprovals = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
+    // Find the school using the admin's schoolCode (which is actually schoolId)
+    const school = await School.findOne({ 
+      where: { schoolId: req.user.schoolCode } 
+    });
+    
+    if (!school) {
+      return res.status(404).json({ success: false, message: 'School not found' });
+    }
+
+    // Find all pending teachers for this school
     const pending = await Teacher.findAll({
       where: { approvalStatus: 'pending' },
-      include: [{ model: User, attributes: ['id','name','email','phone','createdAt'] }]
+      include: [{ 
+        model: User, 
+        where: { schoolCode: school.schoolId }, // Using school.schoolId
+        attributes: ['id', 'name', 'email', 'phone', 'createdAt'] 
+      }]
     });
-    res.json({ success: true, data: { teachers: pending, total: pending.length } });
+
+    res.json({ 
+      success: true, 
+      data: { 
+        teachers: pending, 
+        total: pending.length 
+      } 
+    });
   } catch (error) {
+    console.error('Get pending approvals error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
