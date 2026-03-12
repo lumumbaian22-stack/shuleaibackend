@@ -8,7 +8,7 @@ const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const fileUpload = require('express-fileupload');
 const path = require('path');
-const { sequelize } = require('./models');
+const { sequelize } = require('./models'); // FIXED: removed 'src/'
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
@@ -62,15 +62,36 @@ const uploadDir = path.join(__dirname, '../uploads');
 require('fs').existsSync(uploadDir) || require('fs').mkdirSync(uploadDir, { recursive: true });
 app.use('/uploads', express.static(uploadDir));
 
-// ============ TEST ENDPOINTS (Place BEFORE other routes) ============
+// ============ TEST ENDPOINTS ============
 app.get('/health', (req, res) => {
   res.json({ success: true, timestamp: new Date().toISOString() });
 });
 
-// TEMPORARY TEST ENDPOINT - Test school creation
+// FIXED: Test database connection with correct model path
+app.get('/api/test/db', async (req, res) => {
+  try {
+    const { School } = require('./models'); // FIXED: removed 'src/'
+    const count = await School.count();
+    res.json({ 
+      success: true, 
+      message: 'Database connected',
+      schoolCount: count
+    });
+  } catch (error) {
+    console.error('Database test error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Database error',
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// FIXED: Test school creation with correct model path
 app.post('/api/test/create-school', async (req, res) => {
   try {
-    const { School } = require('./src/models');
+    const { School } = require('./models'); // FIXED: removed 'src/'
     
     const testSchool = await School.create({
       name: 'Test School ' + Date.now(),
@@ -94,25 +115,6 @@ app.post('/api/test/create-school', async (req, res) => {
       error: error.message,
       stack: error.stack,
       errors: error.errors
-    });
-  }
-});
-
-// TEMPORARY TEST ENDPOINT - Test database connection
-app.get('/api/test/db', async (req, res) => {
-  try {
-    const { School } = require('./src/models');
-    const count = await School.count();
-    res.json({ 
-      success: true, 
-      message: 'Database connected',
-      schoolCount: count
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      message: 'Database error',
-      error: error.message 
     });
   }
 });
