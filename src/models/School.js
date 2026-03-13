@@ -120,3 +120,31 @@ module.exports = (sequelize, DataTypes) => {
 
   return School;
 };
+
+// Add these to your School model definition
+suspendedAt: {
+  type: DataTypes.DATE,
+  allowNull: true
+},
+suspendedBy: {
+  type: DataTypes.INTEGER,
+  allowNull: true,
+  references: { model: 'Users', key: 'id' }
+},
+suspensionReason: {
+  type: DataTypes.TEXT,
+  allowNull: true
+},
+reactivatedAt: {
+  type: DataTypes.DATE,
+  allowNull: true
+},
+reactivatedBy: {
+  type: DataTypes.INTEGER,
+  allowNull: true,
+  references: { model: 'Users', key: 'id' }
+},
+reactivationReason: {
+  type: DataTypes.TEXT,
+  allowNull: true
+}
