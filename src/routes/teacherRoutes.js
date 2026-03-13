@@ -8,6 +8,7 @@ router.use(protect, authorize('teacher'));
 
 // Student management
 router.get('/students', teacherController.getMyStudents);
+router.post('/students', teacherController.addStudent); // ADD THIS LINE
 router.post('/marks', teacherController.enterMarks);
 router.post('/attendance', teacherController.takeAttendance);
 router.post('/comment', teacherController.addComment);
