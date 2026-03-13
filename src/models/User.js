@@ -25,7 +25,7 @@ module.exports = (sequelize, DataTypes) => {
     phone: DataTypes.STRING,
     schoolCode: {
       type: DataTypes.STRING,
-      allowNull: false
+       allowNull: true
     },
     profileImage: DataTypes.STRING,
     isActive: {
@@ -78,4 +78,5 @@ module.exports = (sequelize, DataTypes) => {
   };
 
   return User;
+
 };
