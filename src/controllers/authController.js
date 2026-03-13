@@ -2,6 +2,7 @@ const { User, Student, Teacher, Parent, Admin, School } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
+const sequelize = require('../config/database');
 
 const authController = {
   // Add this function inside the authController object
@@ -556,5 +557,6 @@ superAdminDiagnostic: async (req, res) => {
 
 console.log('✅ authController loaded, exports:', Object.keys(authController));
 module.exports = authController;
+
 
 
