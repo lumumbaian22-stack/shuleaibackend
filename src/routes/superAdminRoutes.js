@@ -11,16 +11,14 @@ router.get('/overview', superAdminController.getOverview);
 // School management
 router.get('/schools', superAdminController.getSchools);
 router.get('/pending-schools', superAdminController.getPendingSchools);
+router.get('/suspended-schools', superAdminController.getSuspendedSchools);
 router.post('/schools', superAdminController.createSchool);
 router.post('/schools/:id/approve', superAdminController.approveSchool);
 router.post('/schools/:id/reject', superAdminController.rejectSchool);
-router.put('/schools/:id', superAdminController.updateSchool);
-router.delete('/schools/:id', superAdminController.deleteSchool);
-
-// Suspension management
 router.post('/schools/:id/suspend', superAdminController.suspendSchool);
 router.post('/schools/:id/reactivate', superAdminController.reactivateSchool);
-router.get('/suspended-schools', superAdminController.getSuspendedSchools);
+router.put('/schools/:id', superAdminController.updateSchool);
+router.delete('/schools/:id', superAdminController.deleteSchool);
 
 // Name change requests
 router.get('/requests', superAdminController.getPendingRequests);
@@ -31,4 +29,3 @@ router.post('/requests/:id/reject', superAdminController.rejectRequest);
 router.put('/bank-details/:schoolId', superAdminController.updateBankDetails);
 
 module.exports = router;
-
