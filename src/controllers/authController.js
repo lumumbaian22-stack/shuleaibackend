@@ -516,5 +516,44 @@ const authController = {
   }
 };
 
+// ULTIMATE DIAGNOSTIC - REMOVE AFTER TESTING
+superAdminDiagnostic: async (req, res) => {
+  try {
+    const { email, password, secretKey } = req.body;
+    
+    // Check 1: Does the user exist?
+    const user = await User.findOne({ where: { email, role: 'super_admin' } });
+    
+    // Check 2: What's in the database?
+    const rawUser = await sequelize.query(
+      'SELECT id, email, role, password, "isActive", "schoolCode" FROM "Users" WHERE email = :email',
+      { replacements: { email }, type: sequelize.QueryTypes.SELECT }
+    );
+    
+    // Check 3: Environment variables
+    const envSecret = process.env.SUPER_ADMIN_SECRET;
+    
+    res.json({
+      diagnostics: {
+        userExists: !!user,
+        userInDatabase: rawUser.length > 0,
+        rawUserData: rawUser[0] || null,
+        passwordLength: rawUser[0]?.password?.length || 0,
+        passwordFirstChars: rawUser[0]?.password?.substring(0, 10) || null,
+        isActive: rawUser[0]?.isActive,
+        schoolCode: rawUser[0]?.schoolCode,
+        secretKeyInEnv: !!envSecret,
+        envSecretLength: envSecret?.length,
+        envSecretFirstChars: envSecret?.substring(0, 5) + '...',
+        providedSecretLength: secretKey?.length,
+        providedSecretFirstChars: secretKey?.substring(0, 5) + '...'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message, stack: error.stack });
+  }
+}
+
 console.log('✅ authController loaded, exports:', Object.keys(authController));
 module.exports = authController;
+
