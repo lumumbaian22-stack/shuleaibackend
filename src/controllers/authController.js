@@ -5,43 +5,44 @@ const jwt = require('jsonwebtoken');
 const sequelize = require('../config/database');
 
 const authController = {
-  // Add this function inside the authController object
-superAdminDiagnostic: async (req, res) => {
-  try {
-    const { email, password, secretKey } = req.body;
-    
-    // Check if user exists
-    const user = await User.findOne({ where: { email, role: 'super_admin' } });
-    
-    // Get raw user data
-    const rawUser = await sequelize.query(
-      'SELECT id, email, role, password, "isActive", "schoolCode" FROM "Users" WHERE email = :email',
-      { replacements: { email }, type: sequelize.QueryTypes.SELECT }
-    );
-    
-    // Check environment variables
-    const envSecret = process.env.SUPER_ADMIN_SECRET;
-    
-    res.json({
-      diagnostics: {
-        userExists: !!user,
-        userInDatabase: rawUser.length > 0,
-        rawUserData: rawUser[0] || null,
-        passwordLength: rawUser[0]?.password?.length || 0,
-        passwordFirstChars: rawUser[0]?.password?.substring(0, 10) || null,
-        isActive: rawUser[0]?.isActive,
-        schoolCode: rawUser[0]?.schoolCode,
-        secretKeyInEnv: !!envSecret,
-        envSecretLength: envSecret?.length,
-        envSecretFirstChars: envSecret?.substring(0, 5) + '...',
-        providedSecretLength: secretKey?.length,
-        providedSecretFirstChars: secretKey?.substring(0, 5) + '...'
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message, stack: error.stack });
-  }
-}
+  // Diagnostic endpoint
+  superAdminDiagnostic: async (req, res) => {
+    try {
+      const { email, password, secretKey } = req.body;
+      
+      // Check if user exists
+      const user = await User.findOne({ where: { email, role: 'super_admin' } });
+      
+      // Get raw user data
+      const rawUser = await sequelize.query(
+        'SELECT id, email, role, password, "isActive", "schoolCode" FROM "Users" WHERE email = :email',
+        { replacements: { email }, type: sequelize.QueryTypes.SELECT }
+      );
+      
+      // Check environment variables
+      const envSecret = process.env.SUPER_ADMIN_SECRET;
+      
+      res.json({
+        diagnostics: {
+          userExists: !!user,
+          userInDatabase: rawUser.length > 0,
+          rawUserData: rawUser[0] || null,
+          passwordLength: rawUser[0]?.password?.length || 0,
+          passwordFirstChars: rawUser[0]?.password?.substring(0, 10) || null,
+          isActive: rawUser[0]?.isActive,
+          schoolCode: rawUser[0]?.schoolCode,
+          secretKeyInEnv: !!envSecret,
+          envSecretLength: envSecret?.length,
+          envSecretFirstChars: envSecret?.substring(0, 5) + '...',
+          providedSecretLength: secretKey?.length,
+          providedSecretFirstChars: secretKey?.substring(0, 5) + '...'
+        }
+      });
+    } catch (error) {
+      console.error('Diagnostic error:', error);
+      res.status(500).json({ error: error.message, stack: error.stack });
+    }
+  },
 
   // Super Admin login (no signup)
   superAdminLogin: async (req, res) => {
@@ -146,7 +147,7 @@ superAdminDiagnostic: async (req, res) => {
         isActive: false // Admin inactive until school approved
       });
 
-      // Create admin profile - this will now work with the fixed Admin model
+      // Create admin profile
       const admin = await Admin.create({
         userId: user.id,
         position: 'School Administrator',
@@ -557,6 +558,3 @@ superAdminDiagnostic: async (req, res) => {
 
 console.log('✅ authController loaded, exports:', Object.keys(authController));
 module.exports = authController;
-
-
-
