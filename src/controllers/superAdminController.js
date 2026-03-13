@@ -534,3 +534,26 @@ exports.getSuspendedSchools = async (req, res) => {
   }
 };
 
+// @desc    Get all suspended schools
+// @route   GET /api/super-admin/suspended-schools
+// @access  Private/SuperAdmin
+exports.getSuspendedSchools = async (req, res) => {
+  try {
+    const schools = await School.findAll({
+      where: { status: 'suspended' },
+      include: [{
+        model: User,
+        as: 'admins',
+        attributes: ['id', 'name', 'email'],
+        required: false
+      }],
+      order: [['suspendedAt', 'DESC']]
+    });
+    
+    res.json({ success: true, data: schools });
+  } catch (error) {
+    console.error('Get suspended schools error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
