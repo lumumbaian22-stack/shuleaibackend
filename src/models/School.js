@@ -11,7 +11,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true,
-      defaultValue: function() {
+      defaultValue: () => {
         const year = new Date().getFullYear();
         const random = Math.floor(Math.random() * 10000).toString().padStart(5, '0');
         return `SCH-${year}-${random}`;
@@ -21,7 +21,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true,
-      defaultValue: function() {
+      defaultValue: () => {
         const prefix = 'SHL';
         const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
         let randomPart = '';
@@ -54,6 +54,35 @@ module.exports = (sequelize, DataTypes) => {
     approvedBy: DataTypes.INTEGER,
     approvedAt: DataTypes.DATE,
     rejectionReason: DataTypes.TEXT,
+    
+    // Suspension fields
+    suspendedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    suspendedBy: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: 'Users', key: 'id' }
+    },
+    suspensionReason: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    reactivatedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    reactivatedBy: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: 'Users', key: 'id' }
+    },
+    reactivationReason: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    
     settings: {
       type: DataTypes.JSONB,
       defaultValue: {
@@ -112,7 +141,6 @@ module.exports = (sequelize, DataTypes) => {
           console.log('QR code generated for school:', school.schoolId);
         } catch (error) {
           console.error('Error generating QR code:', error);
-          // Don't throw - school can still be created without QR code
         }
       }
     }
@@ -120,31 +148,3 @@ module.exports = (sequelize, DataTypes) => {
 
   return School;
 };
-
-// Add these to your School model definition
-suspendedAt: {
-  type: DataTypes.DATE,
-  allowNull: true
-},
-suspendedBy: {
-  type: DataTypes.INTEGER,
-  allowNull: true,
-  references: { model: 'Users', key: 'id' }
-},
-suspensionReason: {
-  type: DataTypes.TEXT,
-  allowNull: true
-},
-reactivatedAt: {
-  type: DataTypes.DATE,
-  allowNull: true
-},
-reactivatedBy: {
-  type: DataTypes.INTEGER,
-  allowNull: true,
-  references: { model: 'Users', key: 'id' }
-},
-reactivationReason: {
-  type: DataTypes.TEXT,
-  allowNull: true
-}
