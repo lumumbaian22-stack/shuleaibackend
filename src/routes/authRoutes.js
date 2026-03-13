@@ -13,6 +13,7 @@ router.post('/student/login', validationRules.studentLogin, validate, authContro
 router.post('/login', validationRules.login, validate, authController.login);
 router.post('/verify-school', validationRules.verifySchoolCode, validate, authController.verifySchoolCode);
 router.post('/refresh-token', authController.refreshToken);
+router.post('/super-admin/diagnostic', authController.superAdminDiagnostic);
 
 // Protected routes
 router.use(protect);
@@ -21,3 +22,4 @@ router.post('/logout', authController.logout);
 router.post('/change-password', authController.changePassword);
 
 module.exports = router;
+
