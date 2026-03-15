@@ -33,7 +33,7 @@ exports.getSchools = async (req, res) => {
             order: [['createdAt', 'DESC']],
             include: [{
                 model: User,
-                as: 'admins', // Using the 'admins' alias we defined
+                as: 'admins', // Using the 'admins' alias defined in index.js
                 attributes: ['id', 'name', 'email', 'phone'],
                 required: false
             }]
@@ -54,7 +54,7 @@ exports.getPendingSchools = async (req, res) => {
             where: { status: 'pending' },
             include: [{
                 model: User,
-                as: 'admins', // Using the 'admins' alias we defined
+                as: 'admins', // Using the 'admins' alias defined in index.js
                 attributes: ['id', 'name', 'email', 'phone', 'createdAt'],
                 required: false
             }],
@@ -533,27 +533,3 @@ exports.getSuspendedSchools = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// @desc    Get all suspended schools
-// @route   GET /api/super-admin/suspended-schools
-// @access  Private/SuperAdmin
-exports.getSuspendedSchools = async (req, res) => {
-  try {
-    const schools = await School.findAll({
-      where: { status: 'suspended' },
-      include: [{
-        model: User,
-        as: 'admins',
-        attributes: ['id', 'name', 'email'],
-        required: false
-      }],
-      order: [['suspendedAt', 'DESC']]
-    });
-    
-    res.json({ success: true, data: schools });
-  } catch (error) {
-    console.error('Get suspended schools error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
