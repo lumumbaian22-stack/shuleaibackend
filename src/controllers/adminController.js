@@ -168,8 +168,20 @@ exports.getStudentDetails = async (req, res) => {
     try {
         const student = await Student.findByPk(req.params.studentId, {
             include: [
-                { model: User, attributes: ['id', 'name', 'email', 'phone'] },
-                { model: Parent, include: [{ model: User, attributes: ['name', 'email'] }] }
+                { 
+                    model: User, 
+                    as: 'User',  // Add the alias if needed
+                    attributes: ['id', 'name', 'email', 'phone'] 
+                },
+                { 
+                    model: Parent, 
+                    as: 'parents',  // Use the alias from your association
+                    include: [{ 
+                        model: User, 
+                        as: 'User',  // Add the alias if needed
+                        attributes: ['name', 'email'] 
+                    }] 
+                }
             ]
         });
         
@@ -178,7 +190,7 @@ exports.getStudentDetails = async (req, res) => {
         }
         
         // Verify the student belongs to the admin's school
-        if (student.User.schoolCode !== req.user.schoolCode) {
+        if (student.User && student.User.schoolCode !== req.user.schoolCode) {
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
         
@@ -188,4 +200,3 @@ exports.getStudentDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
