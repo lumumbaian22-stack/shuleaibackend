@@ -17,6 +17,13 @@ router.get('/teachers', adminController.getAllTeachers); // Add this endpoint
 router.get('/students', adminController.getAllStudents); // Add this endpoint
 router.get('/parents', adminController.getAllParents);   // Add this endpoint
 
+// Class management
+router.get('/classes', adminController.getClasses);
+router.post('/classes', adminController.createClass);
+router.put('/classes/:id', adminController.updateClass);
+router.post('/classes/:id/assign-teacher', adminController.assignTeacherToClass);
+router.get('/available-teachers', adminController.getAvailableTeachers);
+
 // Duty management
 router.post('/duty/generate', dutyController.generateDutyRoster);
 router.get('/duty/stats', dutyController.getDutyStats);
