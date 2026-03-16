@@ -166,35 +166,54 @@ exports.getClasses = async (req, res) => {
 // @access  Private/Admin
 exports.getStudentDetails = async (req, res) => {
     try {
+        console.log('=== Get Student Details ===');
+        console.log('Student ID:', req.params.studentId);
+        console.log('Admin schoolCode:', req.user.schoolCode);
+        
+        // Find the student with proper includes
         const student = await Student.findByPk(req.params.studentId, {
             include: [
                 { 
-                    model: User, 
-                    as: 'User',  // Add the alias if needed
-                    attributes: ['id', 'name', 'email', 'phone'] 
-                },
-                { 
-                    model: Parent, 
-                    as: 'parents',  // Use the alias from your association
-                    include: [{ 
-                        model: User, 
-                        as: 'User',  // Add the alias if needed
-                        attributes: ['name', 'email'] 
-                    }] 
+                    model: User,
+                    as: 'User',  // Make sure to use the correct alias
+                    attributes: ['id', 'name', 'email', 'phone', 'schoolCode']
                 }
             ]
         });
         
         if (!student) {
+            console.log('Student not found');
             return res.status(404).json({ success: false, message: 'Student not found' });
         }
         
-        // Verify the student belongs to the admin's school
-        if (student.User && student.User.schoolCode !== req.user.schoolCode) {
+        console.log('Student found:', student.id);
+        console.log('Student User:', student.User);
+        
+        // Check if student belongs to admin's school
+        if (!student.User) {
+            console.log('Student has no associated user');
+            return res.status(404).json({ success: false, message: 'Student data incomplete' });
+        }
+        
+        if (student.User.schoolCode !== req.user.schoolCode) {
+            console.log('School code mismatch!');
+            console.log('Expected:', req.user.schoolCode);
+            console.log('Got:', student.User.schoolCode);
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
         
-        res.json({ success: true, data: student });
+        console.log('School code check passed');
+        
+        // Remove the schoolCode from response for security
+        const userData = { ...student.User.toJSON() };
+        delete userData.schoolCode;
+        
+        const responseData = {
+            ...student.toJSON(),
+            User: userData
+        };
+        
+        res.json({ success: true, data: responseData });
     } catch (error) {
         console.error('Get student details error:', error);
         res.status(500).json({ success: false, message: error.message });
