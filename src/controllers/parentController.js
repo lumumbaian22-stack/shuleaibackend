@@ -488,3 +488,135 @@ exports.upgradePlan = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Send message to class teacher or admin only
+// @route   POST /api/parent/message
+// @access  Private/Parent
+exports.sendMessage = async (req, res) => {
+  try {
+    const { studentId, message, recipientType } = req.body; // recipientType: 'teacher' or 'admin'
+    
+    const parent = await Parent.findOne({ where: { userId: req.user.id } });
+    const student = await Student.findByPk(studentId, { 
+      include: [{ model: User, attributes: ['id', 'name'] }] 
+    });
+    
+    if (!student || !(await parent.hasStudent(student))) {
+      return res.status(403).json({ success: false, message: 'Not your child' });
+    }
+
+    let recipientId = null;
+    let recipientName = '';
+
+    if (recipientType === 'teacher') {
+      // Get class teacher
+      const classTeacher = await Teacher.findOne({
+        where: { classTeacher: student.grade },
+        include: [{ model: User, attributes: ['id', 'name'] }]
+      });
+
+      if (!classTeacher) {
+        return res.status(404).json({ success: false, message: 'Class teacher not found' });
+      }
+
+      recipientId = classTeacher.User.id;
+      recipientName = classTeacher.User.name;
+    } else if (recipientType === 'admin') {
+      // Get school admin
+      const admin = await User.findOne({
+        where: { role: 'admin', schoolCode: req.user.schoolCode }
+      });
+
+      if (!admin) {
+        return res.status(404).json({ success: false, message: 'School admin not found' });
+      }
+
+      recipientId = admin.id;
+      recipientName = admin.name;
+    } else {
+      return res.status(400).json({ success: false, message: 'Invalid recipient type' });
+    }
+
+    // Create message
+    const { Message } = require('../models');
+    const newMessage = await Message.create({
+      senderId: req.user.id,
+      receiverId: recipientId,
+      content: message,
+      metadata: {
+        studentId: student.id,
+        studentName: student.User.name,
+        parentName: req.user.name
+      }
+    });
+
+    // Send real-time notification via WebSocket
+    if (global.io) {
+      global.io.to(`user-${recipientId}`).emit('new-message', {
+        from: req.user.id,
+        fromName: req.user.name,
+        message: message,
+        studentName: student.User.name,
+        timestamp: new Date()
+      });
+    }
+
+    // Create alert for recipient
+    await createAlert({
+      userId: recipientId,
+      role: recipientType === 'teacher' ? 'teacher' : 'admin',
+      type: 'message',
+      severity: 'info',
+      title: `📬 New message from parent of ${student.User.name}`,
+      message: message.substring(0, 100) + (message.length > 100 ? '...' : ''),
+      data: {
+        studentId: student.id,
+        studentName: student.User.name,
+        parentId: parent.id,
+        parentName: req.user.name
+      }
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Message sent successfully',
+      data: {
+        message: newMessage,
+        recipient: recipientName,
+        recipientType: recipientType
+      }
+    });
+  } catch (error) {
+    console.error('Send message error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get messages with teacher or admin
+// @route   GET /api/parent/messages/:otherUserId
+// @access  Private/Parent
+exports.getMessages = async (req, res) => {
+  try {
+    const { otherUserId } = req.params;
+    const { Message } = require('../models');
+
+    const messages = await Message.findAll({
+      where: {
+        [Op.or]: [
+          { senderId: req.user.id, receiverId: otherUserId },
+          { senderId: otherUserId, receiverId: req.user.id }
+        ]
+      },
+      order: [['createdAt', 'ASC']],
+      include: [
+        { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
+        { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+      ]
+    });
+
+    res.json({ success: true, data: messages });
+  } catch (error) {
+    console.error('Get messages error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
