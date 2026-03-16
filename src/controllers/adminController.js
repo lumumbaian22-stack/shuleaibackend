@@ -99,37 +99,34 @@ exports.getSchoolSettings = async (req, res) => {
 // @route   PUT /api/admin/settings
 // @access  Private/Admin
 exports.updateSchoolSettings = async (req, res) => {
-  try {
-    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    try {
+        const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+        if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
-    const allowedFields = ['name', 'system', 'address', 'contact', 'settings', 'feeStructure', 'bankDetails'];
-    allowedFields.forEach(field => {
-      if (req.body[field] !== undefined) school[field] = req.body[field];
-    });
+        // Update settings
+        school.settings = {
+            ...school.settings,
+            ...req.body,
+            customSubjects: req.body.customSubjects || []
+        };
+        
+        // Update other fields
+        if (req.body.schoolName) school.name = req.body.schoolName;
+        if (req.body.curriculum) school.system = req.body.curriculum;
+        
+        await school.save();
 
-    await school.save();
-
-    // Notify super admin if school name changed (optional)
-    if (req.body.name && req.body.name !== school.name) {
-      const superAdmins = await User.findAll({ where: { role: 'super_admin' } });
-      for (const sa of superAdmins) {
-        await createAlert({
-          userId: sa.id,
-          role: 'super_admin',
-          type: 'system',
-          severity: 'info',
-          title: 'School Name Change',
-          message: `School ${school.schoolId} changed name to ${req.body.name}`,
-          data: { schoolCode: school.schoolId }
+        res.json({ 
+            success: true, 
+            data: {
+                ...school.toJSON(),
+                customSubjects: school.settings.customSubjects
+            } 
         });
-      }
+    } catch (error) {
+        console.error('Update school settings error:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
-
-    res.json({ success: true, data: school });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
 };
 
 // @desc    Create a new class (grade)
