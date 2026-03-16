@@ -23,10 +23,10 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const schoolRoutes = require('./routes/schoolRoutes');
 const parentMessageRoutes = require('./routes/parentMessageRoutes');
-app.use('/api/parent', parentMessageRoutes);
 
-const app = express();
+const app = express();  // <-- THIS MUST COME BEFORE using app.use()
 
+// ============ MIDDLEWARE ============
 // Security
 app.use(helmet());
 app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
@@ -65,7 +65,7 @@ const uploadDir = path.join(__dirname, '../uploads');
 require('fs').existsSync(uploadDir) || require('fs').mkdirSync(uploadDir, { recursive: true });
 app.use('/uploads', express.static(uploadDir));
 
-// ============ TEST ENDPOINTS (Place BEFORE all routes) ============
+// ============ TEST ENDPOINTS ============
 app.get('/health', (req, res) => {
   res.json({ success: true, timestamp: new Date().toISOString() });
 });
@@ -125,6 +125,7 @@ app.use('/api/public', publicRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/teacher', teacherRoutes);
 app.use('/api/parent', parentRoutes);
+app.use('/api/parent', parentMessageRoutes);  // <-- Now this is after app is defined
 app.use('/api/student', studentRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/upload', uploadRoutes);
@@ -146,4 +147,3 @@ app.use((err, req, res, next) => {
 });
 
 module.exports = app;
-
