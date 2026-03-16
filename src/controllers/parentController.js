@@ -7,19 +7,17 @@ const { Op } = require('sequelize');
 // @access  Private/Parent
 exports.getChildren = async (req, res) => {
   try {
-    const parent = await Parent.findOne({ 
-      where: { userId: req.user.id },
-      include: [{ 
-        model: Student,
-        include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
-      }]
-    });
-    
+    const parent = await Parent.findOne({ where: { userId: req.user.id } });
     if (!parent) {
       return res.status(404).json({ success: false, message: 'Parent profile not found' });
     }
 
-    res.json({ success: true, data: parent.Students || [] });
+    // Use 'students' alias as defined in your association (NOT 'children')
+    const children = await parent.getStudents({ 
+      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }] 
+    });
+    
+    res.json({ success: true, data: children });
   } catch (error) {
     console.error('Get children error:', error);
     res.status(500).json({ success: false, message: error.message });
