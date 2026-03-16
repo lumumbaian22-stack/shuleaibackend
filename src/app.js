@@ -22,6 +22,8 @@ const studentRoutes = require('./routes/studentRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const schoolRoutes = require('./routes/schoolRoutes');
+const parentMessageRoutes = require('./routes/parentMessageRoutes');
+app.use('/api/parent', parentMessageRoutes);
 
 const app = express();
 
