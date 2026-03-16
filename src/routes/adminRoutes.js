@@ -33,4 +33,8 @@ router.put('/settings', adminController.updateSchoolSettings);
 router.post('/classes', adminController.createClass);
 router.get('/classes', adminController.getClasses);
 
+// Get single student details
+router.get('/students/:studentId', adminController.getStudentDetails);
+
 module.exports = router;
+
