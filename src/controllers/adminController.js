@@ -160,3 +160,32 @@ exports.getClasses = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Get single student details
+// @route   GET /api/admin/students/:studentId
+// @access  Private/Admin
+exports.getStudentDetails = async (req, res) => {
+    try {
+        const student = await Student.findByPk(req.params.studentId, {
+            include: [
+                { model: User, attributes: ['id', 'name', 'email', 'phone'] },
+                { model: Parent, include: [{ model: User, attributes: ['name', 'email'] }] }
+            ]
+        });
+        
+        if (!student) {
+            return res.status(404).json({ success: false, message: 'Student not found' });
+        }
+        
+        // Verify the student belongs to the admin's school
+        if (student.User.schoolCode !== req.user.schoolCode) {
+            return res.status(403).json({ success: false, message: 'Forbidden' });
+        }
+        
+        res.json({ success: true, data: student });
+    } catch (error) {
+        console.error('Get student details error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
