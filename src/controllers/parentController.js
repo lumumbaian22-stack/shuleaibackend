@@ -1,4 +1,4 @@
-const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert } = require('../models');
+const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 
@@ -13,6 +13,7 @@ exports.getChildren = async (req, res) => {
     const children = await parent.getStudents({ include: [{ model: User, attributes: ['id','name','email','phone'] }] });
     res.json({ success: true, data: children });
   } catch (error) {
+    console.error('Get children error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -48,6 +49,7 @@ exports.getChildSummary = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Get child summary error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -59,7 +61,8 @@ exports.reportAbsence = async (req, res) => {
   try {
     const { studentId, date, reason } = req.body;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    const student = await Student.findByPk(studentId);
+    const student = await Student.findByPk(studentId, { include: [{ model: User }] });
+    
     if (!student || !(await parent.hasStudent(student))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
@@ -82,6 +85,7 @@ exports.reportAbsence = async (req, res) => {
     const teachers = await Teacher.findAll({
       include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
     });
+    
     for (const t of teachers) {
       await createAlert({
         userId: t.userId,
@@ -95,6 +99,7 @@ exports.reportAbsence = async (req, res) => {
 
     res.status(201).json({ success: true, data: attendance });
   } catch (error) {
+    console.error('Report absence error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -107,6 +112,7 @@ exports.makePayment = async (req, res) => {
     const { studentId, amount, method, reference, plan } = req.body;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId);
+    
     if (!student || !(await parent.hasStudent(student))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
@@ -117,9 +123,9 @@ exports.makePayment = async (req, res) => {
       fee = await Fee.create({
         studentId,
         schoolCode: req.user.schoolCode,
-        term: 'Term 1', // should be determined dynamically
+        term: 'Term 1',
         year: new Date().getFullYear(),
-        totalAmount: 5000, // placeholder
+        totalAmount: 5000,
         paidAmount: 0,
         paymentPlan: plan || 'basic'
       });
@@ -133,7 +139,7 @@ exports.makePayment = async (req, res) => {
       method,
       reference,
       plan: plan || fee.paymentPlan,
-      status: 'completed' // assume immediate confirmation for demo
+      status: 'completed'
     });
 
     // Update fee
@@ -148,6 +154,7 @@ exports.makePayment = async (req, res) => {
 
     res.status(201).json({ success: true, data: payment });
   } catch (error) {
+    console.error('Make payment error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -165,6 +172,7 @@ exports.getPayments = async (req, res) => {
     });
     res.json({ success: true, data: payments });
   } catch (error) {
+    console.error('Get payments error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
