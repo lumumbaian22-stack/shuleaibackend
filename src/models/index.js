@@ -18,6 +18,7 @@ const ApprovalRequest = require('./ApprovalRequest')(sequelize, DataTypes);
 const DutyRoster = require('./DutyRoster')(sequelize, DataTypes);
 const UploadLog = require('./UploadLog')(sequelize, DataTypes);
 const SchoolNameRequest = require('./SchoolNameRequest')(sequelize, DataTypes);
+const Class = require('./Class')(sequelize, DataTypes);
 
 // --- Associations ---
 
@@ -162,6 +163,13 @@ SchoolNameRequest.belongsTo(User, { foreignKey: 'requestedBy' });
 SchoolNameRequest.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
 User.hasMany(SchoolNameRequest, { foreignKey: 'requestedBy' });
 School.hasMany(SchoolNameRequest, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
+
+// Add associations
+Class.belongsTo(Teacher, { foreignKey: 'teacherId' });
+Teacher.hasMany(Class, { foreignKey: 'teacherId' });
+
+Class.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
+School.hasMany(Class, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
 
 module.exports = {
   sequelize,
