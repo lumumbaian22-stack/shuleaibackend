@@ -216,3 +216,134 @@ exports.getStudentDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// @desc    Get all classes in school
+// @route   GET /api/admin/classes
+// @access  Private/Admin
+exports.getClasses = async (req, res) => {
+  try {
+    const classes = await Class.findAll({
+      where: { schoolCode: req.user.schoolCode },
+      include: [{
+        model: Teacher,
+        include: [{ model: User, attributes: ['id', 'name', 'email'] }]
+      }],
+      order: [['grade', 'ASC'], ['name', 'ASC']]
+    });
+    
+    res.json({ success: true, data: classes });
+  } catch (error) {
+    console.error('Get classes error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Create a new class
+// @route   POST /api/admin/classes
+// @access  Private/Admin
+exports.createClass = async (req, res) => {
+  try {
+    const { name, grade, stream, teacherId } = req.body;
+    
+    const newClass = await Class.create({
+      name,
+      grade,
+      stream,
+      schoolCode: req.user.schoolCode,
+      teacherId: teacherId || null
+    });
+    
+    res.status(201).json({ success: true, data: newClass });
+  } catch (error) {
+    console.error('Create class error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Update a class
+// @route   PUT /api/admin/classes/:id
+// @access  Private/Admin
+exports.updateClass = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, grade, stream, teacherId } = req.body;
+    
+    const classItem = await Class.findOne({
+      where: { id, schoolCode: req.user.schoolCode }
+    });
+    
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+    
+    await classItem.update({ name, grade, stream, teacherId });
+    
+    res.json({ success: true, data: classItem });
+  } catch (error) {
+    console.error('Update class error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Assign teacher to class
+// @route   POST /api/admin/classes/:id/assign-teacher
+// @access  Private/Admin
+exports.assignTeacherToClass = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { teacherId } = req.body;
+    
+    const classItem = await Class.findOne({
+      where: { id, schoolCode: req.user.schoolCode }
+    });
+    
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+    
+    // Verify teacher belongs to this school
+    const teacher = await Teacher.findOne({
+      where: { id: teacherId },
+      include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
+    });
+    
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found in this school' });
+    }
+    
+    await classItem.update({ teacherId });
+    
+    // Update teacher's classTeacher field
+    await teacher.update({ classTeacher: classItem.name });
+    
+    res.json({ 
+      success: true, 
+      message: `Teacher assigned to ${classItem.name} successfully`,
+      data: classItem 
+    });
+  } catch (error) {
+    console.error('Assign teacher error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get available teachers for class assignment
+// @route   GET /api/admin/available-teachers
+// @access  Private/Admin
+exports.getAvailableTeachers = async (req, res) => {
+  try {
+    const teachers = await Teacher.findAll({
+      where: { approvalStatus: 'approved' },
+      include: [{
+        model: User,
+        where: { schoolCode: req.user.schoolCode },
+        attributes: ['id', 'name', 'email']
+      }]
+    });
+    
+    res.json({ success: true, data: teachers });
+  } catch (error) {
+    console.error('Get available teachers error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
