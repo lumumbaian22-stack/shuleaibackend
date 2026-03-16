@@ -11,4 +11,10 @@ router.post('/report-absence', parentController.reportAbsence);
 router.post('/pay', parentController.makePayment);
 router.get('/payments', parentController.getPayments);
 
+router.get('/plans', parentController.getSubscriptionPlans);
+router.post('/upgrade-plan', parentController.upgradePlan);
+router.post('/payment-confirm', parentController.confirmPayment);
+router.post('/message', parentController.sendMessage);
+router.get('/messages/:otherUserId', parentController.getMessages);
+
 module.exports = router;
