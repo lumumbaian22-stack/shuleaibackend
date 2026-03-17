@@ -85,6 +85,99 @@ exports.getMyStudents = async (req, res) => {
   }
 };
 
+// @desc    Add a new student
+// @route   POST /api/teacher/students
+// @access  Private/Teacher
+exports.addStudent = async (req, res) => {
+  try {
+    const { name, grade, parentEmail, dateOfBirth, gender } = req.body;
+    
+    // Validate required fields
+    if (!name || !grade) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Student name and grade are required' 
+      });
+    }
+
+    // Create user for student
+    const user = await User.create({
+      name,
+      email: null, // Students don't need email
+      password: Math.random().toString(36).slice(-8), // Random password
+      role: 'student',
+      schoolCode: req.user.schoolCode,
+      isActive: true
+    });
+
+    // Create student profile
+    const student = await Student.create({
+      userId: user.id,
+      grade: grade,
+      dateOfBirth: dateOfBirth,
+      gender: gender
+    });
+
+    // If parent email provided, create parent account or link existing
+    if (parentEmail) {
+      try {
+        // Check if parent already exists with this email
+        let parentUser = await User.findOne({ 
+          where: { email: parentEmail, role: 'parent' }
+        });
+
+        let parent;
+        
+        if (!parentUser) {
+          // Create new parent user
+          parentUser = await User.create({
+            name: `Parent of ${name}`,
+            email: parentEmail,
+            password: Math.random().toString(36).slice(-8),
+            role: 'parent',
+            schoolCode: req.user.schoolCode,
+            isActive: true
+          });
+
+          // Create parent profile
+          parent = await Parent.create({
+            userId: parentUser.id,
+            relationship: 'guardian'
+          });
+        } else {
+          // Find existing parent profile
+          parent = await Parent.findOne({ where: { userId: parentUser.id } });
+        }
+
+        // Link parent to student
+        if (parent) {
+          await parent.addStudent(student);
+        }
+      } catch (parentError) {
+        console.error('Error linking parent:', parentError);
+        // Don't fail the student creation if parent linking fails
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Student added successfully',
+      data: {
+        id: student.id,
+        elimuid: student.elimuid,
+        name: user.name,
+        grade: student.grade
+      }
+    });
+  } catch (error) {
+    console.error('Add student error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || 'Failed to add student' 
+    });
+  }
+};
+
 // @desc    Enter marks for a student
 // @route   POST /api/teacher/marks
 // @access  Private/Teacher
