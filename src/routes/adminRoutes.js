@@ -4,7 +4,8 @@ const { protect, authorize } = require('../middleware/auth');
 const { validate, validationRules } = require('../middleware/validation');
 const teacherSignupController = require('../controllers/teacherSignupController');
 const dutyController = require('../controllers/dutyController');
-const adminController = require('../controllers/adminController'); // Make sure this exists
+const adminController = require('../controllers/adminController');
+const classController = require('../controllers/classController'); // ADD THIS
 
 router.use(protect, authorize('admin', 'super_admin'));
 
@@ -13,16 +14,18 @@ router.get('/approvals/pending', teacherSignupController.getPendingApprovals);
 router.post('/teachers/:teacherId/approve', validationRules.approveTeacher, validate, teacherSignupController.approveTeacher);
 
 // Teacher management
-router.get('/teachers', adminController.getAllTeachers); // Add this endpoint
-router.get('/students', adminController.getAllStudents); // Add this endpoint
-router.get('/parents', adminController.getAllParents);   // Add this endpoint
+router.get('/teachers', adminController.getAllTeachers);
+router.get('/students', adminController.getAllStudents);
+router.get('/parents', adminController.getAllParents);
 
-// Class management
-router.get('/classes', adminController.getClasses);
-router.post('/classes', adminController.createClass);
-router.put('/classes/:id', adminController.updateClass);
-router.post('/classes/:id/assign-teacher', adminController.assignTeacherToClass);
-router.get('/available-teachers', adminController.getAvailableTeachers);
+// Class management routes - ADD THESE
+router.get('/classes', classController.getClasses);
+router.post('/classes', classController.createClass);
+router.put('/classes/:id', classController.updateClass);
+router.delete('/classes/:id', classController.deleteClass);
+router.get('/available-teachers', classController.getAvailableTeachers);
+router.post('/classes/:id/assign-teacher', classController.assignTeacherToClass);
+router.post('/classes/:id/remove-teacher', classController.removeTeacherFromClass);
 
 // Duty management
 router.post('/duty/generate', dutyController.generateDutyRoster);
@@ -40,8 +43,4 @@ router.put('/settings', adminController.updateSchoolSettings);
 router.post('/classes', adminController.createClass);
 router.get('/classes', adminController.getClasses);
 
-// Get single student details
-router.get('/students/:studentId', adminController.getStudentDetails);
-
 module.exports = router;
-
