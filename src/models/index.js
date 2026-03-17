@@ -188,5 +188,6 @@ module.exports = {
   ApprovalRequest,
   DutyRoster,
   UploadLog,
-  SchoolNameRequest
+  SchoolNameRequest,
+  CLass
 };
