@@ -442,3 +442,91 @@ exports.getTodayDuty = async (userId) => {
     return null;
   }
 };
+
+// @desc    Get all conversations for teacher
+// @route   GET /api/teacher/conversations
+// @access  Private/Teacher
+exports.getConversations = async (req, res) => {
+    try {
+        const messages = await Message.findAll({
+            where: {
+                [Op.or]: [
+                    { receiverId: req.user.id },
+                    { senderId: req.user.id }
+                ]
+            },
+            include: [
+                { 
+                    model: User, 
+                    as: 'Sender', 
+                    attributes: ['id', 'name', 'role'] 
+                },
+                { 
+                    model: User, 
+                    as: 'Receiver', 
+                    attributes: ['id', 'name', 'role'] 
+                }
+            ],
+            order: [['createdAt', 'DESC']]
+        });
+        
+        // Group by conversation
+        const conversations = {};
+        messages.forEach(msg => {
+            const otherUserId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
+            const otherUser = msg.senderId === req.user.id ? msg.Receiver : msg.Sender;
+            const studentInfo = msg.metadata?.studentName ? 
+                ` about ${msg.metadata.studentName}` : '';
+            
+            if (!conversations[otherUserId]) {
+                conversations[otherUserId] = {
+                    userId: otherUserId,
+                    userName: otherUser?.name || 'Unknown',
+                    userRole: otherUser?.role || 'unknown',
+                    lastMessage: msg.content,
+                    lastMessageTime: msg.createdAt,
+                    unreadCount: msg.receiverId === req.user.id && !msg.isRead ? 1 : 0,
+                    studentName: msg.metadata?.studentName,
+                    studentGrade: msg.metadata?.studentGrade,
+                    messages: []
+                };
+            }
+            
+            conversations[otherUserId].messages.push(msg);
+            
+            if (msg.receiverId === req.user.id && !msg.isRead) {
+                conversations[otherUserId].unreadCount++;
+            }
+        });
+        
+        res.json({ success: true, data: Object.values(conversations) });
+    } catch (error) {
+        console.error('Get conversations error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Mark messages as read
+// @route   PUT /api/teacher/messages/read/:conversationId
+// @access  Private/Teacher
+exports.markAsRead = async (req, res) => {
+    try {
+        const { conversationId } = req.params;
+        
+        await Message.update(
+            { isRead: true, readAt: new Date() },
+            {
+                where: {
+                    senderId: conversationId,
+                    receiverId: req.user.id,
+                    isRead: false
+                }
+            }
+        );
+        
+        res.json({ success: true, message: 'Messages marked as read' });
+    } catch (error) {
+        console.error('Mark as read error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
