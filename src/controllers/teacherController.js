@@ -1,4 +1,4 @@
-const { Teacher, Student, AcademicRecord, Attendance, User, Parent } = require('../models');
+const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Message } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 const csv = require('csv-parser');
@@ -26,6 +26,14 @@ exports.getDashboard = async (req, res) => {
     // Get today's duty
     const todayDuty = await exports.getTodayDuty(req.user.id);
 
+    // Get unread message count
+    const unreadCount = await Message.count({
+      where: {
+        receiverId: req.user.id,
+        isRead: false
+      }
+    });
+
     res.json({
       success: true,
       data: {
@@ -39,6 +47,7 @@ exports.getDashboard = async (req, res) => {
         user: req.user.getPublicProfile(),
         students: students,
         todayDuty: todayDuty,
+        unreadMessages: unreadCount,
         stats: {
           totalStudents: students.length,
           totalClasses: teacher.classTeacher ? 1 : 0
@@ -73,99 +82,6 @@ exports.getMyStudents = async (req, res) => {
   } catch (error) {
     console.error('Get my students error:', error);
     res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Add a new student
-// @route   POST /api/teacher/students
-// @access  Private/Teacher
-exports.addStudent = async (req, res) => {
-  try {
-    const { name, grade, parentEmail, dateOfBirth, gender } = req.body;
-    
-    // Validate required fields
-    if (!name || !grade) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Student name and grade are required' 
-      });
-    }
-
-    // Create user for student
-    const user = await User.create({
-      name,
-      email: null, // Students might not have email
-      password: Math.random().toString(36).slice(-8), // Random password
-      role: 'student',
-      schoolCode: req.user.schoolCode,
-      isActive: true
-    });
-
-    // Create student profile
-    const student = await Student.create({
-      userId: user.id,
-      grade: grade,
-      dateOfBirth: dateOfBirth,
-      gender: gender
-    });
-
-    // If parent email provided, create parent account or link existing
-    if (parentEmail) {
-      try {
-        // Check if parent already exists with this email
-        let parentUser = await User.findOne({ 
-          where: { email: parentEmail, role: 'parent' }
-        });
-
-        let parent;
-        
-        if (!parentUser) {
-          // Create new parent user
-          parentUser = await User.create({
-            name: `Parent of ${name}`,
-            email: parentEmail,
-            password: Math.random().toString(36).slice(-8),
-            role: 'parent',
-            schoolCode: req.user.schoolCode,
-            isActive: true
-          });
-
-          // Create parent profile
-          parent = await Parent.create({
-            userId: parentUser.id,
-            relationship: 'guardian'
-          });
-        } else {
-          // Find existing parent profile
-          parent = await Parent.findOne({ where: { userId: parentUser.id } });
-        }
-
-        // Link parent to student
-        if (parent) {
-          await parent.addStudent(student);
-        }
-      } catch (parentError) {
-        console.error('Error linking parent:', parentError);
-        // Don't fail the student creation if parent linking fails
-      }
-    }
-
-    res.status(201).json({
-      success: true,
-      message: 'Student added successfully',
-      data: {
-        id: student.id,
-        elimuid: student.elimuid,
-        name: user.name,
-        grade: student.grade
-      }
-    });
-  } catch (error) {
-    console.error('Add student error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || 'Failed to add student' 
-    });
   }
 };
 
@@ -415,33 +331,7 @@ exports.uploadMarksCSV = async (req, res) => {
   }
 };
 
-// @desc    Get today's duty for a teacher
-// @route   GET /api/teacher/today-duty (optional, can be used internally)
-// @access  Private/Teacher
-exports.getTodayDuty = async (userId) => {
-  try {
-    const teacher = await Teacher.findOne({ where: { userId } });
-    if (!teacher) return null;
-
-    const { DutyRoster } = require('../models');
-    const today = new Date().toISOString().split('T')[0];
-    
-    const roster = await DutyRoster.findOne({
-      where: {
-        date: today
-      }
-    });
-
-    if (roster && roster.duties) {
-      const duty = roster.duties.find(d => d.teacherId === teacher.id);
-      return duty || null;
-    }
-    return null;
-  } catch (error) {
-    console.error('Error getting today duty:', error);
-    return null;
-  }
-};
+// ============ MESSAGE FUNCTIONS ============
 
 // @desc    Get all conversations for teacher
 // @route   GET /api/teacher/conversations
@@ -475,8 +365,6 @@ exports.getConversations = async (req, res) => {
         messages.forEach(msg => {
             const otherUserId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
             const otherUser = msg.senderId === req.user.id ? msg.Receiver : msg.Sender;
-            const studentInfo = msg.metadata?.studentName ? 
-                ` about ${msg.metadata.studentName}` : '';
             
             if (!conversations[otherUserId]) {
                 conversations[otherUserId] = {
@@ -490,13 +378,13 @@ exports.getConversations = async (req, res) => {
                     studentGrade: msg.metadata?.studentGrade,
                     messages: []
                 };
+            } else {
+                if (msg.receiverId === req.user.id && !msg.isRead) {
+                    conversations[otherUserId].unreadCount++;
+                }
             }
             
             conversations[otherUserId].messages.push(msg);
-            
-            if (msg.receiverId === req.user.id && !msg.isRead) {
-                conversations[otherUserId].unreadCount++;
-            }
         });
         
         res.json({ success: true, data: Object.values(conversations) });
@@ -506,10 +394,38 @@ exports.getConversations = async (req, res) => {
     }
 };
 
+// @desc    Get messages with a specific user
+// @route   GET /api/teacher/messages/:otherUserId
+// @access  Private/Teacher
+exports.getMessages = async (req, res) => {
+    try {
+        const { otherUserId } = req.params;
+        
+        const messages = await Message.findAll({
+            where: {
+                [Op.or]: [
+                    { senderId: req.user.id, receiverId: otherUserId },
+                    { senderId: otherUserId, receiverId: req.user.id }
+                ]
+            },
+            include: [
+                { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
+                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+            ],
+            order: [['createdAt', 'ASC']]
+        });
+        
+        res.json({ success: true, data: messages });
+    } catch (error) {
+        console.error('Get messages error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // @desc    Mark messages as read
 // @route   PUT /api/teacher/messages/read/:conversationId
 // @access  Private/Teacher
-exports.markAsRead = async (req, res) => {
+exports.markMessagesAsRead = async (req, res) => {
     try {
         const { conversationId } = req.params;
         
@@ -529,4 +445,88 @@ exports.markAsRead = async (req, res) => {
         console.error('Mark as read error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
+};
+
+// @desc    Reply to parent message
+// @route   POST /api/teacher/reply
+// @access  Private/Teacher
+exports.replyToParent = async (req, res) => {
+    try {
+        const { parentId, message, originalMessageId } = req.body;
+        
+        // Create reply message
+        const reply = await Message.create({
+            senderId: req.user.id,
+            receiverId: parentId,
+            content: message,
+            metadata: {
+                inReplyTo: originalMessageId,
+                type: 'teacher_reply',
+                teacherName: req.user.name
+            }
+        });
+        
+        // Create alert for parent
+        await createAlert({
+            userId: parentId,
+            role: 'parent',
+            type: 'message',
+            severity: 'info',
+            title: `📬 Reply from ${req.user.name}`,
+            message: message.substring(0, 100) + (message.length > 100 ? '...' : ''),
+            data: {
+                teacherId: req.user.id,
+                teacherName: req.user.name,
+                messageId: reply.id
+            }
+        });
+        
+        // Real-time notification
+        if (global.io) {
+            global.io.to(`user-${parentId}`).emit('new-message', {
+                from: req.user.id,
+                fromName: req.user.name,
+                fromRole: 'teacher',
+                content: message,
+                timestamp: new Date()
+            });
+        }
+        
+        res.status(201).json({
+            success: true,
+            message: 'Reply sent successfully',
+            data: reply
+        });
+        
+    } catch (error) {
+        console.error('Reply error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Get today's duty for a teacher
+// @access  Private/Teacher
+exports.getTodayDuty = async (userId) => {
+  try {
+    const teacher = await Teacher.findOne({ where: { userId } });
+    if (!teacher) return null;
+
+    const { DutyRoster } = require('../models');
+    const today = new Date().toISOString().split('T')[0];
+    
+    const roster = await DutyRoster.findOne({
+      where: {
+        date: today
+      }
+    });
+
+    if (roster && roster.duties) {
+      const duty = roster.duties.find(d => d.teacherId === teacher.id);
+      return duty || null;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting today duty:', error);
+    return null;
+  }
 };
