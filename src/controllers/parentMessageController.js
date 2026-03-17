@@ -35,22 +35,67 @@ exports.sendMessage = async (req, res) => {
         let recipientName = '';
         
         if (recipientType === 'teacher') {
-            // Find class teacher
-            const classTeacher = await Teacher.findOne({
-                where: { classTeacher: student.grade },
-                include: [{ model: User, attributes: ['id', 'name', 'email'] }]
+            // First try to find via class assignment (new way)
+            const Class = require('../models/Class');
+            const classAssignment = await Class.findOne({
+                where: { 
+                    grade: student.grade,
+                    schoolCode: req.user.schoolCode,
+                    isActive: true
+                },
+                include: [{
+                    model: Teacher,
+                    include: [{ model: User, attributes: ['id', 'name', 'email'] }]
+                }]
             });
             
-            if (!classTeacher) {
-                return res.status(404).json({ 
-                    success: false, 
-                    message: 'Class teacher not found for this grade' 
+            if (classAssignment?.Teacher) {
+                recipientId = classAssignment.Teacher.User.id;
+                recipientRole = 'teacher';
+                recipientName = classAssignment.Teacher.User.name;
+            } else {
+                // Fallback to old classTeacher field
+                const classTeacher = await Teacher.findOne({
+                    where: { classTeacher: student.grade },
+                    include: [{ model: User, attributes: ['id', 'name', 'email'] }]
                 });
+                
+                if (classTeacher) {
+                    recipientId = classTeacher.User.id;
+                    recipientRole = 'teacher';
+                    recipientName = classTeacher.User.name;
+                } else {
+                    // If still no teacher found, send to admin as fallback
+                    const admin = await User.findOne({
+                        where: { 
+                            role: 'admin', 
+                            schoolCode: req.user.schoolCode 
+                        }
+                    });
+                    
+                    if (admin) {
+                        recipientId = admin.id;
+                        recipientRole = 'admin';
+                        recipientName = admin.name;
+                        
+                        // Notify parent that message was redirected
+                        await createAlert({
+                            userId: req.user.id,
+                            role: 'parent',
+                            type: 'message',
+                            severity: 'info',
+                            title: 'Message Redirected',
+                            message: 'No class teacher assigned yet. Your message has been sent to the school admin.',
+                            data: { originalRecipient: 'teacher' }
+                        });
+                    } else {
+                        return res.status(404).json({ 
+                            success: false, 
+                            message: 'No class teacher or admin found. Please contact school administration.' 
+                        });
+                    }
+                }
             }
-            
-            recipientId = classTeacher.User.id;
-            recipientRole = 'teacher';
-            recipientName = classTeacher.User.name;
             
         } else if (recipientType === 'admin') {
             // Find school admin
@@ -75,7 +120,7 @@ exports.sendMessage = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid recipient type' });
         }
         
-        // Create message
+        // Create message with metadata
         const newMessage = await Message.create({
             senderId: req.user.id,
             receiverId: recipientId,
@@ -86,7 +131,9 @@ exports.sendMessage = async (req, res) => {
                 studentGrade: student.grade,
                 parentName: req.user.name,
                 parentEmail: req.user.email,
-                type: 'parent_query'
+                recipientType: recipientType,
+                conversationType: 'parent-to-staff',
+                isRead: false
             }
         });
         
@@ -105,7 +152,8 @@ exports.sendMessage = async (req, res) => {
                 parentId: parent.id,
                 parentName: req.user.name,
                 messageId: newMessage.id,
-                replyTo: req.user.id
+                conversationType: 'parent-message',
+                recipientType: recipientType
             }
         });
         
@@ -115,9 +163,12 @@ exports.sendMessage = async (req, res) => {
                 messageId: newMessage.id,
                 from: req.user.id,
                 fromName: req.user.name,
+                fromRole: 'parent',
                 studentName: student.User.name,
                 studentGrade: student.grade,
                 content: message,
+                conversationType: 'parent-message',
+                recipientType: recipientType,
                 timestamp: new Date()
             });
         }
@@ -129,6 +180,7 @@ exports.sendMessage = async (req, res) => {
                 id: newMessage.id,
                 recipient: recipientName,
                 recipientType: recipientType,
+                recipientId: recipientId,
                 sentAt: newMessage.createdAt
             }
         });
