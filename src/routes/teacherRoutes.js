@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const teacherController = require('../controllers/teacherController');
+const teacherMessageController = require('../controllers/teacherMessageController');
 
 // All teacher routes require authentication and teacher role
 router.use(protect, authorize('teacher'));
@@ -23,5 +24,10 @@ router.get('/conversations', teacherController.getConversations);
 router.get('/messages/:otherUserId', teacherController.getMessages);
 router.put('/messages/read/:conversationId', teacherController.markMessagesAsRead);
 router.post('/reply', teacherController.replyToParent);
+
+// Message routes
+router.get('/conversations', teacherMessageController.getConversations);
+router.get('/messages/:parentId', teacherMessageController.getMessages);
+router.post('/reply', teacherMessageController.replyToParent);
 
 module.exports = router;
