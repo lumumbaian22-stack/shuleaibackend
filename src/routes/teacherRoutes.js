@@ -6,6 +6,12 @@ const teacherController = require('../controllers/teacherController');
 // All teacher routes require authentication and teacher role
 router.use(protect, authorize('teacher'));
 
+// Message routes
+router.get('/conversations', teacherController.getConversations);
+router.get('/messages/:otherUserId', teacherController.getMessages);
+router.put('/messages/read/:conversationId', teacherController.markAsRead);
+router.post('/reply', teacherController.replyToParent);
+
 // Student management
 router.get('/students', teacherController.getMyStudents);
 router.post('/students', teacherController.addStudent); // ADD THIS LINE
