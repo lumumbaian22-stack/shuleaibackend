@@ -85,7 +85,7 @@ exports.getMyStudents = async (req, res) => {
   }
 };
 
-// @desc    Add a new student
+// @desc    Add a new student with default password
 // @route   POST /api/teacher/students
 // @access  Private/Teacher
 exports.addStudent = async (req, res) => {
@@ -100,14 +100,18 @@ exports.addStudent = async (req, res) => {
       });
     }
 
-    // Create user for student
+    // DEFAULT PASSWORD for all students
+    const defaultPassword = 'Student123!';
+
+    // Create user for student with default password
     const user = await User.create({
       name,
-      email: null, // Students don't need email
-      password: Math.random().toString(36).slice(-8), // Random password
+      email: null,
+      password: defaultPassword, // Same for all students
       role: 'student',
       schoolCode: req.user.schoolCode,
-      isActive: true
+      isActive: true,
+      firstLogin: true // Mark as first login
     });
 
     // Create student profile
@@ -121,7 +125,6 @@ exports.addStudent = async (req, res) => {
     // If parent email provided, create parent account or link existing
     if (parentEmail) {
       try {
-        // Check if parent already exists with this email
         let parentUser = await User.findOne({ 
           where: { email: parentEmail, role: 'parent' }
         });
@@ -129,33 +132,28 @@ exports.addStudent = async (req, res) => {
         let parent;
         
         if (!parentUser) {
-          // Create new parent user
           parentUser = await User.create({
             name: `Parent of ${name}`,
             email: parentEmail,
-            password: Math.random().toString(36).slice(-8),
+            password: defaultPassword, // Same default password
             role: 'parent',
             schoolCode: req.user.schoolCode,
             isActive: true
           });
 
-          // Create parent profile
           parent = await Parent.create({
             userId: parentUser.id,
             relationship: 'guardian'
           });
         } else {
-          // Find existing parent profile
           parent = await Parent.findOne({ where: { userId: parentUser.id } });
         }
 
-        // Link parent to student
         if (parent) {
           await parent.addStudent(student);
         }
       } catch (parentError) {
         console.error('Error linking parent:', parentError);
-        // Don't fail the student creation if parent linking fails
       }
     }
 
@@ -166,7 +164,8 @@ exports.addStudent = async (req, res) => {
         id: student.id,
         elimuid: student.elimuid,
         name: user.name,
-        grade: student.grade
+        grade: student.grade,
+        defaultPassword: defaultPassword // Optional: show teacher the default password
       }
     });
   } catch (error) {
