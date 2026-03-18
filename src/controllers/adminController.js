@@ -347,3 +347,172 @@ exports.getAvailableTeachers = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Suspend a student from the school
+// @route   POST /api/admin/students/:studentId/suspend
+// @access  Private/Admin
+exports.suspendStudent = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { reason } = req.body;
+    
+    if (!reason) {
+      return res.status(400).json({ success: false, message: 'Suspension reason is required' });
+    }
+    
+    // Find the student
+    const student = await Student.findByPk(studentId, {
+      include: [{ model: User }]
+    });
+    
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    
+    // Update student status
+    student.status = 'suspended';
+    await student.save();
+    
+    // Deactivate the user account
+    student.User.isActive = false;
+    await student.User.save();
+    
+    // Get all stakeholders
+    const stakeholders = [];
+    
+    // Add student
+    stakeholders.push({
+      userId: student.userId,
+      role: 'student'
+    });
+    
+    // Add parents
+    const parents = await student.getParents({ include: [{ model: User }] });
+    for (const parent of parents) {
+      stakeholders.push({
+        userId: parent.userId,
+        role: 'parent'
+      });
+    }
+    
+    // Add teachers (find teacher for this grade)
+    const teacher = await Teacher.findOne({ 
+      where: { classTeacher: student.grade },
+      include: [{ model: User }]
+    });
+    
+    if (teacher) {
+      stakeholders.push({
+        userId: teacher.userId,
+        role: 'teacher'
+      });
+    }
+    
+    // Notify all stakeholders
+    for (const stakeholder of stakeholders) {
+      await createAlert({
+        userId: stakeholder.userId,
+        role: stakeholder.role,
+        type: 'system',
+        severity: 'critical',
+        title: 'Student Suspension',
+        message: `Student ${student.User.name} has been suspended from the school. Reason: ${reason}`,
+        data: { studentId, reason }
+      });
+    }
+    
+    // Also send email notifications if you have email service
+    // await sendSuspensionEmails(student, stakeholders, reason);
+    
+    res.json({ 
+      success: true, 
+      message: 'Student suspended successfully',
+      data: {
+        studentId: student.id,
+        name: student.User.name,
+        status: student.status,
+        notified: stakeholders.length
+      }
+    });
+  } catch (error) {
+    console.error('Suspend student error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Reactivate a suspended student
+// @route   POST /api/admin/students/:studentId/reactivate
+// @access  Private/Admin
+exports.reactivateStudent = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    
+    const student = await Student.findByPk(studentId, {
+      include: [{ model: User }]
+    });
+    
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    
+    if (student.status !== 'suspended') {
+      return res.status(400).json({ success: false, message: 'Student is not suspended' });
+    }
+    
+    student.status = 'active';
+    student.User.isActive = true;
+    
+    await student.save();
+    await student.User.save();
+    
+    // Notify stakeholders
+    const parents = await student.getParents({ include: [{ model: User }] });
+    
+    for (const parent of parents) {
+      await createAlert({
+        userId: parent.userId,
+        role: 'parent',
+        type: 'system',
+        severity: 'success',
+        title: 'Student Reactivated',
+        message: `Your child ${student.User.name} has been reactivated`,
+        data: { studentId }
+      });
+    }
+    
+    const teacher = await Teacher.findOne({ 
+      where: { classTeacher: student.grade },
+      include: [{ model: User }]
+    });
+    
+    if (teacher) {
+      await createAlert({
+        userId: teacher.userId,
+        role: 'teacher',
+        type: 'system',
+        severity: 'success',
+        title: 'Student Reactivated',
+        message: `Student ${student.User.name} has been reactivated`,
+        data: { studentId }
+      });
+    }
+    
+    await createAlert({
+      userId: student.userId,
+      role: 'student',
+      type: 'system',
+      severity: 'success',
+      title: 'Account Reactivated',
+      message: 'Your account has been reactivated. You can now log in.',
+      data: { studentId }
+    });
+    
+    res.json({ 
+      success: true, 
+      message: 'Student reactivated successfully' 
+    });
+  } catch (error) {
+    console.error('Reactivate student error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
