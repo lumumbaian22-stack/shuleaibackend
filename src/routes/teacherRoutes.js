@@ -7,6 +7,9 @@ const teacherMessageController = require('../controllers/teacherMessageControlle
 // All teacher routes require authentication and teacher role
 router.use(protect, authorize('teacher'));
 
+// Add this line with your other routes
+router.delete('/students/:studentId', teacherController.deleteStudent);
+
 // Student management
 router.get('/students', teacherController.getMyStudents);
 router.post('/students', teacherController.addStudent);
