@@ -622,3 +622,64 @@ exports.getTodayDuty = async (userId) => {
     return null;
   }
 };
+
+// @desc    Delete a student from teacher's class
+// @route   DELETE /api/teacher/students/:studentId
+// @access  Private/Teacher
+exports.deleteStudent = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    
+    // Find the teacher
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
+    
+    // Find the student
+    const student = await Student.findByPk(studentId, {
+      include: [{ model: User }]
+    });
+    
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    
+    // Verify this student belongs to this teacher's class
+    if (student.grade !== teacher.classTeacher) {
+      return res.status(403).json({ success: false, message: 'This student is not in your class' });
+    }
+    
+    // Get student name before deletion for notification
+    const studentName = student.User.name;
+    const studentUserId = student.userId;
+    
+    // Delete the student (this will cascade to User due to CASCADE)
+    await student.destroy();
+    
+    // Notify admin about the deletion
+    const admins = await User.findAll({ 
+      where: { role: 'admin', schoolCode: req.user.schoolCode } 
+    });
+    
+    for (const admin of admins) {
+      await createAlert({
+        userId: admin.id,
+        role: 'admin',
+        type: 'system',
+        severity: 'info',
+        title: 'Student Deleted',
+        message: `Teacher ${req.user.name} removed student ${studentName} from class`,
+        data: { teacherId: teacher.id, studentId }
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Student removed from class successfully' 
+    });
+  } catch (error) {
+    console.error('Delete student error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
