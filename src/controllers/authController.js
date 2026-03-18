@@ -553,6 +553,33 @@ const authController = {
       console.error('Change password error:', error);
       res.status(500).json({ success: false, message: error.message });
     }
+  },
+
+  // Set first password for student (new students)
+  setFirstPassword: async (req, res) => {
+    try {
+      const { elimuid, newPassword } = req.body;
+      
+      const student = await Student.findOne({ 
+        where: { elimuid },
+        include: [{ model: User }]
+      });
+      
+      if (!student) {
+        return res.status(404).json({ success: false, message: 'Student not found' });
+      }
+      
+      const user = student.User;
+      user.password = newPassword;
+      // If you have a firstLogin field, uncomment this:
+      // user.firstLogin = false;
+      await user.save();
+      
+      res.json({ success: true, message: 'Password set successfully' });
+    } catch (error) {
+      console.error('Set first password error:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
   }
 };
 
