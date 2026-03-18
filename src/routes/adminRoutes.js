@@ -9,6 +9,10 @@ const classController = require('../controllers/classController'); // ADD THIS
 
 router.use(protect, authorize('admin', 'super_admin'));
 
+// Add these lines with your other routes
+router.post('/students/:studentId/suspend', adminController.suspendStudent);
+router.post('/students/:studentId/reactivate', adminController.reactivateStudent);
+
 // Teacher approvals
 router.get('/approvals/pending', teacherSignupController.getPendingApprovals);
 router.post('/teachers/:teacherId/approve', validationRules.approveTeacher, validate, teacherSignupController.approveTeacher);
