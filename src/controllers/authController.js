@@ -555,7 +555,7 @@ const authController = {
     }
   },
 
-  // Set first password for student (new students)
+    // Set first password for student (new students)
   setFirstPassword: async (req, res) => {
     try {
       const { elimuid, newPassword } = req.body;
@@ -572,7 +572,7 @@ const authController = {
       const user = student.User;
       user.password = newPassword;
       // If you have a firstLogin field, uncomment this:
-      // user.firstLogin = false;
+      user.firstLogin = false;
       await user.save();
       
       res.json({ success: true, message: 'Password set successfully' });
