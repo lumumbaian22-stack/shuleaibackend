@@ -26,49 +26,15 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: 'info'
     },
-    title: {
-      type: DataTypes.STRING,
-      allowNull: true
-    },
-    message: {
-      type: DataTypes.TEXT,
-      allowNull: true
-    },
-    data: {
-      type: DataTypes.JSONB,
-      defaultValue: {}
-    },
-    isRead: {
-      type: DataTypes.BOOLEAN,
-      allowNull: false,
-      defaultValue: false
-    },
-    isActioned: {
-      type: DataTypes.BOOLEAN,
-      allowNull: false,
-      defaultValue: false
-    },
-    actionUrl: {
-      type: DataTypes.STRING,
-      allowNull: true
-    },
-    expiresAt: {
-      type: DataTypes.DATE,
-      allowNull: true
-    }
+    title: DataTypes.STRING,
+    message: DataTypes.TEXT,
+    data: DataTypes.JSONB,
+    isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
+    isActioned: { type: DataTypes.BOOLEAN, defaultValue: false },
+    actionUrl: DataTypes.STRING,
+    expiresAt: DataTypes.DATE
   }, {
-    timestamps: true,
-    indexes: [
-      {
-        fields: ['userId']
-      },
-      {
-        fields: ['role']
-      },
-      {
-        fields: ['isRead']
-      }
-    ]
+    timestamps: true
   });
 
   return Alert;
