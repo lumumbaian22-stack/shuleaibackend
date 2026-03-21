@@ -1,13 +1,20 @@
+// models/Alert.js
 module.exports = (sequelize, DataTypes) => {
   const Alert = sequelize.define('Alert', {
     userId: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      references: { model: 'Users', key: 'id' }
+      references: {
+        model: 'Users',
+        key: 'id',
+        onDelete: 'CASCADE',
+        onUpdate: 'CASCADE'
+      }
     },
     role: {
       type: DataTypes.ENUM('student', 'parent', 'teacher', 'admin'),
-      allowNull: false
+      allowNull: false,
+      defaultValue: 'admin' // Add a default value to prevent null issues
     },
     type: {
       type: DataTypes.ENUM('academic', 'attendance', 'fee', 'system', 'improvement', 'duty', 'approval'),
@@ -25,7 +32,15 @@ module.exports = (sequelize, DataTypes) => {
     actionUrl: DataTypes.STRING,
     expiresAt: DataTypes.DATE
   }, {
-    timestamps: true
+    timestamps: true,
+    hooks: {
+      beforeCreate: (alert) => {
+        // Ensure role is set if somehow missing
+        if (!alert.role) {
+          alert.role = 'admin';
+        }
+      }
+    }
   });
 
   return Alert;
