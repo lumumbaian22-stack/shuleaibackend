@@ -1,3 +1,4 @@
+// models/Alert.js
 module.exports = (sequelize, DataTypes) => {
   const Alert = sequelize.define('Alert', {
     userId: {
@@ -17,10 +18,12 @@ module.exports = (sequelize, DataTypes) => {
     },
     type: {
       type: DataTypes.ENUM('academic', 'attendance', 'fee', 'system', 'improvement', 'duty', 'approval'),
-      allowNull: false
+      allowNull: false,
+      defaultValue: 'system'
     },
     severity: {
       type: DataTypes.ENUM('critical', 'warning', 'info', 'success'),
+      allowNull: false,
       defaultValue: 'info'
     },
     title: {
@@ -37,10 +40,12 @@ module.exports = (sequelize, DataTypes) => {
     },
     isRead: {
       type: DataTypes.BOOLEAN,
+      allowNull: false,
       defaultValue: false
     },
     isActioned: {
       type: DataTypes.BOOLEAN,
+      allowNull: false,
       defaultValue: false
     },
     actionUrl: {
@@ -53,16 +58,17 @@ module.exports = (sequelize, DataTypes) => {
     }
   }, {
     timestamps: true,
-    hooks: {
-      beforeCreate: (alert) => {
-        if (!alert.role) {
-          alert.role = 'admin';
-        }
-        if (!alert.type) {
-          alert.type = 'system';
-        }
+    indexes: [
+      {
+        fields: ['userId']
+      },
+      {
+        fields: ['role']
+      },
+      {
+        fields: ['isRead']
       }
-    }
+    ]
   });
 
   return Alert;
