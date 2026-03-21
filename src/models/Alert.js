@@ -11,7 +11,7 @@ module.exports = (sequelize, DataTypes) => {
     },
      onDelete: 'CASCADE',  // ADD THIS
       onUpdate: 'CASCADE'   // ADD THIS
-    },
+  },
     type: {
       type: DataTypes.ENUM('academic', 'attendance', 'fee', 'system', 'improvement', 'duty', 'approval'),
       allowNull: false
