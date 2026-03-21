@@ -1,4 +1,3 @@
-// models/Alert.js
 module.exports = (sequelize, DataTypes) => {
   const Alert = sequelize.define('Alert', {
     userId: {
@@ -14,7 +13,7 @@ module.exports = (sequelize, DataTypes) => {
     role: {
       type: DataTypes.ENUM('student', 'parent', 'teacher', 'admin'),
       allowNull: false,
-      defaultValue: 'admin' // Add a default value to prevent null issues
+      defaultValue: 'admin'
     },
     type: {
       type: DataTypes.ENUM('academic', 'attendance', 'fee', 'system', 'improvement', 'duty', 'approval'),
@@ -24,20 +23,43 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM('critical', 'warning', 'info', 'success'),
       defaultValue: 'info'
     },
-    title: DataTypes.STRING,
-    message: DataTypes.TEXT,
-    data: DataTypes.JSONB,
-    isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
-    isActioned: { type: DataTypes.BOOLEAN, defaultValue: false },
-    actionUrl: DataTypes.STRING,
-    expiresAt: DataTypes.DATE
+    title: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    message: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    data: {
+      type: DataTypes.JSONB,
+      defaultValue: {}
+    },
+    isRead: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    },
+    isActioned: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    },
+    actionUrl: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    expiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    }
   }, {
     timestamps: true,
     hooks: {
       beforeCreate: (alert) => {
-        // Ensure role is set if somehow missing
         if (!alert.role) {
           alert.role = 'admin';
+        }
+        if (!alert.type) {
+          alert.type = 'system';
         }
       }
     }
