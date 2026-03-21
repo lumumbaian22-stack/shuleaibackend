@@ -3,15 +3,17 @@ module.exports = (sequelize, DataTypes) => {
     userId: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      references: { model: 'Users', key: 'id' }
+      references: {
+        model: 'Users',
+        key: 'id',
+        onDelete: 'CASCADE',   // Moved inside references object
+        onUpdate: 'CASCADE'     // Moved inside references object
+      }
     },
     role: {
       type: DataTypes.ENUM('student', 'parent', 'teacher', 'admin'),
       allowNull: false
     },
-     onDelete: 'CASCADE',  // ADD THIS
-      onUpdate: 'CASCADE'   // ADD THIS
-  },
     type: {
       type: DataTypes.ENUM('academic', 'attendance', 'fee', 'system', 'improvement', 'duty', 'approval'),
       allowNull: false
