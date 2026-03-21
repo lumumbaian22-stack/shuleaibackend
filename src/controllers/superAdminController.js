@@ -33,8 +33,8 @@ exports.getSchools = async (req, res) => {
             order: [['createdAt', 'DESC']],
             include: [{
                 model: User,
-                as: 'admins', // Using the 'admins' alias defined in index.js
-                attributes: ['id', 'name', 'email', 'phone'],
+                as: 'admins',
+                attributes: ['id', 'name', 'email', 'phone', 'isActive'],
                 required: false
             }]
         });
@@ -54,8 +54,8 @@ exports.getPendingSchools = async (req, res) => {
             where: { status: 'pending' },
             include: [{
                 model: User,
-                as: 'admins', // Using the 'admins' alias defined in index.js
-                attributes: ['id', 'name', 'email', 'phone', 'createdAt'],
+                as: 'admins',
+                attributes: ['id', 'name', 'email', 'phone', 'createdAt', 'isActive'],
                 required: false
             }],
             order: [['createdAt', 'DESC']]
@@ -68,7 +68,7 @@ exports.getPendingSchools = async (req, res) => {
     }
 };
 
-// @desc    Approve school
+// @desc    Approve school - FIXED VERSION
 // @route   POST /api/super-admin/schools/:id/approve
 // @access  Private/SuperAdmin
 exports.approveSchool = async (req, res) => {
@@ -80,23 +80,43 @@ exports.approveSchool = async (req, res) => {
             return res.status(404).json({ success: false, message: 'School not found' });
         }
 
+        // Update school status
         school.status = 'active';
         school.isActive = true;
         school.approvedBy = req.user.id;
         school.approvedAt = new Date();
         await school.save();
 
-        // Activate admin users
-        await User.update(
-            { isActive: true },
-            { where: { schoolCode: school.schoolId, role: 'admin' } }
-        );
+        console.log(`✅ School ${school.name} (${school.schoolId}) approved`);
 
-        // Get admin users
+        // Activate ALL admin users for this school
+        const [updatedCount] = await User.update(
+            { 
+                isActive: true,
+                // Also update any other relevant fields
+                isApproved: true
+            },
+            { 
+                where: { 
+                    schoolCode: school.schoolId, 
+                    role: 'admin' 
+                } 
+            }
+        );
+        
+        console.log(`✅ Activated ${updatedCount} admin users for school ${school.name}`);
+
+        // Get updated admin users
         const admins = await User.findAll({ 
-            where: { schoolCode: school.schoolId, role: 'admin' } 
+            where: { 
+                schoolCode: school.schoolId, 
+                role: 'admin' 
+            } 
         });
         
+        console.log(`📧 Sending notifications to ${admins.length} admins`);
+
+        // Send notifications
         for (const admin of admins) {
             await createAlert({
                 userId: admin.id,
@@ -107,12 +127,24 @@ exports.approveSchool = async (req, res) => {
                 message: `Your school "${school.name}" has been approved! You can now log in.`,
                 data: { schoolId: school.id }
             });
+            
+            console.log(`✅ Alert sent to admin: ${admin.email}`);
         }
 
         res.json({ 
             success: true, 
             message: 'School approved successfully',
-            data: school
+            data: {
+                school: {
+                    id: school.id,
+                    name: school.name,
+                    schoolId: school.schoolId,
+                    shortCode: school.shortCode,
+                    status: school.status,
+                    isActive: school.isActive
+                },
+                activatedAdmins: updatedCount
+            }
         });
     } catch (error) {
         console.error('Approve school error:', error);
@@ -138,6 +170,7 @@ exports.rejectSchool = async (req, res) => {
         school.rejectionReason = reason;
         school.approvedBy = req.user.id;
         school.approvedAt = new Date();
+        school.isActive = false;
         await school.save();
 
         // Get admin users
@@ -407,7 +440,7 @@ exports.suspendSchool = async (req, res) => {
     // Notify super admins about the suspension
     const superAdmins = await User.findAll({ where: { role: 'super_admin' } });
     for (const sa of superAdmins) {
-      if (sa.id !== req.user.id) { // Don't notify the one who performed the action
+      if (sa.id !== req.user.id) {
         await createAlert({
           userId: sa.id,
           role: 'super_admin',
@@ -469,7 +502,7 @@ exports.reactivateSchool = async (req, res) => {
     school.reactivationReason = reason || 'School reactivated';
     await school.save();
 
-    // Reactivate admin users only (teachers and others can be reactivated by admin)
+    // Reactivate admin users only
     await User.update(
       { isActive: true },
       { where: { schoolCode: school.schoolId, role: 'admin' } }
