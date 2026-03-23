@@ -190,6 +190,6 @@ module.exports = {
     DutyRoster,
     UploadLog,
     SchoolNameRequest,
-    Class,// ← Make sure this is "Class" not "CLass"
+    Class,
     Settings
 };
