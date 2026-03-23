@@ -20,6 +20,7 @@ const UploadLog = require('./UploadLog')(sequelize, DataTypes);
 const SchoolNameRequest = require('./SchoolNameRequest')(sequelize, DataTypes);
 const Class = require('./Class')(sequelize, DataTypes);
 const Settings = require('./Settings')(sequelize, DataTypes);
+const TeacherSubjectAssignment = require('./TeacherSubjectAssignment')(sequelize, DataTypes);
 
 // --- Associations ---
 
@@ -166,6 +167,12 @@ User.hasMany(SchoolNameRequest, { foreignKey: 'requestedBy' });
 School.hasMany(SchoolNameRequest, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
 
 // Add associations
+TeacherSubjectAssignment.belongsTo(Teacher, { foreignKey: 'teacherId' });
+TeacherSubjectAssignment.belongsTo(Class, { foreignKey: 'classId' });
+Teacher.hasMany(TeacherSubjectAssignment, { foreignKey: 'teacherId' });
+Class.hasMany(TeacherSubjectAssignment, { foreignKey: 'classId' });
+
+// Add associations
 Class.belongsTo(Teacher, { foreignKey: 'teacherId' });
 Teacher.hasMany(Class, { foreignKey: 'teacherId' });
 
@@ -191,5 +198,6 @@ module.exports = {
     UploadLog,
     SchoolNameRequest,
     Class,
-    Settings
+    Settings,
+    TeacherSubjectAssignment
 };
