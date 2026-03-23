@@ -34,4 +34,8 @@ router.get('/conversations', teacherMessageController.getConversations);
 router.get('/messages/:parentId', teacherMessageController.getMessages);
 router.post('/reply', teacherMessageController.replyToParent);
 
+// Add these lines
+router.get('/my-assignments', teacherController.getMyAssignments);
+router.get('/class-students', teacherController.getClassStudentsForSubject);
+
 module.exports = router;
