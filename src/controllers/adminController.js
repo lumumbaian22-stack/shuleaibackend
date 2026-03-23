@@ -516,3 +516,161 @@ exports.reactivateStudent = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Assign teacher to subject/class
+// @route   POST /api/admin/assign-teacher-to-subject
+// @access  Private/Admin
+exports.assignTeacherToSubject = async (req, res) => {
+  try {
+    const { teacherId, classId, subject, isClassTeacher } = req.body;
+    const { TeacherSubjectAssignment, Teacher, Class } = require('../models');
+
+    // Validate teacher exists and belongs to this school
+    const teacher = await Teacher.findByPk(teacherId, {
+      include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
+    });
+    
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
+
+    // Validate class exists and belongs to this school
+    const classItem = await Class.findOne({
+      where: { id: classId, schoolCode: req.user.schoolCode }
+    });
+    
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    // Check if assignment already exists
+    const existing = await TeacherSubjectAssignment.findOne({
+      where: {
+        teacherId,
+        classId,
+        subject,
+        academicYear: new Date().getFullYear().toString()
+      }
+    });
+
+    if (existing) {
+      // Update existing assignment
+      await existing.update({ isClassTeacher: isClassTeacher || false });
+      return res.json({ 
+        success: true, 
+        message: 'Assignment updated successfully',
+        data: existing 
+      });
+    }
+
+    // Create new assignment
+    const assignment = await TeacherSubjectAssignment.create({
+      teacherId,
+      classId,
+      subject,
+      isClassTeacher: isClassTeacher || false,
+      academicYear: new Date().getFullYear().toString()
+    });
+
+    // If this is a class teacher assignment, update the teacher's classTeacher field
+    if (isClassTeacher) {
+      await teacher.update({ classTeacher: classItem.name });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `${teacher.User.name} assigned to teach ${subject} in ${classItem.name}`,
+      data: assignment
+    });
+  } catch (error) {
+    console.error('Assign teacher error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get all subject assignments for school
+// @route   GET /api/admin/subject-assignments
+// @access  Private/Admin
+exports.getSubjectAssignments = async (req, res) => {
+  try {
+    const { TeacherSubjectAssignment, Teacher, Class, User } = require('../models');
+    
+    const assignments = await TeacherSubjectAssignment.findAll({
+      where: { academicYear: new Date().getFullYear().toString() },
+      include: [
+        {
+          model: Teacher,
+          include: [{ model: User, attributes: ['id', 'name', 'email'] }]
+        },
+        {
+          model: Class,
+          where: { schoolCode: req.user.schoolCode }
+        }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
+
+    const formattedAssignments = assignments.map(a => ({
+      id: a.id,
+      teacherId: a.teacherId,
+      teacherName: a.Teacher?.User?.name || 'Unknown',
+      classId: a.classId,
+      className: a.Class?.name || 'Unknown',
+      classGrade: a.Class?.grade || 'N/A',
+      subject: a.subject,
+      isClassTeacher: a.isClassTeacher,
+      academicYear: a.academicYear
+    }));
+
+    res.json({ success: true, data: formattedAssignments });
+  } catch (error) {
+    console.error('Get assignments error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Remove subject assignment
+// @route   DELETE /api/admin/subject-assignments/:id
+// @access  Private/Admin
+exports.removeSubjectAssignment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { TeacherSubjectAssignment, Teacher } = require('../models');
+    
+    const assignment = await TeacherSubjectAssignment.findByPk(id, {
+      include: [{ model: Teacher }]
+    });
+    
+    if (!assignment) {
+      return res.status(404).json({ success: false, message: 'Assignment not found' });
+    }
+
+    const wasClassTeacher = assignment.isClassTeacher;
+    const teacherId = assignment.teacherId;
+    
+    await assignment.destroy();
+
+    // If this was a class teacher assignment, check if teacher has any other class teacher assignments
+    if (wasClassTeacher) {
+      const otherClassTeacherAssignments = await TeacherSubjectAssignment.findOne({
+        where: {
+          teacherId,
+          isClassTeacher: true,
+          academicYear: new Date().getFullYear().toString()
+        }
+      });
+
+      if (!otherClassTeacherAssignments) {
+        await Teacher.update(
+          { classTeacher: null },
+          { where: { id: teacherId } }
+        );
+      }
+    }
+
+    res.json({ success: true, message: 'Assignment removed successfully' });
+  } catch (error) {
+    console.error('Remove assignment error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
