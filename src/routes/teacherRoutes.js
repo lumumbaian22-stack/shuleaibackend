@@ -3,6 +3,7 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const teacherController = require('../controllers/teacherController');
 const teacherMessageController = require('../controllers/teacherMessageController');
+const taskController = require('../controllers/taskController');
 
 // All teacher routes require authentication and teacher role
 router.use(protect, authorize('teacher'));
@@ -37,5 +38,10 @@ router.post('/reply', teacherMessageController.replyToParent);
 // Add these lines
 router.get('/my-assignments', teacherController.getMyAssignments);
 router.get('/class-students', teacherController.getClassStudentsForSubject);
+
+router.get('/tasks', taskController.getTasks);
+router.post('/tasks', taskController.createTask);
+router.put('/tasks/:taskId', taskController.updateTask);
+router.delete('/tasks/:taskId', taskController.deleteTask);
 
 module.exports = router;
