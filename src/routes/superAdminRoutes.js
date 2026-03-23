@@ -50,4 +50,14 @@ router.post('/backup', superAdminController.runSystemBackup);
 router.post('/cache/clear', superAdminController.clearPlatformCache);
 router.get('/export', superAdminController.exportPlatformData);
 
+// routes/helpRoutes.js
+const express = require('express');
+const router = express.Router();
+const { protect } = require('../middleware/auth');
+const helpController = require('../controllers/helpController');
+
+// Public routes (no authentication required for help)
+router.get('/articles/:role', helpController.getHelpArticles);
+router.post('/search', helpController.searchHelpArticles);
+
 module.exports = router;
