@@ -683,3 +683,144 @@ exports.deleteStudent = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Get teacher's assignments (classes and subjects they teach)
+// @route   GET /api/teacher/my-assignments
+// @access  Private/Teacher
+exports.getMyAssignments = async (req, res) => {
+  try {
+    const { TeacherSubjectAssignment, Teacher, Class } = require('../models');
+    
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
+
+    const assignments = await TeacherSubjectAssignment.findAll({
+      where: {
+        teacherId: teacher.id,
+        academicYear: new Date().getFullYear().toString()
+      },
+      include: [
+        {
+          model: Class,
+          where: { schoolCode: req.user.schoolCode, isActive: true }
+        }
+      ],
+      order: [['subject', 'ASC']]
+    });
+
+    // Find class teacher assignment (where isClassTeacher = true)
+    const classTeacherAssignment = assignments.find(a => a.isClassTeacher);
+    
+    // Get all subject assignments (including class teacher's subjects)
+    const subjectAssignments = assignments.map(a => ({
+      classId: a.classId,
+      className: a.Class?.name,
+      classGrade: a.Class?.grade,
+      subject: a.subject,
+      isClassTeacher: a.isClassTeacher,
+      studentCount: a.Class?.studentCount || 0
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        teacherId: teacher.id,
+        teacherName: req.user.name,
+        classTeacher: classTeacherAssignment ? {
+          classId: classTeacherAssignment.classId,
+          className: classTeacherAssignment.Class?.name,
+          classGrade: classTeacherAssignment.Class?.grade,
+          studentCount: classTeacherAssignment.Class?.studentCount || 0
+        } : null,
+        subjects: subjectAssignments,
+        allSubjects: [...new Set(subjectAssignments.map(s => s.subject))],
+        allClasses: [...new Map(subjectAssignments.map(s => [s.classId, { id: s.classId, name: s.className, grade: s.classGrade }])).values()]
+      }
+    });
+  } catch (error) {
+    console.error('Get my assignments error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get students for a specific class and subject
+// @route   GET /api/teacher/class-students
+// @access  Private/Teacher
+exports.getClassStudentsForSubject = async (req, res) => {
+  try {
+    const { classId, subject } = req.query;
+    const { TeacherSubjectAssignment, Student, User, Class } = require('../models');
+    
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
+
+    // Verify teacher is assigned to this class and subject
+    const assignment = await TeacherSubjectAssignment.findOne({
+      where: {
+        teacherId: teacher.id,
+        classId: parseInt(classId),
+        subject: subject,
+        academicYear: new Date().getFullYear().toString()
+      }
+    });
+
+    if (!assignment) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'You are not assigned to teach this subject in this class' 
+      });
+    }
+
+    // Get the class
+    const classItem = await Class.findOne({
+      where: { id: classId, schoolCode: req.user.schoolCode }
+    });
+
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    // Get students for this class
+    let students = await Student.findAll({
+      where: { grade: classItem.grade, status: 'active' },
+      include: [{ model: User, attributes: ['id', 'name', 'email'] }],
+      order: [['createdAt', 'DESC']]
+    });
+
+    // If this is a subject that requires combination (like Biology), filter by subject combination
+    const combinationSubjects = ['Biology', 'Chemistry', 'Physics', 'History', 'Geography', 'Business', 'Agriculture', 'Computer'];
+    if (combinationSubjects.includes(subject) && classItem.grade.includes('Form')) {
+      students = students.filter(s => 
+        s.subjectCombination && s.subjectCombination.includes(subject)
+      );
+    }
+
+    const formattedStudents = students.map(s => ({
+      id: s.id,
+      userId: s.userId,
+      name: s.User?.name || 'Unknown',
+      elimuid: s.elimuid,
+      grade: s.grade,
+      subjectCombination: s.subjectCombination || []
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        classId: classItem.id,
+        className: classItem.name,
+        grade: classItem.grade,
+        subject: subject,
+        students: formattedStudents,
+        studentCount: formattedStudents.length
+      }
+    });
+  } catch (error) {
+    console.error('Get class students error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
