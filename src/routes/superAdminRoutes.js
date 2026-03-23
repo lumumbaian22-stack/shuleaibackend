@@ -50,8 +50,4 @@ router.post('/backup', superAdminController.runSystemBackup);
 router.post('/cache/clear', superAdminController.clearPlatformCache);
 router.get('/export', superAdminController.exportPlatformData);
 
-// Public routes (no authentication required for help)
-router.get('/articles/:role', helpController.getHelpArticles);
-router.post('/search', helpController.searchHelpArticles);
-
 module.exports = router;
