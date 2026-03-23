@@ -20,7 +20,7 @@ const UploadLog = require('./UploadLog')(sequelize, DataTypes);
 const SchoolNameRequest = require('./SchoolNameRequest')(sequelize, DataTypes);
 const Class = require('./Class')(sequelize, DataTypes);
 const Settings = require('./Settings')(sequelize, DataTypes);
-const TeacherSubjectAssignment = require('./TeacherSubjectAssignment')(sequelize, DataTypes);
+const TeacherSubjectAssignment = require('./TeacherSubjectAssignment')(sequelize);
 const Task = require('./Task')(sequelize, DataTypes);
 
 // --- Associations ---
