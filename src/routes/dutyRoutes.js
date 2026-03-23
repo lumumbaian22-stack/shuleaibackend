@@ -19,5 +19,7 @@ router.post('/request-swap', authorize('teacher'), dutyController.requestDutySwa
  router.get('/understaffed', authorize('admin'), dutyController.getUnderstaffedAreas);
  router.get('/teacher-workload', authorize('admin'), dutyController.getTeacherWorkload);
 
+router.get('/available-swaps', dutyController.getAvailableSwaps);
+
 module.exports = router;
 
