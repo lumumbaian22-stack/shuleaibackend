@@ -19,6 +19,7 @@ const DutyRoster = require('./DutyRoster')(sequelize, DataTypes);
 const UploadLog = require('./UploadLog')(sequelize, DataTypes);
 const SchoolNameRequest = require('./SchoolNameRequest')(sequelize, DataTypes);
 const Class = require('./Class')(sequelize, DataTypes);
+const Settings = require('./Settings')(sequelize, DataTypes);
 
 // --- Associations ---
 
@@ -190,4 +191,5 @@ module.exports = {
     UploadLog,
     SchoolNameRequest,
     Class // ← Make sure this is "Class" not "CLass"
+    Settings
 };
