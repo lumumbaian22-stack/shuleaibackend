@@ -21,6 +21,7 @@ const SchoolNameRequest = require('./SchoolNameRequest')(sequelize, DataTypes);
 const Class = require('./Class')(sequelize, DataTypes);
 const Settings = require('./Settings')(sequelize, DataTypes);
 const TeacherSubjectAssignment = require('./TeacherSubjectAssignment')(sequelize, DataTypes);
+const Task = require('./Task')(sequelize, DataTypes);
 
 // --- Associations ---
 
@@ -172,6 +173,10 @@ TeacherSubjectAssignment.belongsTo(Class, { foreignKey: 'classId' });
 Teacher.hasMany(TeacherSubjectAssignment, { foreignKey: 'teacherId' });
 Class.hasMany(TeacherSubjectAssignment, { foreignKey: 'classId' });
 
+// Add association
+Task.belongsTo(Teacher, { foreignKey: 'teacherId' });
+Teacher.hasMany(Task, { foreignKey: 'teacherId' });
+
 // Add associations
 Class.belongsTo(Teacher, { foreignKey: 'teacherId' });
 Teacher.hasMany(Class, { foreignKey: 'teacherId' });
@@ -199,5 +204,6 @@ module.exports = {
     SchoolNameRequest,
     Class,
     Settings,
-    TeacherSubjectAssignment
+    TeacherSubjectAssignment,
+    Task
 };
