@@ -817,3 +817,139 @@ exports.requestDutySwap = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Request duty swap
+// @route   POST /api/duty/request-swap
+// @access  Private/Teacher
+exports.requestDutySwap = async (req, res) => {
+    try {
+        const { dutyDate, reason, targetTeacherId } = req.body;
+        
+        const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+        if (!teacher) {
+            return res.status(404).json({ success: false, message: 'Teacher not found' });
+        }
+        
+        const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+        if (!school) {
+            return res.status(404).json({ success: false, message: 'School not found' });
+        }
+        
+        const roster = await DutyRoster.findOne({
+            where: { schoolId: school.schoolId, date: moment(dutyDate).format('YYYY-MM-DD') }
+        });
+        
+        if (!roster) {
+            return res.status(404).json({ success: false, message: 'No duty on that date' });
+        }
+        
+        const duty = roster.duties.find(d => d.teacherId === teacher.id);
+        if (!duty) {
+            return res.status(403).json({ success: false, message: 'You are not on duty that day' });
+        }
+        
+        // Create swap request
+        const swapRequest = {
+            id: Date.now(),
+            teacherId: teacher.id,
+            teacherName: teacher.User?.name,
+            targetTeacherId: targetTeacherId || null,
+            date: dutyDate,
+            dutyType: duty.type,
+            reason: reason,
+            status: 'pending',
+            createdAt: new Date()
+        };
+        
+        // Store in database or in-memory
+        let swapRequests = [];
+        const stored = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: 'swap_requests' } });
+        
+        if (stored && stored.duties) {
+            swapRequests = stored.duties;
+        }
+        
+        swapRequests.push(swapRequest);
+        
+        await DutyRoster.upsert({
+            schoolId: school.schoolId,
+            date: 'swap_requests',
+            duties: swapRequests,
+            createdBy: req.user.id
+        });
+        
+        // Notify admin
+        const admins = await User.findAll({ 
+            where: { role: 'admin', schoolCode: school.schoolId } 
+        });
+        
+        for (const admin of admins) {
+            await createAlert({
+                userId: admin.id,
+                role: 'admin',
+                type: 'duty',
+                severity: 'info',
+                title: 'Duty Swap Request',
+                message: `${teacher.User?.name} requests to swap duty on ${moment(dutyDate).format('MMM Do')}. Reason: ${reason}`,
+                data: { swapRequest }
+            });
+        }
+        
+        res.json({ 
+            success: true, 
+            message: 'Swap request sent to admin',
+            data: swapRequest
+        });
+    } catch (error) {
+        console.error('Request swap error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Get available duty swaps for teacher
+// @route   GET /api/duty/available-swaps
+// @access  Private/Teacher
+exports.getAvailableSwaps = async (req, res) => {
+    try {
+        const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+        if (!teacher) {
+            return res.status(404).json({ success: false, message: 'Teacher not found' });
+        }
+        
+        const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+        
+        const swapRequests = await DutyRoster.findOne({ 
+            where: { schoolId: school.schoolId, date: 'swap_requests' } 
+        });
+        
+        if (!swapRequests || !swapRequests.duties) {
+            return res.json({ success: true, data: [] });
+        }
+        
+        // Filter available swaps (not involving current teacher and pending)
+        const available = swapRequests.duties.filter(req => 
+            req.status === 'pending' && 
+            req.teacherId !== teacher.id &&
+            (!req.targetTeacherId || req.targetTeacherId === teacher.id)
+        );
+        
+        // Get teacher names for each swap
+        const enriched = await Promise.all(available.map(async req => {
+            const requestingTeacher = await Teacher.findByPk(req.teacherId, {
+                include: [{ model: User, attributes: ['name'] }]
+            });
+            
+            return {
+                ...req,
+                teacherName: requestingTeacher?.User?.name || 'Unknown',
+                dutyDate: req.date,
+                dutyType: req.dutyType
+            };
+        }));
+        
+        res.json({ success: true, data: enriched });
+    } catch (error) {
+        console.error('Get available swaps error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
