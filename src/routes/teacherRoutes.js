@@ -4,6 +4,7 @@ const { protect, authorize } = require('../middleware/auth');
 const teacherController = require('../controllers/teacherController');
 const teacherMessageController = require('../controllers/teacherMessageController');
 const taskController = require('../controllers/taskController');
+const chatController = require('../controllers/chatController');
 
 // All teacher routes require authentication and teacher role
 router.use(protect, authorize('teacher'));
@@ -38,6 +39,12 @@ router.post('/reply', teacherMessageController.replyToParent);
 // Add these lines
 router.get('/my-assignments', teacherController.getMyAssignments);
 router.get('/class-students', teacherController.getClassStudentsForSubject);
+
+router.get('/staff-members', chatController.getStaffMembers);
+router.post('/group-message', chatController.sendGroupMessage);
+router.post('/private-message', chatController.sendPrivateMessage);
+router.get('/messages/:otherUserId', chatController.getMessages);
+router.get('/conversations', chatController.getConversations);
 
 router.get('/tasks', taskController.getTasks);
 router.post('/tasks', taskController.createTask);
