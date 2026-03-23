@@ -47,4 +47,9 @@ router.put('/settings', adminController.updateSchoolSettings);
 router.post('/classes', adminController.createClass);
 router.get('/classes', adminController.getClasses);
 
+// Add these lines
+router.post('/assign-teacher-to-subject', adminController.assignTeacherToSubject);
+router.get('/subject-assignments', adminController.getSubjectAssignments);
+router.delete('/subject-assignments/:id', adminController.removeSubjectAssignment);
+
 module.exports = router;
