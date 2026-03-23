@@ -1,7 +1,6 @@
 // controllers/helpController.js
-const { HelpArticle, User } = require('../models');
 
-// Help articles database
+// Help articles database (static content)
 const HELP_ARTICLES = {
   superadmin: [
     {
@@ -231,7 +230,7 @@ const HELP_ARTICLES = {
   ]
 };
 
-// Get help articles
+// Get help articles by role
 exports.getHelpArticles = async (req, res) => {
   try {
     const { role } = req.params;
@@ -271,6 +270,27 @@ exports.searchHelpArticles = async (req, res) => {
     });
   } catch (error) {
     console.error('Search help articles error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Get single help article
+exports.getHelpArticle = async (req, res) => {
+  try {
+    const { role, articleId } = req.params;
+    const articles = HELP_ARTICLES[role] || HELP_ARTICLES.admin;
+    const article = articles.find(a => a.id === articleId);
+    
+    if (!article) {
+      return res.status(404).json({ success: false, message: 'Article not found' });
+    }
+    
+    res.json({
+      success: true,
+      data: article
+    });
+  } catch (error) {
+    console.error('Get help article error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
