@@ -28,4 +28,26 @@ router.post('/requests/:id/reject', superAdminController.rejectRequest);
 // Bank details
 router.put('/bank-details/:schoolId', superAdminController.updateBankDetails);
 
+// Add these routes to your superAdminRoutes.js
+
+// School-specific statistics
+router.get('/schools/:schoolId/teachers', superAdminController.getSchoolTeachers);
+router.get('/schools/:schoolId/students', superAdminController.getSchoolStudents);
+router.get('/schools/:schoolId/parents', superAdminController.getSchoolParents);
+
+// System health
+router.get('/system/status', superAdminController.getSystemStatus);
+router.get('/system/metrics', superAdminController.getSystemMetrics);
+router.get('/system/events', superAdminController.getRecentEvents);
+
+// Platform settings
+router.get('/platform-settings', superAdminController.getPlatformSettings);
+router.put('/platform-settings', superAdminController.updatePlatformSettings);
+router.post('/settings/reset', superAdminController.resetPlatformSettings);
+
+// System management
+router.post('/backup', superAdminController.runSystemBackup);
+router.post('/cache/clear', superAdminController.clearPlatformCache);
+router.get('/export', superAdminController.exportPlatformData);
+
 module.exports = router;
