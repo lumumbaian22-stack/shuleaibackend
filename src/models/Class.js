@@ -1,3 +1,4 @@
+// src/models/Class.js - Add subjectTeachers field
 module.exports = (sequelize, DataTypes) => {
   const Class = sequelize.define('Class', {
     id: {
@@ -32,6 +33,10 @@ module.exports = (sequelize, DataTypes) => {
         model: 'Teachers',
         key: 'id'
       }
+    },
+    subjectTeachers: {
+      type: DataTypes.JSONB,
+      defaultValue: [] // [{ teacherId, subject, assignedAt }]
     },
     academicYear: {
       type: DataTypes.STRING,
