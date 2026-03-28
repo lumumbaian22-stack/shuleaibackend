@@ -24,6 +24,8 @@ const uploadRoutes = require('./routes/uploadRoutes');
 const schoolRoutes = require('./routes/schoolRoutes');
 const parentMessageRoutes = require('./routes/parentMessageRoutes');
 const helpRoutes = require('./routes/helpRoutes');
+const userRoutes = require('./routes/userRoutes');
+const taskRoutes = require('./routes/taskRoutes');
 
 const app = express();  // <-- THIS MUST COME BEFORE using app.use()
 
@@ -132,6 +134,8 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/school', schoolRoutes);
 app.use('/api/help', helpRoutes);
+app.use('/api/user', userRoutes);
+app.use('/api/tasks', taskRoutes);
 
 // 404 handler - This must be AFTER all routes
 app.use((req, res) => {
