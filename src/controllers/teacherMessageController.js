@@ -24,7 +24,8 @@ exports.getConversations = async (req, res) => {
         
         // Group by conversation
         const conversations = {};
-        messages.forEach(msg => {
+        
+        for (const msg of messages) {
             const otherUserId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
             const otherUser = msg.senderId === req.user.id ? msg.Receiver : msg.Sender;
             
@@ -34,15 +35,19 @@ exports.getConversations = async (req, res) => {
                 let studentGrade = null;
                 
                 if (otherUser?.role === 'parent') {
-                    const parent = await Parent.findOne({ where: { userId: otherUserId } });
-                    if (parent) {
-                        const students = await parent.getStudents({ 
-                            include: [{ model: User, attributes: ['name'] }]
-                        });
-                        if (students.length > 0) {
-                            studentName = students[0].User?.name;
-                            studentGrade = students[0].grade;
+                    try {
+                        const parent = await Parent.findOne({ where: { userId: otherUserId } });
+                        if (parent) {
+                            const students = await parent.getStudents({ 
+                                include: [{ model: User, attributes: ['name'] }]
+                            });
+                            if (students.length > 0) {
+                                studentName = students[0].User?.name;
+                                studentGrade = students[0].grade;
+                            }
                         }
+                    } catch (err) {
+                        console.error('Error fetching parent students:', err);
                     }
                 }
                 
@@ -64,7 +69,7 @@ exports.getConversations = async (req, res) => {
             }
             
             conversations[otherUserId].messages.push(msg);
-        });
+        }
         
         res.json({ success: true, data: Object.values(conversations) });
     } catch (error) {
@@ -120,7 +125,7 @@ exports.markMessagesAsRead = async (req, res) => {
     try {
         const { conversationId } = req.params;
         
-        await Message.update(
+        const updated = await Message.update(
             { isRead: true, readAt: new Date() },
             {
                 where: {
@@ -131,7 +136,7 @@ exports.markMessagesAsRead = async (req, res) => {
             }
         );
         
-        res.json({ success: true, message: 'Messages marked as read' });
+        res.json({ success: true, message: 'Messages marked as read', count: updated[0] });
     } catch (error) {
         console.error('Mark as read error:', error);
         res.status(500).json({ success: false, message: error.message });
