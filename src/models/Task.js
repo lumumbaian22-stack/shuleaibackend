@@ -1,10 +1,18 @@
-// src/models/Task.js
+// src/models/Task.js - Version with teacherId (matches your database)
 module.exports = (sequelize, DataTypes) => {
   const Task = sequelize.define('Task', {
-    userId: {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true
+    },
+    teacherId: {  // Use teacherId to match existing database column
       type: DataTypes.INTEGER,
       allowNull: false,
-      references: { model: 'Users', key: 'id' },
+      references: {
+        model: 'Users',
+        key: 'id'
+      },
       onDelete: 'CASCADE'
     },
     title: {
@@ -40,7 +48,8 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: false
     }
   }, {
-    timestamps: true
+    timestamps: true,
+    tableName: 'Tasks'
   });
 
   return Task;
