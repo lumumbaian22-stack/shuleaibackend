@@ -14,6 +14,7 @@ exports.getTasks = async (req, res) => {
     });
     res.json({ success: true, data: tasks });
   } catch (error) {
+    console.error('Get tasks error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -26,7 +27,7 @@ exports.createTask = async (req, res) => {
     const { title, description, dueDate, priority } = req.body;
     
     const task = await Task.create({
-      userId: req.user.id,
+      userId: req.user.id,  // Use userId, not teacherId
       title,
       description,
       dueDate,
@@ -55,6 +56,7 @@ exports.createTask = async (req, res) => {
     
     res.status(201).json({ success: true, data: task });
   } catch (error) {
+    console.error('Create task error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -74,6 +76,7 @@ exports.updateTask = async (req, res) => {
     await task.update(req.body);
     res.json({ success: true, data: task });
   } catch (error) {
+    console.error('Update task error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -93,6 +96,7 @@ exports.deleteTask = async (req, res) => {
     await task.destroy();
     res.json({ success: true, message: 'Task deleted' });
   } catch (error) {
+    console.error('Delete task error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -115,6 +119,7 @@ exports.completeTask = async (req, res) => {
     
     res.json({ success: true, data: task });
   } catch (error) {
+    console.error('Complete task error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
