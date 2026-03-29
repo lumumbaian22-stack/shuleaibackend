@@ -1,6 +1,5 @@
-// src/controllers/taskController.js
+// src/controllers/taskController.js - Using teacherId
 const { Task } = require('../models');
-const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 
 // @desc    Get user's tasks
@@ -9,8 +8,8 @@ const { createAlert } = require('../services/notificationService');
 exports.getTasks = async (req, res) => {
   try {
     const tasks = await Task.findAll({
-      where: { userId: req.user.id },
-      order: [['dueDate', 'ASC']]
+      where: { teacherId: req.user.id },
+      order: [['dueDate', 'ASC'], ['createdAt', 'DESC']]
     });
     res.json({ success: true, data: tasks });
   } catch (error) {
@@ -24,18 +23,23 @@ exports.getTasks = async (req, res) => {
 // @access  Private
 exports.createTask = async (req, res) => {
   try {
-    const { title, description, dueDate, priority } = req.body;
+    const { title, description, dueDate, priority, category } = req.body;
+    
+    if (!title) {
+      return res.status(400).json({ success: false, message: 'Task title is required' });
+    }
     
     const task = await Task.create({
-      userId: req.user.id,  // Use userId, not teacherId
+      teacherId: req.user.id,
       title,
-      description,
-      dueDate,
+      description: description || null,
+      dueDate: dueDate || null,
       priority: priority || 'medium',
-      status: 'pending'
+      status: 'pending',
+      category: category || 'general'
     });
     
-    // Create reminder alert if due date is soon
+    // Create reminder alert if due date is soon (within 3 days)
     if (dueDate) {
       const due = new Date(dueDate);
       const now = new Date();
@@ -67,7 +71,12 @@ exports.createTask = async (req, res) => {
 exports.updateTask = async (req, res) => {
   try {
     const { id } = req.params;
-    const task = await Task.findOne({ where: { id, userId: req.user.id } });
+    const task = await Task.findOne({ 
+      where: { 
+        id: id,
+        teacherId: req.user.id 
+      } 
+    });
     
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found' });
@@ -87,14 +96,19 @@ exports.updateTask = async (req, res) => {
 exports.deleteTask = async (req, res) => {
   try {
     const { id } = req.params;
-    const task = await Task.findOne({ where: { id, userId: req.user.id } });
+    const task = await Task.findOne({ 
+      where: { 
+        id: id,
+        teacherId: req.user.id 
+      } 
+    });
     
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found' });
     }
     
     await task.destroy();
-    res.json({ success: true, message: 'Task deleted' });
+    res.json({ success: true, message: 'Task deleted successfully' });
   } catch (error) {
     console.error('Delete task error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -107,7 +121,12 @@ exports.deleteTask = async (req, res) => {
 exports.completeTask = async (req, res) => {
   try {
     const { id } = req.params;
-    const task = await Task.findOne({ where: { id, userId: req.user.id } });
+    const task = await Task.findOne({ 
+      where: { 
+        id: id,
+        teacherId: req.user.id 
+      } 
+    });
     
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found' });
@@ -116,6 +135,17 @@ exports.completeTask = async (req, res) => {
     task.status = 'completed';
     task.completedAt = new Date();
     await task.save();
+    
+    // Create completion alert
+    await createAlert({
+      userId: req.user.id,
+      role: req.user.role,
+      type: 'system',
+      severity: 'success',
+      title: 'Task Completed',
+      message: `Task "${task.title}" has been marked as completed.`,
+      data: { taskId: task.id }
+    });
     
     res.json({ success: true, data: task });
   } catch (error) {
