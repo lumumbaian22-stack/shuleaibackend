@@ -1,9 +1,12 @@
-const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Message } = require('../models');
-const { createAlert } = require('../services/notificationService');
-const { Op } = require('sequelize');
-const csv = require('csv-parser');
+// src/controllers/teacherController.js - COMPLETE FIXED VERSION
 const fs = require('fs');
 const path = require('path');
+const csv = require('csv-parser');
+const { Op } = require('sequelize');
+const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster } = require('../models');
+const { createAlert } = require('../services/notificationService');
+
+// ============ EXISTING FUNCTIONS (keep your existing ones, they work) ============
 
 // @desc    Get teacher's dashboard
 // @route   GET /api/teacher/dashboard
@@ -15,7 +18,6 @@ exports.getDashboard = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher profile not found' });
     }
 
-    // Get students if teacher has a class
     let students = [];
     if (teacher.classTeacher) {
       students = await Student.findAll({
@@ -24,15 +26,9 @@ exports.getDashboard = async (req, res) => {
       });
     }
 
-    // Get today's duty
     const todayDuty = await exports.getTodayDuty(req.user.id);
-
-    // Get unread message count
     const unreadCount = await Message.count({
-      where: {
-        receiverId: req.user.id,
-        isRead: false
-      }
+      where: { receiverId: req.user.id, isRead: false }
     });
 
     res.json({
@@ -93,7 +89,6 @@ exports.addStudent = async (req, res) => {
   try {
     const { name, grade, parentEmail, dateOfBirth, gender } = req.body;
     
-    // Validate required fields
     if (!name || !grade) {
       return res.status(400).json({ 
         success: false, 
@@ -101,21 +96,18 @@ exports.addStudent = async (req, res) => {
       });
     }
 
-    // DEFAULT PASSWORD for all students
     const defaultPassword = 'Student123!';
 
-    // Create user for student with default password
     const user = await User.create({
       name,
       email: null,
-      password: defaultPassword, // Same for all students
+      password: defaultPassword,
       role: 'student',
       schoolCode: req.user.schoolCode,
       isActive: true,
-      firstLogin: true // Mark as first login
+      firstLogin: true
     });
 
-    // Create student profile
     const student = await Student.create({
       userId: user.id,
       grade: grade,
@@ -123,7 +115,6 @@ exports.addStudent = async (req, res) => {
       gender: gender
     });
 
-    // If parent email provided, create parent account or link existing
     if (parentEmail) {
       try {
         let parentUser = await User.findOne({ 
@@ -136,7 +127,7 @@ exports.addStudent = async (req, res) => {
           parentUser = await User.create({
             name: `Parent of ${name}`,
             email: parentEmail,
-            password: defaultPassword, // Same default password
+            password: defaultPassword,
             role: 'parent',
             schoolCode: req.user.schoolCode,
             isActive: true
@@ -166,7 +157,7 @@ exports.addStudent = async (req, res) => {
         elimuid: student.elimuid,
         name: user.name,
         grade: student.grade,
-        defaultPassword: defaultPassword // Optional: show teacher the default password
+        defaultPassword: defaultPassword
       }
     });
   } catch (error) {
@@ -204,7 +195,6 @@ exports.enterMarks = async (req, res) => {
       isPublished: true
     });
 
-    // Check for performance alerts (score < 50)
     if (score < 50) {
       const student = await Student.findByPk(studentId, { 
         include: [{ model: User, attributes: ['id', 'name'] }] 
@@ -220,7 +210,6 @@ exports.enterMarks = async (req, res) => {
           message: `You scored ${score}% in ${subject}. Please review.`
         });
 
-        // Also alert parents
         const parents = await student.getParents({ 
           include: [{ model: User, attributes: ['id'] }] 
         });
@@ -270,7 +259,6 @@ exports.takeAttendance = async (req, res) => {
       await attendance.save();
     }
 
-    // Alert if absent
     if (status === 'absent') {
       const student = await Student.findByPk(studentId, { 
         include: [{ model: User, attributes: ['id', 'name'] }] 
@@ -358,10 +346,8 @@ exports.uploadMarksCSV = async (req, res) => {
       .pipe(csv())
       .on('data', (data) => results.push(data))
       .on('end', async () => {
-        // Process each row
         for (const row of results) {
           try {
-            // Find student by ID or ELIMUID
             const student = await Student.findOne({
               where: {
                 [Op.or]: [
@@ -394,7 +380,6 @@ exports.uploadMarksCSV = async (req, res) => {
           }
         }
 
-        // Clean up temp file
         fs.unlinkSync(filePath);
 
         res.json({
@@ -416,7 +401,6 @@ exports.uploadMarksCSV = async (req, res) => {
 
   } catch (error) {
     console.error('Upload marks CSV error:', error);
-    // Clean up temp file if it exists
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
@@ -426,9 +410,6 @@ exports.uploadMarksCSV = async (req, res) => {
 
 // ============ MESSAGE FUNCTIONS ============
 
-// @desc    Get all conversations for teacher
-// @route   GET /api/teacher/conversations
-// @access  Private/Teacher
 exports.getConversations = async (req, res) => {
     try {
         const messages = await Message.findAll({
@@ -439,21 +420,12 @@ exports.getConversations = async (req, res) => {
                 ]
             },
             include: [
-                { 
-                    model: User, 
-                    as: 'Sender', 
-                    attributes: ['id', 'name', 'role'] 
-                },
-                { 
-                    model: User, 
-                    as: 'Receiver', 
-                    attributes: ['id', 'name', 'role'] 
-                }
+                { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
+                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
             ],
             order: [['createdAt', 'DESC']]
         });
         
-        // Group by conversation
         const conversations = {};
         messages.forEach(msg => {
             const otherUserId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
@@ -487,9 +459,6 @@ exports.getConversations = async (req, res) => {
     }
 };
 
-// @desc    Get messages with a specific user
-// @route   GET /api/teacher/messages/:otherUserId
-// @access  Private/Teacher
 exports.getMessages = async (req, res) => {
     try {
         const { otherUserId } = req.params;
@@ -515,9 +484,6 @@ exports.getMessages = async (req, res) => {
     }
 };
 
-// @desc    Mark messages as read
-// @route   PUT /api/teacher/messages/read/:conversationId
-// @access  Private/Teacher
 exports.markMessagesAsRead = async (req, res) => {
     try {
         const { conversationId } = req.params;
@@ -540,14 +506,10 @@ exports.markMessagesAsRead = async (req, res) => {
     }
 };
 
-// @desc    Reply to parent message
-// @route   POST /api/teacher/reply
-// @access  Private/Teacher
 exports.replyToParent = async (req, res) => {
     try {
         const { parentId, message, originalMessageId } = req.body;
         
-        // Create reply message
         const reply = await Message.create({
             senderId: req.user.id,
             receiverId: parentId,
@@ -559,7 +521,6 @@ exports.replyToParent = async (req, res) => {
             }
         });
         
-        // Create alert for parent
         await createAlert({
             userId: parentId,
             role: 'parent',
@@ -574,7 +535,6 @@ exports.replyToParent = async (req, res) => {
             }
         });
         
-        // Real-time notification
         if (global.io) {
             global.io.to(`user-${parentId}`).emit('new-message', {
                 from: req.user.id,
@@ -597,20 +557,15 @@ exports.replyToParent = async (req, res) => {
     }
 };
 
-// @desc    Get today's duty for a teacher
-// @access  Private/Teacher
 exports.getTodayDuty = async (userId) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId } });
     if (!teacher) return null;
 
-    const { DutyRoster } = require('../models');
     const today = new Date().toISOString().split('T')[0];
     
     const roster = await DutyRoster.findOne({
-      where: {
-        date: today
-      }
+      where: { date: today }
     });
 
     if (roster && roster.duties) {
@@ -624,20 +579,15 @@ exports.getTodayDuty = async (userId) => {
   }
 };
 
-// @desc    Delete a student from teacher's class
-// @route   DELETE /api/teacher/students/:studentId
-// @access  Private/Teacher
 exports.deleteStudent = async (req, res) => {
   try {
     const { studentId } = req.params;
     
-    // Find the teacher
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) {
       return res.status(404).json({ success: false, message: 'Teacher not found' });
     }
     
-    // Find the student
     const student = await Student.findByPk(studentId, {
       include: [{ model: User }]
     });
@@ -646,19 +596,14 @@ exports.deleteStudent = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
     
-    // Verify this student belongs to this teacher's class
     if (student.grade !== teacher.classTeacher) {
       return res.status(403).json({ success: false, message: 'This student is not in your class' });
     }
     
-    // Get student name before deletion for notification
     const studentName = student.User.name;
-    const studentUserId = student.userId;
     
-    // Delete the student (this will cascade to User due to CASCADE)
     await student.destroy();
     
-    // Notify admin about the deletion
     const admins = await User.findAll({ 
       where: { role: 'admin', schoolCode: req.user.schoolCode } 
     });
@@ -685,148 +630,7 @@ exports.deleteStudent = async (req, res) => {
   }
 };
 
-// @desc    Get teacher's assignments (classes and subjects they teach)
-// @route   GET /api/teacher/my-assignments
-// @access  Private/Teacher
-exports.getMyAssignments = async (req, res) => {
-  try {
-    const { TeacherSubjectAssignment, Teacher, Class } = require('../models');
-    
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) {
-      return res.status(404).json({ success: false, message: 'Teacher not found' });
-    }
-
-    const assignments = await TeacherSubjectAssignment.findAll({
-      where: {
-        teacherId: teacher.id,
-        academicYear: new Date().getFullYear().toString()
-      },
-      include: [
-        {
-          model: Class,
-          where: { schoolCode: req.user.schoolCode, isActive: true }
-        }
-      ],
-      order: [['subject', 'ASC']]
-    });
-
-    // Find class teacher assignment (where isClassTeacher = true)
-    const classTeacherAssignment = assignments.find(a => a.isClassTeacher);
-    
-    // Get all subject assignments (including class teacher's subjects)
-    const subjectAssignments = assignments.map(a => ({
-      classId: a.classId,
-      className: a.Class?.name,
-      classGrade: a.Class?.grade,
-      subject: a.subject,
-      isClassTeacher: a.isClassTeacher,
-      studentCount: a.Class?.studentCount || 0
-    }));
-
-    res.json({
-      success: true,
-      data: {
-        teacherId: teacher.id,
-        teacherName: req.user.name,
-        classTeacher: classTeacherAssignment ? {
-          classId: classTeacherAssignment.classId,
-          className: classTeacherAssignment.Class?.name,
-          classGrade: classTeacherAssignment.Class?.grade,
-          studentCount: classTeacherAssignment.Class?.studentCount || 0
-        } : null,
-        subjects: subjectAssignments,
-        allSubjects: [...new Set(subjectAssignments.map(s => s.subject))],
-        allClasses: [...new Map(subjectAssignments.map(s => [s.classId, { id: s.classId, name: s.className, grade: s.classGrade }])).values()]
-      }
-    });
-  } catch (error) {
-    console.error('Get my assignments error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Get students for a specific class and subject
-// @route   GET /api/teacher/class-students
-// @access  Private/Teacher
-exports.getClassStudentsForSubject = async (req, res) => {
-  try {
-    const { classId, subject } = req.query;
-    const { TeacherSubjectAssignment, Student, User, Class } = require('../models');
-    
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) {
-      return res.status(404).json({ success: false, message: 'Teacher not found' });
-    }
-
-    // Verify teacher is assigned to this class and subject
-    const assignment = await TeacherSubjectAssignment.findOne({
-      where: {
-        teacherId: teacher.id,
-        classId: parseInt(classId),
-        subject: subject,
-        academicYear: new Date().getFullYear().toString()
-      }
-    });
-
-    if (!assignment) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'You are not assigned to teach this subject in this class' 
-      });
-    }
-
-    // Get the class
-    const classItem = await Class.findOne({
-      where: { id: classId, schoolCode: req.user.schoolCode }
-    });
-
-    if (!classItem) {
-      return res.status(404).json({ success: false, message: 'Class not found' });
-    }
-
-    // Get students for this class
-    let students = await Student.findAll({
-      where: { grade: classItem.grade, status: 'active' },
-      include: [{ model: User, attributes: ['id', 'name', 'email'] }],
-      order: [['createdAt', 'DESC']]
-    });
-
-    // If this is a subject that requires combination (like Biology), filter by subject combination
-    const combinationSubjects = ['Biology', 'Chemistry', 'Physics', 'History', 'Geography', 'Business', 'Agriculture', 'Computer'];
-    if (combinationSubjects.includes(subject) && classItem.grade.includes('Form')) {
-      students = students.filter(s => 
-        s.subjectCombination && s.subjectCombination.includes(subject)
-      );
-    }
-
-    const formattedStudents = students.map(s => ({
-      id: s.id,
-      userId: s.userId,
-      name: s.User?.name || 'Unknown',
-      elimuid: s.elimuid,
-      grade: s.grade,
-      subjectCombination: s.subjectCombination || []
-    }));
-
-    res.json({
-      success: true,
-      data: {
-        classId: classItem.id,
-        className: classItem.name,
-        grade: classItem.grade,
-        subject: subject,
-        students: formattedStudents,
-        studentCount: formattedStudents.length
-      }
-    });
-  } catch (error) {
-    console.error('Get class students error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// src/controllers/teacherController.js - ADD THESE FUNCTIONS
+// ============ NEW FUNCTIONS - FIXED ============
 
 // @desc    Get teacher's assigned class
 // @route   GET /api/teacher/my-class
@@ -847,7 +651,6 @@ exports.getMyClass = async (req, res) => {
     });
 
     if (!classItem) {
-      // Try to find by classTeacher field (legacy)
       if (teacher.classTeacher) {
         const legacyClass = await Class.findOne({
           where: { name: teacher.classTeacher, schoolCode: req.user.schoolCode, isActive: true }
@@ -859,9 +662,8 @@ exports.getMyClass = async (req, res) => {
       return res.json({ success: true, data: null });
     }
 
-    // Get student count for this class
     const studentCount = await Student.count({
-      where: { grade: classItem.name, schoolCode: req.user.schoolCode }
+      where: { grade: classItem.name }
     });
 
     const classData = classItem.toJSON();
@@ -887,30 +689,22 @@ exports.getMySubjects = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher not found' });
     }
 
-    // Get all classes where this teacher is assigned as subject teacher
-    const subjectAssignments = await Class.findAll({
-      where: {
-        schoolCode: req.user.schoolCode,
-        isActive: true,
-        [Op.or]: [
-          { teacherId: teacher.id }, // class teacher
-          { subjectTeachers: { [Op.contains]: [{ teacherId: teacher.id }] } } // subject teacher
-        ]
-      }
+    // Get all classes in the school
+    const allClasses = await Class.findAll({
+      where: { schoolCode: req.user.schoolCode, isActive: true }
     });
 
     // Format subjects with class information
     const subjects = teacher.subjects || [];
     const subjectList = subjects.map(subject => {
-      const classes = subjectAssignments.filter(cls => {
-        // Check if teacher teaches this subject in this class
+      const classes = allClasses.filter(cls => {
         const subjectTeacher = cls.subjectTeachers?.find(st => st.teacherId === teacher.id && st.subject === subject);
-        return subjectTeacher || cls.teacherId === teacher.id; // class teacher teaches all subjects
+        return subjectTeacher || cls.teacherId === teacher.id;
       }).map(cls => ({
         id: cls.id,
         name: cls.name,
         grade: cls.grade,
-        studentCount: 0 // Will be filled later if needed
+        studentCount: 0
       }));
 
       return {
@@ -939,18 +733,16 @@ exports.getTeacherStats = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher not found' });
     }
 
-    // Get students count
     let studentCount = 0;
     let students = [];
     
     if (teacher.classTeacher) {
       students = await Student.findAll({
-        where: { grade: teacher.classTeacher, schoolCode: req.user.schoolCode },
+        where: { grade: teacher.classTeacher },
         include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
       });
       studentCount = students.length;
     } else {
-      // If subject teacher, get students from classes they teach
       const classes = await Class.findAll({
         where: {
           schoolCode: req.user.schoolCode,
@@ -965,14 +757,13 @@ exports.getTeacherStats = async (req, res) => {
       const gradeNames = classes.map(c => c.name);
       if (gradeNames.length > 0) {
         students = await Student.findAll({
-          where: { grade: { [Op.in]: gradeNames }, schoolCode: req.user.schoolCode },
+          where: { grade: { [Op.in]: gradeNames } },
           include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
         });
         studentCount = students.length;
       }
     }
 
-    // Calculate average score for students
     let totalScore = 0;
     let scoreCount = 0;
     for (const student of students) {
@@ -989,7 +780,6 @@ exports.getTeacherStats = async (req, res) => {
     
     const classAverage = scoreCount > 0 ? Math.round(totalScore / scoreCount) : 0;
 
-    // Get marks entered this month
     const startOfMonth = new Date();
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
@@ -1001,7 +791,6 @@ exports.getTeacherStats = async (req, res) => {
       }
     });
 
-    // Get pending tasks (students with no marks this week)
     const startOfWeek = new Date();
     startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
     startOfWeek.setHours(0, 0, 0, 0);
@@ -1035,7 +824,7 @@ exports.getTeacherStats = async (req, res) => {
           elimuid: s.elimuid,
           grade: s.grade,
           average: s.average || 0,
-          attendance: 95 // Default or calculate from Attendance table
+          attendance: 95
         }))
       }
     });
@@ -1073,8 +862,9 @@ exports.getClassStudents = async (req, res) => {
       return res.status(403).json({ success: false, message: 'You do not have access to this class' });
     }
     
+    // FIXED: Use classItem.name (the class name) not teacher.classTeacher
     const students = await Student.findAll({
-      where: { grade: classItem.name, schoolCode: req.user.schoolCode },
+      where: { grade: classItem.name },  // ← FIXED: Use classItem.name
       include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }],
       order: [['createdAt', 'ASC']]
     });
@@ -1086,9 +876,9 @@ exports.getClassStudents = async (req, res) => {
   }
 };
 
-// @desc    Bulk upload students via CSV (class teacher only)
+// @desc    Bulk upload students via CSV
 // @route   POST /api/teacher/students/upload
-// @access  Private/Teacher (class teacher only)
+// @access  Private/Teacher
 exports.uploadStudentsCSV = async (req, res) => {
   try {
     if (!req.files || !req.files.file) {
@@ -1121,13 +911,11 @@ exports.uploadStudentsCSV = async (req, res) => {
         
         for (const row of results) {
           try {
-            // Validate required fields
             if (!row.name || !row.grade) {
               errors.push({ row, error: 'Missing name or grade' });
               continue;
             }
             
-            // Create user
             const user = await User.create({
               name: row.name,
               email: row.parentEmail || null,
@@ -1138,7 +926,6 @@ exports.uploadStudentsCSV = async (req, res) => {
               firstLogin: true
             });
             
-            // Create student
             const student = await Student.create({
               userId: user.id,
               grade: row.grade,
@@ -1149,7 +936,6 @@ exports.uploadStudentsCSV = async (req, res) => {
             elimuids.push({ name: row.name, elimuid: student.elimuid });
             successCount++;
             
-            // Link parent if email provided
             if (row.parentEmail) {
               let parentUser = await User.findOne({
                 where: { email: row.parentEmail, role: 'parent', schoolCode: req.user.schoolCode }
@@ -1183,7 +969,6 @@ exports.uploadStudentsCSV = async (req, res) => {
           }
         }
         
-        // Clean up
         fs.unlinkSync(filePath);
         
         res.json({
@@ -1193,7 +978,7 @@ exports.uploadStudentsCSV = async (req, res) => {
             successCount,
             failedCount: errors.length,
             elimuids,
-            errors: errors.slice(0, 10) // Limit errors for response
+            errors: errors.slice(0, 10)
           }
         });
       });
@@ -1230,7 +1015,6 @@ exports.saveBulkMarks = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Class not found' });
     }
     
-    // Verify teacher has permission for this subject in this class
     const isClassTeacher = classItem.teacherId === teacher.id;
     const isSubjectTeacher = classItem.subjectTeachers?.some(st => st.teacherId === teacher.id && st.subject === subject);
     
@@ -1286,6 +1070,115 @@ exports.saveBulkMarks = async (req, res) => {
     });
   } catch (error) {
     console.error('Bulk marks error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get teacher's assignments
+// @route   GET /api/teacher/my-assignments
+// @access  Private/Teacher
+exports.getMyAssignments = async (req, res) => {
+  try {
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
+
+    const classes = await Class.findAll({
+      where: {
+        schoolCode: req.user.schoolCode,
+        isActive: true,
+        [Op.or]: [
+          { teacherId: teacher.id },
+          { subjectTeachers: { [Op.contains]: [{ teacherId: teacher.id }] } }
+        ]
+      }
+    });
+
+    const classTeacherClass = classes.find(c => c.teacherId === teacher.id);
+    const subjectClasses = classes.filter(c => c.teacherId !== teacher.id);
+
+    res.json({
+      success: true,
+      data: {
+        teacherId: teacher.id,
+        teacherName: req.user.name,
+        classTeacher: classTeacherClass ? {
+          id: classTeacherClass.id,
+          name: classTeacherClass.name,
+          grade: classTeacherClass.grade
+        } : null,
+        subjects: subjectClasses.map(c => ({
+          classId: c.id,
+          className: c.name,
+          grade: c.grade,
+          subject: c.subjectTeachers?.find(st => st.teacherId === teacher.id)?.subject || 'Unknown'
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Get my assignments error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get students for a specific class and subject
+// @route   GET /api/teacher/class-students
+// @access  Private/Teacher
+exports.getClassStudentsForSubject = async (req, res) => {
+  try {
+    const { classId, subject } = req.query;
+    
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
+
+    const classItem = await Class.findOne({
+      where: { id: classId, schoolCode: req.user.schoolCode, isActive: true }
+    });
+
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    const isClassTeacher = classItem.teacherId === teacher.id;
+    const isSubjectTeacher = classItem.subjectTeachers?.some(st => st.teacherId === teacher.id && st.subject === subject);
+
+    if (!isClassTeacher && !isSubjectTeacher) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'You are not assigned to teach this subject in this class' 
+      });
+    }
+
+    const students = await Student.findAll({
+      where: { grade: classItem.name },
+      include: [{ model: User, attributes: ['id', 'name', 'email'] }],
+      order: [['createdAt', 'DESC']]
+    });
+
+    const formattedStudents = students.map(s => ({
+      id: s.id,
+      userId: s.userId,
+      name: s.User?.name || 'Unknown',
+      elimuid: s.elimuid,
+      grade: s.grade
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        classId: classItem.id,
+        className: classItem.name,
+        grade: classItem.grade,
+        subject: subject,
+        students: formattedStudents,
+        studentCount: formattedStudents.length
+      }
+    });
+  } catch (error) {
+    console.error('Get class students error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
