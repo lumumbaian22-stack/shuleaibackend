@@ -344,25 +344,23 @@ exports.assignTeacherToClass = async (req, res) => {
 };
 
 // ============ SUBJECT ASSIGNMENT ============
+// src/controllers/adminController.js
 exports.getClassSubjectAssignments = async (req, res) => {
   try {
     const { classId } = req.params;
-    const classItem = await Class.findOne({ where: { id: classId, schoolCode: req.user.schoolCode } });
-    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
     
+    const classItem = await Class.findOne({
+      where: { id: classId, schoolCode: req.user.schoolCode }
+    });
+    
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+    
+    // Return the subjectTeachers array
     const subjectTeachers = classItem.subjectTeachers || [];
-    const assignments = subjectTeachers.map(st => ({
-      id: st.id || `${st.teacherId}-${st.subject}`,
-      classId: classItem.id,
-      className: classItem.name,
-      subject: st.subject,
-      teacherId: st.teacherId,
-      teacherName: st.teacherName || 'Unknown',
-      assignedAt: st.assignedAt || new Date(),
-      isClassTeacher: st.isClassTeacher || false
-    }));
     
-    res.json({ success: true, data: assignments });
+    res.json({ success: true, data: subjectTeachers });
   } catch (error) {
     console.error('Get class subject assignments error:', error);
     res.status(500).json({ success: false, message: error.message });
