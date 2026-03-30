@@ -512,3 +512,24 @@ exports.getAttendanceStats = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.getClassSubjectAssignments = async (req, res) => {
+  try {
+    const { classId } = req.params;
+
+    const classItem = await Class.findOne({
+      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
+    });
+
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    const subjectTeachers = classItem.subjectTeachers || [];
+
+    res.json({ success: true, data: subjectTeachers });
+  } catch (error) {
+    console.error('Get class subject assignments error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
