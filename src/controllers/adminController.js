@@ -674,3 +674,69 @@ exports.removeSubjectAssignment = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// Add to adminController.js
+exports.getStudentGrades = async (req, res) => {
+  try {
+    const { AcademicRecord, Student } = require('../models');
+    
+    const grades = await AcademicRecord.findAll({
+      where: { schoolCode: req.user.schoolCode },
+      include: [{ model: Student, attributes: ['grade'] }]
+    });
+    
+    // Group by grade
+    const gradeStats = {};
+    grades.forEach(g => {
+      const grade = g.Student?.grade || 'Unknown';
+      if (!gradeStats[grade]) gradeStats[grade] = { count: 0, total: 0 };
+      gradeStats[grade].count++;
+      gradeStats[grade].total += g.score;
+    });
+    
+    const result = Object.entries(gradeStats).map(([grade, stats]) => ({
+      grade,
+      average: stats.count ? Math.round(stats.total / stats.count) : 0,
+      count: stats.count
+    }));
+    
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Get student grades error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getAttendanceStats = async (req, res) => {
+  try {
+    const { Attendance, Student } = require('../models');
+    
+    const attendance = await Attendance.findAll({
+      where: { schoolCode: req.user.schoolCode },
+      include: [{ model: Student, attributes: ['grade'] }]
+    });
+    
+    // Group by grade
+    const attendanceStats = {};
+    attendance.forEach(a => {
+      const grade = a.Student?.grade || 'Unknown';
+      if (!attendanceStats[grade]) attendanceStats[grade] = { present: 0, absent: 0, total: 0 };
+      attendanceStats[grade].total++;
+      if (a.status === 'present') attendanceStats[grade].present++;
+      else if (a.status === 'absent') attendanceStats[grade].absent++;
+    });
+    
+    const result = Object.entries(attendanceStats).map(([grade, stats]) => ({
+      grade,
+      rate: stats.total ? Math.round((stats.present / stats.total) * 100) : 0,
+      present: stats.present,
+      absent: stats.absent,
+      total: stats.total
+    }));
+    
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Get attendance stats error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
