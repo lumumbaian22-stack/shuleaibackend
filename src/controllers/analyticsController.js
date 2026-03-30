@@ -1,4 +1,6 @@
-const { Student, AcademicRecord, Attendance, School, Teacher } = require('../models');
+// src/controllers/analyticsController.js
+const { Op } = require('sequelize');  // ADD THIS - was missing!
+const { Student, AcademicRecord, Attendance, School, Teacher, User } = require('../models');
 const CurriculumAnalyticsEngine = require('../services/analytics/curriculumEngine');
 const moment = require('moment');
 
@@ -25,7 +27,8 @@ exports.getStudentAnalytics = async (req, res) => {
     const student = await Student.findByPk(studentId, { include: [{ model: User }] });
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
 
-    const school = await School.findOne({ where: { code: student.User.schoolCode } });
+    // FIXED: Use schoolId instead of code
+    const school = await School.findOne({ where: { schoolId: student.User.schoolCode } });
     const system = curriculum || school?.system || '844';
     const engine = new CurriculumAnalyticsEngine(system);
 
@@ -75,6 +78,7 @@ exports.getStudentAnalytics = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Get student analytics error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -87,6 +91,7 @@ exports.getClassAnalytics = async (req, res) => {
     const { classId } = req.params; // classId could be grade name
     const { subject } = req.query;
 
+    // FIXED: Use schoolCode from user
     const students = await Student.findAll({
       where: { grade: classId },
       include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
@@ -104,7 +109,7 @@ exports.getClassAnalytics = async (req, res) => {
       return { name: s.User.name, average: avg };
     });
 
-    const overallAvg = studentStats.reduce((a,b) => a + b.average, 0) / studentStats.length || 0;
+    const overallAvg = studentStats.length ? studentStats.reduce((a,b) => a + b.average, 0) / studentStats.length : 0;
 
     res.json({
       success: true,
@@ -116,6 +121,7 @@ exports.getClassAnalytics = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Get class analytics error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -125,12 +131,31 @@ exports.getClassAnalytics = async (req, res) => {
 // @access  Private/Admin
 exports.getSchoolAnalytics = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { code: req.user.schoolCode } });
-    const students = await Student.findAll({ include: [{ model: User, where: { schoolCode: school.code } }] });
-    const teachers = await Teacher.findAll({ include: [{ model: User, where: { schoolCode: school.code } }] });
+    // FIXED: Use schoolId instead of code
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    
+    if (!school) {
+      return res.status(404).json({ success: false, message: 'School not found' });
+    }
 
+    // FIXED: Use school.schoolId instead of school.code
+    const students = await Student.findAll({ 
+      include: [{ 
+        model: User, 
+        where: { schoolCode: school.schoolId } 
+      }] 
+    });
+    
+    const teachers = await Teacher.findAll({ 
+      include: [{ 
+        model: User, 
+        where: { schoolCode: school.schoolId } 
+      }] 
+    });
+
+    // FIXED: Use school.schoolId
     const records = await AcademicRecord.findAll({
-      where: { schoolCode: school.code },
+      where: { schoolCode: school.schoolId },
       include: [{ model: Student }]
     });
 
@@ -150,10 +175,15 @@ exports.getSchoolAnalytics = async (req, res) => {
     const gradeAverages = Object.entries(gradeStats).map(([grade, stat]) => ({
       grade,
       studentCount: stat.count,
-      averageScore: stat.count ? stat.totalScore / stat.count : 0
+      averageScore: stat.count ? Math.round(stat.totalScore / stat.count) : 0
     }));
 
     const overallAvg = records.length ? records.reduce((a,b) => a + b.score, 0) / records.length : 0;
+
+    // FIXED: Use school.schoolId
+    const attendanceCount = await Attendance.count({ 
+      where: { schoolCode: school.schoolId } 
+    });
 
     res.json({
       success: true,
@@ -161,15 +191,16 @@ exports.getSchoolAnalytics = async (req, res) => {
         school: school.name,
         totalStudents: students.length,
         totalTeachers: teachers.length,
-        overallAverage: overallAvg,
+        overallAverage: Math.round(overallAvg),
         gradeAverages,
         recentActivity: {
           academicRecords: records.length,
-          attendanceRecords: await Attendance.count({ where: { schoolCode: school.code } })
+          attendanceRecords: attendanceCount
         }
       }
     });
   } catch (error) {
+    console.error('Get school analytics error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -191,15 +222,18 @@ exports.compareCurriculum = async (req, res) => {
     const systems = ['844', 'cbc', 'british', 'american'];
     systems.forEach(sys => {
       const engine = new CurriculumAnalyticsEngine(sys);
+      const gradeInfo = engine.calculateGrade(avg);
       comparisons[sys] = {
         system: sys,
-        grade: engine.calculateGrade(avg).grade,
-        points: engine.calculateGrade(avg).points || null
+        grade: gradeInfo.grade,
+        points: gradeInfo.points || null,
+        description: gradeInfo.description || ''
       };
     });
 
     res.json({ success: true, data: comparisons });
   } catch (error) {
+    console.error('Compare curriculum error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
