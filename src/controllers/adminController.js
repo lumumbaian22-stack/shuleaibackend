@@ -369,56 +369,74 @@ exports.getClassSubjectAssignments = async (req, res) => {
   }
 };
 
+// src/controllers/adminController.js - Replace this function completely
+
 exports.assignTeacherToSubject = async (req, res) => {
   try {
     const { classId, teacherId, subject, isClassTeacher = false } = req.body;
+    
+    console.log('📝 Assigning teacher to subject:', { classId, teacherId, subject });
+    
     if (!classId || !teacherId || !subject) {
-      return res.status(400).json({ success: false, message: 'Class ID, Teacher ID, and Subject are required' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Class ID, Teacher ID, and Subject are required' 
+      });
     }
     
-    const classItem = await Class.findOne({ where: { id: classId, schoolCode: req.user.schoolCode } });
-    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
+    // Find the class
+    const classItem = await Class.findOne({
+      where: { id: classId, schoolCode: req.user.schoolCode }
+    });
     
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+    
+    // Get teacher name
     const teacher = await Teacher.findOne({
       where: { id: teacherId },
-      include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
+      include: [{ model: User, attributes: ['name'] }]
     });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
     
+    const teacherName = teacher?.User?.name || 'Unknown Teacher';
+    
+    // Get current subject assignments (ensure it's an array)
     let subjectTeachers = classItem.subjectTeachers || [];
+    
+    // Check if assignment already exists
     const existingIndex = subjectTeachers.findIndex(st => st.subject === subject);
     
     const newAssignment = {
       id: Date.now().toString(),
-      teacherId: teacher.id,
-      teacherName: teacher.User?.name || 'Unknown',
+      teacherId: parseInt(teacherId),
+      teacherName: teacherName,
       subject: subject,
-      assignedAt: new Date(),
+      assignedAt: new Date().toISOString(),
       assignedBy: req.user.id,
       isClassTeacher: isClassTeacher
     };
     
     if (existingIndex >= 0) {
+      // Update existing assignment
       subjectTeachers[existingIndex] = { ...subjectTeachers[existingIndex], ...newAssignment };
     } else {
+      // Add new assignment
       subjectTeachers.push(newAssignment);
     }
     
+    // CRITICAL: Save back to the class
     await classItem.update({ subjectTeachers });
     
-    const currentSubjects = teacher.subjects || [];
-    if (!currentSubjects.includes(subject)) {
-      await teacher.update({ subjects: [...currentSubjects, subject] });
-    }
+    // Force a reload to verify
+    const reloaded = await Class.findOne({ where: { id: classId } });
+    console.log('Verified saved data:', reloaded.subjectTeachers);
     
-    await createAlert({
-      userId: teacher.userId, role: 'teacher', type: 'system', severity: 'info',
-      title: 'New Subject Assignment',
-      message: `You have been assigned to teach ${subject} in ${classItem.name}`,
-      data: { classId, subject, class: classItem.name }
+    res.json({ 
+      success: true, 
+      message: `Teacher assigned to ${subject} successfully`,
+      data: newAssignment 
     });
-    
-    res.json({ success: true, message: `Teacher assigned to ${subject} successfully`, data: newAssignment });
   } catch (error) {
     console.error('Assign teacher to subject error:', error);
     res.status(500).json({ success: false, message: error.message });
