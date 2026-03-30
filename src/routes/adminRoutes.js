@@ -33,13 +33,13 @@ router.get('/approvals/pending', teacherSignupController.getPendingApprovals);
 router.post('/teachers/:teacherId/approve', validationRules.approveTeacher, validate, teacherSignupController.approveTeacher);
 
 // ============ CLASS MANAGEMENT ============
-router.get('/classes', classController.getClasses);
-router.post('/classes', classController.createClass);
-router.put('/classes/:id', classController.updateClass);
-router.delete('/classes/:id', classController.deleteClass);
-router.get('/available-teachers', classController.getAvailableTeachers);
-router.post('/classes/:id/assign-teacher', classController.assignTeacherToClass);
-router.post('/classes/:id/remove-teacher', classController.removeTeacherFromClass);
+router.get('/classes', adminController.getClasses);
+router.post('/classes', adminController.createClass);
+router.put('/classes/:id', adminController.updateClass);
+router.delete('/classes/:id', adminController.deleteClass);
+router.get('/available-teachers', adminController.getAvailableTeachers);
+router.post('/classes/:id/assign-teacher', adminController.assignTeacherToClass);
+router.post('/classes/:id/remove-teacher', adminController.removeTeacherFromClass);
 
 // ============ SUBJECT ASSIGNMENTS ============
 router.get('/classes/:classId/subjects', adminController.getClassSubjectAssignments);
@@ -62,5 +62,4 @@ router.post('/duty/adjust', dutyController.manualAdjustDuty);
 router.get('/settings', adminController.getSchoolSettings);
 router.put('/settings', adminController.updateSchoolSettings);
 
-// ============ EXPORT - THIS IS CRITICAL ============
 module.exports = router;
