@@ -4,6 +4,7 @@ const { Op } = require('sequelize');
 // @desc    Get all classes in school
 // @route   GET /api/admin/classes
 // @access  Private/Admin
+// src/controllers/classController.js
 exports.getClasses = async (req, res) => {
   try {
     const classes = await Class.findAll({
@@ -18,7 +19,24 @@ exports.getClasses = async (req, res) => {
       order: [['grade', 'ASC'], ['name', 'ASC']]
     });
     
-    res.json({ success: true, data: classes });
+    // Map to include subjectTeachers
+    const classesWithData = classes.map(cls => ({
+      id: cls.id,
+      name: cls.name,
+      grade: cls.grade,
+      stream: cls.stream,
+      schoolCode: cls.schoolCode,
+      teacherId: cls.teacherId,
+      academicYear: cls.academicYear,
+      isActive: cls.isActive,
+      settings: cls.settings,
+      createdAt: cls.createdAt,
+      updatedAt: cls.updatedAt,
+      subjectTeachers: cls.subjectTeachers || [],  // ← ADD THIS LINE
+      Teacher: cls.Teacher
+    }));
+    
+    res.json({ success: true, data: classesWithData });
   } catch (error) {
     console.error('Get classes error:', error);
     res.status(500).json({ success: false, message: error.message });
