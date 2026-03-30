@@ -1,5 +1,5 @@
-// src/controllers/taskController.js - Using teacherId
-const { Task } = require('../models');
+// src/controllers/taskController.js
+const { Task, User } = require('../models');
 const { createAlert } = require('../services/notificationService');
 
 // @desc    Get user's tasks
@@ -7,8 +7,9 @@ const { createAlert } = require('../services/notificationService');
 // @access  Private
 exports.getTasks = async (req, res) => {
   try {
+    // Use userId column instead of teacherId
     const tasks = await Task.findAll({
-      where: { teacherId: req.user.id },
+      where: { userId: req.user.id },
       order: [['dueDate', 'ASC'], ['createdAt', 'DESC']]
     });
     res.json({ success: true, data: tasks });
@@ -29,8 +30,9 @@ exports.createTask = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Task title is required' });
     }
     
+    // Use userId column instead of teacherId
     const task = await Task.create({
-      teacherId: req.user.id,
+      userId: req.user.id,
       title,
       description: description || null,
       dueDate: dueDate || null,
@@ -74,7 +76,7 @@ exports.updateTask = async (req, res) => {
     const task = await Task.findOne({ 
       where: { 
         id: id,
-        teacherId: req.user.id 
+        userId: req.user.id 
       } 
     });
     
@@ -99,7 +101,7 @@ exports.deleteTask = async (req, res) => {
     const task = await Task.findOne({ 
       where: { 
         id: id,
-        teacherId: req.user.id 
+        userId: req.user.id 
       } 
     });
     
@@ -124,7 +126,7 @@ exports.completeTask = async (req, res) => {
     const task = await Task.findOne({ 
       where: { 
         id: id,
-        teacherId: req.user.id 
+        userId: req.user.id 
       } 
     });
     
