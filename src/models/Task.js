@@ -1,4 +1,4 @@
-// src/models/Task.js - Version with teacherId (matches your database)
+// src/models/Task.js
 module.exports = (sequelize, DataTypes) => {
   const Task = sequelize.define('Task', {
     id: {
@@ -6,7 +6,7 @@ module.exports = (sequelize, DataTypes) => {
       primaryKey: true,
       autoIncrement: true
     },
-    teacherId: {  // Use teacherId to match existing database column
+    userId: {  // Changed from teacherId to userId
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
