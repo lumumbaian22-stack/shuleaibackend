@@ -5,52 +5,41 @@ const { validate, validationRules } = require('../middleware/validation');
 const teacherSignupController = require('../controllers/teacherSignupController');
 const dutyController = require('../controllers/dutyController');
 const adminController = require('../controllers/adminController');
-const classController = require('../controllers/classController');
+const classController = require('../controllers/classController'); // ADD THIS
 
 router.use(protect, authorize('admin', 'super_admin'));
 
-// ============ DASHBOARD ============
-router.get('/dashboard', adminController.getDashboardStats);
-
-// ============ STUDENT MANAGEMENT ============
-router.get('/students', adminController.getAllStudents);
-router.get('/students/:studentId', adminController.getStudentDetails);
+// Add these lines with your other routes
 router.post('/students/:studentId/suspend', adminController.suspendStudent);
 router.post('/students/:studentId/reactivate', adminController.reactivateStudent);
-router.put('/students/:studentId', adminController.updateStudent);
-router.delete('/students/:studentId', adminController.deleteStudent);
+router.get('/students/:studentId', adminController.getStudentDetails);
 
-// ============ TEACHER MANAGEMENT ============
-router.get('/teachers', adminController.getAllTeachers);
-router.put('/teachers/:teacherId', adminController.updateTeacher);
-router.delete('/teachers/:teacherId', adminController.deleteTeacher);
+// Add this with your other routes
+router.get('/dashboard', adminController.getDashboardStats);
 
-// ============ PARENT MANAGEMENT ============
-router.get('/parents', adminController.getAllParents);
-
-// ============ TEACHER APPROVALS ============
-router.get('/approvals/pending', teacherSignupController.getPendingApprovals);
-router.post('/teachers/:teacherId/approve', validationRules.approveTeacher, validate, teacherSignupController.approveTeacher);
-
-// ============ CLASS MANAGEMENT ============
-router.get('/classes', adminController.getClasses);
-router.post('/classes', adminController.createClass);
-router.put('/classes/:id', adminController.updateClass);
-router.delete('/classes/:id', adminController.deleteClass);
-router.get('/available-teachers', adminController.getAvailableTeachers);
-router.post('/classes/:id/assign-teacher', adminController.assignTeacherToClass);
-router.post('/classes/:id/remove-teacher', adminController.removeTeacherFromClass);
-
-// ============ SUBJECT ASSIGNMENTS ============
-router.get('/classes/:classId/subjects', adminController.getClassSubjectAssignments);
-router.post('/classes/subject-assign', adminController.assignTeacherToSubject);
-router.delete('/classes/subject-assign/:assignmentId', adminController.removeSubjectAssignment);
-
-// ============ ANALYTICS & STATS ============
+// Add with your other analytics routes
 router.get('/grades/stats', adminController.getStudentGrades);
 router.get('/attendance/stats', adminController.getAttendanceStats);
 
-// ============ DUTY MANAGEMENT ============
+// Teacher approvals
+router.get('/approvals/pending', teacherSignupController.getPendingApprovals);
+router.post('/teachers/:teacherId/approve', validationRules.approveTeacher, validate, teacherSignupController.approveTeacher);
+
+// Teacher management
+router.get('/teachers', adminController.getAllTeachers);
+router.get('/students', adminController.getAllStudents);
+router.get('/parents', adminController.getAllParents);
+
+// Class management routes - ADD THESE
+router.get('/classes', classController.getClasses);
+router.post('/classes', classController.createClass);
+router.put('/classes/:id', classController.updateClass);
+router.delete('/classes/:id', classController.deleteClass);
+router.get('/available-teachers', classController.getAvailableTeachers);
+router.post('/classes/:id/assign-teacher', classController.assignTeacherToClass);
+router.post('/classes/:id/remove-teacher', classController.removeTeacherFromClass);
+
+// Duty management
 router.post('/duty/generate', dutyController.generateDutyRoster);
 router.get('/duty/stats', dutyController.getDutyStats);
 router.get('/duty/fairness-report', dutyController.getFairnessReport);
@@ -58,8 +47,17 @@ router.get('/duty/understaffed', dutyController.getUnderstaffedAreas);
 router.get('/duty/teacher-workload', dutyController.getTeacherWorkload);
 router.post('/duty/adjust', dutyController.manualAdjustDuty);
 
-// ============ SCHOOL SETTINGS ============
+// School settings
 router.get('/settings', adminController.getSchoolSettings);
 router.put('/settings', adminController.updateSchoolSettings);
+
+// Classes
+router.post('/classes', adminController.createClass);
+router.get('/classes', adminController.getClasses);
+
+// Add these lines
+router.post('/assign-teacher-to-subject', adminController.assignTeacherToSubject);
+router.get('/subject-assignments', adminController.getSubjectAssignments);
+router.delete('/subject-assignments/:id', adminController.removeSubjectAssignment);
 
 module.exports = router;
