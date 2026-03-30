@@ -2,6 +2,28 @@ const { Op } = require('sequelize');
 const { User, Teacher, Student, Parent, School, Alert, Class } = require('../models');
 const { createAlert } = require('../services/notificationService');
 
+// ============ HELPER: SAFE JSON PARSE ============
+function parseSubjectTeachers(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  
+  if (typeof data === 'string') {
+    try {
+      return JSON.parse(data);
+    } catch (e) {
+      console.warn('⚠️ Failed to parse subjectTeachers:', data);
+      return [];
+    }
+  }
+  
+  // If it's already an object
+  if (data && typeof data === 'object') {
+    return Array.isArray(data) ? data : [];
+  }
+  
+  return [];
+}
+
 // ============ DASHBOARD ============
 exports.getDashboardStats = async (req, res) => {
   try {
@@ -254,7 +276,14 @@ exports.getClasses = async (req, res) => {
       include: [{ model: Teacher, include: [{ model: User, attributes: ['id', 'name', 'email'] }] }],
       order: [['grade', 'ASC'], ['name', 'ASC']]
     });
-    res.json({ success: true, data: classes });
+    
+    // Ensure subjectTeachers is parsed
+    const classesWithData = classes.map(cls => ({
+      ...cls.toJSON(),
+      subjectTeachers: parseSubjectTeachers(cls.subjectTeachers)
+    }));
+    
+    res.json({ success: true, data: classesWithData });
   } catch (error) {
     console.error('Get classes error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -267,7 +296,8 @@ exports.createClass = async (req, res) => {
     const newClass = await Class.create({
       name, grade, stream,
       schoolCode: req.user.schoolCode,
-      teacherId: teacherId || null
+      teacherId: teacherId || null,
+      subjectTeachers: []  // Initialize empty array
     });
     res.status(201).json({ success: true, data: newClass });
   } catch (error) {
@@ -344,22 +374,21 @@ exports.assignTeacherToClass = async (req, res) => {
 };
 
 // ============ SUBJECT ASSIGNMENT ============
-// src/controllers/adminController.js
+
 exports.getClassSubjectAssignments = async (req, res) => {
   try {
     const { classId } = req.params;
-    
+
     const classItem = await Class.findOne({
-      where: { id: classId, schoolCode: req.user.schoolCode }
+      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
     });
-    
+
     if (!classItem) {
       return res.status(404).json({ success: false, message: 'Class not found' });
     }
-    
-    // Return the subjectTeachers array
-    const subjectTeachers = classItem.subjectTeachers || [];
-    
+
+    const subjectTeachers = parseSubjectTeachers(classItem.subjectTeachers);
+
     res.json({ success: true, data: subjectTeachers });
   } catch (error) {
     console.error('Get class subject assignments error:', error);
@@ -367,74 +396,83 @@ exports.getClassSubjectAssignments = async (req, res) => {
   }
 };
 
-// src/controllers/adminController.js - Replace this function completely
-
 exports.assignTeacherToSubject = async (req, res) => {
   try {
     const { classId, teacherId, subject, isClassTeacher = false } = req.body;
-    
-    console.log('📝 Assigning teacher to subject:', { classId, teacherId, subject });
-    
+
+    console.log('📝 Assigning teacher:', { classId, teacherId, subject });
+
     if (!classId || !teacherId || !subject) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Class ID, Teacher ID, and Subject are required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Class ID, Teacher ID, and Subject are required'
       });
     }
-    
-    // Find the class
+
+    // Find class
     const classItem = await Class.findOne({
-      where: { id: classId, schoolCode: req.user.schoolCode }
+      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
     });
-    
+
     if (!classItem) {
       return res.status(404).json({ success: false, message: 'Class not found' });
     }
-    
-    // Get teacher name
+
+    // Get teacher
     const teacher = await Teacher.findOne({
-      where: { id: teacherId },
+      where: { id: parseInt(teacherId) },
       include: [{ model: User, attributes: ['name'] }]
     });
-    
-    const teacherName = teacher?.User?.name || 'Unknown Teacher';
-    
-    // Get current subject assignments (ensure it's an array)
-    let subjectTeachers = classItem.subjectTeachers || [];
-    
-    // Check if assignment already exists
-    const existingIndex = subjectTeachers.findIndex(st => st.subject === subject);
-    
+
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
+
+    const teacherName = teacher.User?.name || 'Unknown Teacher';
+
+    // Parse existing subjectTeachers
+    let subjectTeachers = parseSubjectTeachers(classItem.subjectTeachers);
+    console.log('Existing subjectTeachers:', subjectTeachers);
+
+    // Create new assignment
     const newAssignment = {
       id: Date.now().toString(),
       teacherId: parseInt(teacherId),
-      teacherName: teacherName,
-      subject: subject,
+      teacherName,
+      subject,
       assignedAt: new Date().toISOString(),
       assignedBy: req.user.id,
       isClassTeacher: isClassTeacher
     };
-    
+
+    // Check if subject already exists
+    const existingIndex = subjectTeachers.findIndex(st => st.subject === subject);
+
     if (existingIndex >= 0) {
-      // Update existing assignment
       subjectTeachers[existingIndex] = { ...subjectTeachers[existingIndex], ...newAssignment };
+      console.log('Updating existing assignment');
     } else {
-      // Add new assignment
       subjectTeachers.push(newAssignment);
+      console.log('Adding new assignment');
     }
-    
-    // CRITICAL: Save back to the class
-    await classItem.update({ subjectTeachers });
-    
-    // Force a reload to verify
-    const reloaded = await Class.findOne({ where: { id: classId } });
-    console.log('Verified saved data:', reloaded.subjectTeachers);
-    
-    res.json({ 
-      success: true, 
-      message: `Teacher assigned to ${subject} successfully`,
-      data: newAssignment 
+
+    console.log('Saving subjectTeachers:', subjectTeachers);
+
+    // Save as JSON array (don't stringify)
+    await classItem.update({ subjectTeachers: subjectTeachers });
+
+    // Verify
+    const reloaded = await Class.findOne({
+      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
     });
+    console.log('Verified saved data:', reloaded.subjectTeachers);
+
+    res.json({
+      success: true,
+      message: `Teacher assigned to ${subject} successfully`,
+      data: newAssignment
+    });
+
   } catch (error) {
     console.error('Assign teacher to subject error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -444,21 +482,37 @@ exports.assignTeacherToSubject = async (req, res) => {
 exports.removeSubjectAssignment = async (req, res) => {
   try {
     const { assignmentId } = req.params;
-    const classes = await Class.findAll({ where: { schoolCode: req.user.schoolCode } });
-    
+
+    const classes = await Class.findAll({
+      where: { schoolCode: req.user.schoolCode }
+    });
+
     let found = false;
+
     for (const classItem of classes) {
-      const subjectTeachers = classItem.subjectTeachers || [];
+      let subjectTeachers = parseSubjectTeachers(classItem.subjectTeachers);
+
       const newSubjectTeachers = subjectTeachers.filter(st => st.id !== assignmentId);
+
       if (newSubjectTeachers.length !== subjectTeachers.length) {
         await classItem.update({ subjectTeachers: newSubjectTeachers });
         found = true;
         break;
       }
     }
-    
-    if (!found) return res.status(404).json({ success: false, message: 'Assignment not found' });
-    res.json({ success: true, message: 'Teacher removed from subject successfully' });
+
+    if (!found) {
+      return res.status(404).json({
+        success: false,
+        message: 'Assignment not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Teacher removed from subject successfully'
+    });
+
   } catch (error) {
     console.error('Remove subject assignment error:', error);
     res.status(500).json({ success: false, message: error.message });
