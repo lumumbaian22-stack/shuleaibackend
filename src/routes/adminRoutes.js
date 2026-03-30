@@ -12,6 +12,14 @@ router.use(protect, authorize('admin', 'super_admin'));
 // Add these lines with your other routes
 router.post('/students/:studentId/suspend', adminController.suspendStudent);
 router.post('/students/:studentId/reactivate', adminController.reactivateStudent);
+router.get('/students/:studentId', adminController.getStudentDetails);
+
+// Add this with your other routes
+router.get('/dashboard', adminController.getDashboardStats);
+
+// Add with your other analytics routes
+router.get('/grades/stats', adminController.getStudentGrades);
+router.get('/attendance/stats', adminController.getAttendanceStats);
 
 // Teacher approvals
 router.get('/approvals/pending', teacherSignupController.getPendingApprovals);
