@@ -344,16 +344,17 @@ exports.assignTeacherToClass = async (req, res) => {
 };
 
 // ============ SUBJECT ASSIGNMENT ============
-// Add this to your adminController.js - REPLACE the existing assignTeacherToSubject
 exports.assignTeacherToSubject = async (req, res) => {
   try {
     const { classId, teacherId, subject, isClassTeacher = false } = req.body;
 
-    console.log('========== SQL DIRECT VERSION ==========');
-    console.log('classId:', classId);
+    console.log('========== ASSIGNMENT ATTEMPT ==========');
+    console.log('classId:', classId, 'type:', typeof classId);
     console.log('teacherId:', teacherId);
     console.log('subject:', subject);
+    console.log('schoolCode:', req.user.schoolCode);
 
+    // Validate
     if (!classId || !teacherId || !subject) {
       return res.status(400).json({ 
         success: false, 
@@ -361,14 +362,29 @@ exports.assignTeacherToSubject = async (req, res) => {
       });
     }
 
-    // Get teacher name
+    // Find the class
+    const classItem = await Class.findOne({
+      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
+    });
+
+    console.log('Class found:', classItem ? `YES (${classItem.id}, ${classItem.name})` : 'NO');
+
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    // Get teacher
     const teacher = await Teacher.findOne({
       where: { id: parseInt(teacherId) },
       include: [{ model: User, attributes: ['name'] }]
     });
 
     const teacherName = teacher?.User?.name || 'Unknown Teacher';
-    const timestamp = new Date().toISOString();
+    console.log('Teacher name:', teacherName);
+
+    // Get current assignments
+    let existing = classItem.subjectTeachers || [];
+    console.log('Existing count:', existing.length);
 
     // Create new assignment
     const newAssignment = {
@@ -376,24 +392,33 @@ exports.assignTeacherToSubject = async (req, res) => {
       teacherId: parseInt(teacherId),
       teacherName: teacherName,
       subject: subject,
-      assignedAt: timestamp,
+      assignedAt: new Date().toISOString(),
       assignedBy: req.user.id,
       isClassTeacher: isClassTeacher
     };
 
-    const newAssignmentJson = JSON.stringify([newAssignment]);
+    // Add to array
+    existing.push(newAssignment);
+    console.log('New count:', existing.length);
 
-    // Use direct SQL
+    // DIRECT SQL UPDATE - BYPASS SEQUELIZE
     const { sequelize } = require('../models');
-    
-    await sequelize.query(`
+    const query = `
       UPDATE "Classes" 
-      SET "subjectTeachers" = COALESCE("subjectTeachers", '[]'::jsonb) || $1::jsonb
-      WHERE id = $2
-    `, {
-      replacements: [newAssignmentJson, parseInt(classId)],
+      SET "subjectTeachers" = $1::jsonb 
+      WHERE id = $2 AND "schoolCode" = $3
+    `;
+    
+    const result = await sequelize.query(query, {
+      replacements: [JSON.stringify(existing), parseInt(classId), req.user.schoolCode],
       type: sequelize.QueryTypes.UPDATE
     });
+    
+    console.log('SQL Update result:', result);
+
+    // Verify
+    const verify = await Class.findOne({ where: { id: parseInt(classId) } });
+    console.log('VERIFIED - Class now has:', verify.subjectTeachers?.length || 0, 'teachers');
 
     res.json({ 
       success: true, 
@@ -484,27 +509,6 @@ exports.getAttendanceStats = async (req, res) => {
     res.json({ success: true, data: result });
   } catch (error) {
     console.error('Get attendance stats error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-exports.getClassSubjectAssignments = async (req, res) => {
-  try {
-    const { classId } = req.params;
-
-    const classItem = await Class.findOne({
-      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
-    });
-
-    if (!classItem) {
-      return res.status(404).json({ success: false, message: 'Class not found' });
-    }
-
-    const subjectTeachers = classItem.subjectTeachers || [];
-
-    res.json({ success: true, data: subjectTeachers });
-  } catch (error) {
-    console.error('Get class subject assignments error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
