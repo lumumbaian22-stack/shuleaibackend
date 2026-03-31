@@ -482,6 +482,29 @@ exports.removeTeacherFromClass = async (req, res) => {
   }
 };
 
+exports.getClassSubjectAssignments = async (req, res) => {
+  try {
+    const { classId } = req.params;
+
+    const classItem = await Class.findOne({
+      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
+    });
+
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    res.json({
+      success: true,
+      data: classItem.subjectTeachers || []
+    });
+
+  } catch (error) {
+    console.error('Get subject assignments error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // ============ ANALYTICS ============
 exports.getStudentGrades = async (req, res) => {
   try {
