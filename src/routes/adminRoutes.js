@@ -5,7 +5,6 @@ const { validate, validationRules } = require('../middleware/validation');
 const teacherSignupController = require('../controllers/teacherSignupController');
 const dutyController = require('../controllers/dutyController');
 const adminController = require('../controllers/adminController');
-const classController = require('../controllers/classController');
 
 router.use(protect, authorize('admin', 'super_admin'));
 
