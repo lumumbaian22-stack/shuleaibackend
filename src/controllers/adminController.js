@@ -267,8 +267,7 @@ exports.createClass = async (req, res) => {
     const newClass = await Class.create({
       name, grade, stream,
       schoolCode: req.user.schoolCode,
-      teacherId: teacherId || null,
-      subjectTeachers: []
+      teacherId: teacherId || null
     });
     res.status(201).json({ success: true, data: newClass });
   } catch (error) {
@@ -344,54 +343,12 @@ exports.assignTeacherToClass = async (req, res) => {
   }
 };
 
-exports.removeTeacherFromClass = async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const classItem = await Class.findOne({ where: { id, schoolCode: req.user.schoolCode } });
-    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-    
-    const teacherId = classItem.teacherId;
-    await classItem.update({ teacherId: null });
-    
-    if (teacherId) {
-      await Teacher.update({ classTeacher: null }, { where: { id: teacherId } });
-    }
-    
-    res.json({ success: true, message: 'Teacher removed from class successfully' });
-  } catch (error) {
-    console.error('Remove teacher error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
 // ============ SUBJECT ASSIGNMENT ============
-exports.getClassSubjectAssignments = async (req, res) => {
-  try {
-    const { classId } = req.params;
-
-    const classItem = await Class.findOne({
-      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
-    });
-
-    if (!classItem) {
-      return res.status(404).json({ success: false, message: 'Class not found' });
-    }
-
-    const subjectTeachers = classItem.subjectTeachers || [];
-
-    res.json({ success: true, data: subjectTeachers });
-  } catch (error) {
-    console.error('Get class subject assignments error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
 exports.assignTeacherToSubject = async (req, res) => {
   try {
     const { classId, teacherId, subject, isClassTeacher = false } = req.body;
 
-    console.log('========== ASSIGNMENT ATTEMPT ==========');
+    console.log('========== SQL DIRECT VERSION ==========');
     console.log('classId:', classId);
     console.log('teacherId:', teacherId);
     console.log('subject:', subject);
@@ -403,39 +360,52 @@ exports.assignTeacherToSubject = async (req, res) => {
       });
     }
 
-    const classItem = await Class.findOne({
-      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
-    });
-
-    if (!classItem) {
-      return res.status(404).json({ success: false, message: 'Class not found' });
-    }
-
+    // Get teacher name
     const teacher = await Teacher.findOne({
       where: { id: parseInt(teacherId) },
       include: [{ model: User, attributes: ['name'] }]
     });
 
     const teacherName = teacher?.User?.name || 'Unknown Teacher';
+    const timestamp = new Date().toISOString();
 
-    let existing = classItem.subjectTeachers || [];
-    
+    // Create new assignment object
     const newAssignment = {
       id: Date.now().toString(),
       teacherId: parseInt(teacherId),
       teacherName: teacherName,
       subject: subject,
-      assignedAt: new Date().toISOString(),
+      assignedAt: timestamp,
       assignedBy: req.user.id,
       isClassTeacher: isClassTeacher
     };
 
-    existing.push(newAssignment);
-    
-    await classItem.update({ subjectTeachers: existing });
+    // Convert to JSON string
+    const newAssignmentJson = JSON.stringify(newAssignment);
 
-    const verify = await Class.findOne({ where: { id: parseInt(classId) } });
-    console.log('VERIFIED - Class now has:', verify.subjectTeachers?.length || 0, 'teachers');
+    // Use direct SQL to append to the array
+    const { sequelize } = require('../models');
+    
+    await sequelize.query(`
+      UPDATE "Classes" 
+      SET "subjectTeachers" = COALESCE("subjectTeachers", '[]'::jsonb) || $1::jsonb
+      WHERE id = $2
+    `, {
+      replacements: [newAssignmentJson, parseInt(classId)],
+      type: sequelize.QueryTypes.UPDATE
+    });
+
+    console.log('✅ SQL UPDATE executed');
+
+    // Verify
+    const verify = await sequelize.query(`
+      SELECT "subjectTeachers" FROM "Classes" WHERE id = $1
+    `, {
+      replacements: [parseInt(classId)],
+      type: sequelize.QueryTypes.SELECT
+    });
+    
+    console.log('Verified class now has:', verify[0]?.subjectTeachers?.length || 0, 'teachers');
 
     res.json({ 
       success: true, 
@@ -526,6 +496,27 @@ exports.getAttendanceStats = async (req, res) => {
     res.json({ success: true, data: result });
   } catch (error) {
     console.error('Get attendance stats error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getClassSubjectAssignments = async (req, res) => {
+  try {
+    const { classId } = req.params;
+
+    const classItem = await Class.findOne({
+      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
+    });
+
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    const subjectTeachers = classItem.subjectTeachers || [];
+
+    res.json({ success: true, data: subjectTeachers });
+  } catch (error) {
+    console.error('Get class subject assignments error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
