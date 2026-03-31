@@ -344,6 +344,7 @@ exports.assignTeacherToClass = async (req, res) => {
 };
 
 // ============ SUBJECT ASSIGNMENT ============
+// Add this to your adminController.js - REPLACE the existing assignTeacherToSubject
 exports.assignTeacherToSubject = async (req, res) => {
   try {
     const { classId, teacherId, subject, isClassTeacher = false } = req.body;
@@ -369,7 +370,7 @@ exports.assignTeacherToSubject = async (req, res) => {
     const teacherName = teacher?.User?.name || 'Unknown Teacher';
     const timestamp = new Date().toISOString();
 
-    // Create new assignment object
+    // Create new assignment
     const newAssignment = {
       id: Date.now().toString(),
       teacherId: parseInt(teacherId),
@@ -380,10 +381,9 @@ exports.assignTeacherToSubject = async (req, res) => {
       isClassTeacher: isClassTeacher
     };
 
-    // Convert to JSON string
-    const newAssignmentJson = JSON.stringify(newAssignment);
+    const newAssignmentJson = JSON.stringify([newAssignment]);
 
-    // Use direct SQL to append to the array
+    // Use direct SQL
     const { sequelize } = require('../models');
     
     await sequelize.query(`
@@ -394,18 +394,6 @@ exports.assignTeacherToSubject = async (req, res) => {
       replacements: [newAssignmentJson, parseInt(classId)],
       type: sequelize.QueryTypes.UPDATE
     });
-
-    console.log('✅ SQL UPDATE executed');
-
-    // Verify
-    const verify = await sequelize.query(`
-      SELECT "subjectTeachers" FROM "Classes" WHERE id = $1
-    `, {
-      replacements: [parseInt(classId)],
-      type: sequelize.QueryTypes.SELECT
-    });
-    
-    console.log('Verified class now has:', verify[0]?.subjectTeachers?.length || 0, 'teachers');
 
     res.json({ 
       success: true, 
