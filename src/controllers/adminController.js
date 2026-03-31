@@ -456,6 +456,32 @@ exports.removeSubjectAssignment = async (req, res) => {
   }
 };
 
+exports.removeTeacherFromClass = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const classItem = await Class.findOne({
+      where: { id, schoolCode: req.user.schoolCode }
+    });
+
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    // Remove teacher
+    await classItem.update({ teacherId: null });
+
+    res.json({
+      success: true,
+      message: `Teacher removed from ${classItem.name}`
+    });
+
+  } catch (error) {
+    console.error('Remove teacher from class error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // ============ ANALYTICS ============
 exports.getStudentGrades = async (req, res) => {
   try {
