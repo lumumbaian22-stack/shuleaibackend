@@ -4,6 +4,7 @@ const moment = require('moment');
 const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
 const { createAlert, createBulkAlerts } = require('../services/notificationService');
 const dutyFairness = require('../utils/dutyFairness');
+const { User, Teacher, School, DutyRoster } = require('../models');
 
 // ============ HELPER FUNCTIONS (Define these FIRST) ============
 
