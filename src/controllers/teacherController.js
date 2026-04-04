@@ -67,14 +67,40 @@ exports.getMyStudents = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher profile not found' });
     }
 
-    let students = [];
+    // Collect all class names where this teacher teaches (either as class teacher or subject teacher)
+    let classNames = [];
+    
+    // 1. If teacher is a class teacher, add that class
     if (teacher.classTeacher) {
-      students = await Student.findAll({
-        where: { grade: teacher.classTeacher },
-        include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
-      });
+      classNames.push(teacher.classTeacher);
     }
-
+    
+    // 2. Find all classes where teacher appears in subjectTeachers array
+    const classes = await Class.findAll({
+      where: { schoolCode: req.user.schoolCode, isActive: true }
+    });
+    
+    for (const cls of classes) {
+      if (cls.subjectTeachers && Array.isArray(cls.subjectTeachers)) {
+        if (cls.subjectTeachers.some(st => st.teacherId === teacher.id)) {
+          classNames.push(cls.name);
+        }
+      }
+    }
+    
+    // Remove duplicates
+    classNames = [...new Set(classNames)];
+    
+    if (classNames.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+    
+    // Fetch all students in those classes
+    const students = await Student.findAll({
+      where: { grade: { [Op.in]: classNames } },
+      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+    });
+    
     res.json({ success: true, data: students });
   } catch (error) {
     console.error('Get my students error:', error);
