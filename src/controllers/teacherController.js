@@ -937,10 +937,14 @@ exports.uploadStudentsCSV = async (req, res) => {
         const defaultPassword = 'Student123!';
         let successCount = 0;
         
+        // Use the teacher's own class for all uploaded students
+        const targetGrade = teacher.classTeacher;
+        
         for (const row of results) {
           try {
-            if (!row.name || !row.grade) {
-              errors.push({ row, error: 'Missing name or grade' });
+            // Name is required; grade is ignored (we use teacher's class)
+            if (!row.name) {
+              errors.push({ row, error: 'Missing name' });
               continue;
             }
             
@@ -956,7 +960,7 @@ exports.uploadStudentsCSV = async (req, res) => {
             
             const student = await Student.create({
               userId: user.id,
-              grade: row.grade,
+              grade: targetGrade,  // ← Override with teacher's class
               dateOfBirth: row.dob || row.dateOfBirth || null,
               gender: row.gender || null
             });
