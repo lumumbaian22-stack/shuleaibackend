@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { User, Teacher, School, DutyRoster } = require('../models');
+const { User, Teacher, School, DutyRoster, Alert } = require('../models');
 const moment = require('moment');
 const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
 const { createAlert } = require('../services/notificationService');
@@ -281,10 +281,14 @@ exports.getFairnessReport = async (req, res) => {
       return res.status(404).json({ success: false, message: 'School not found' });
     }
 
-    const teachers = await Teacher.findAll({
-      where: { approvalStatus: 'approved' },
-      include: [{ model: User, attributes: ['name', 'email'] }]
-    });
+   const teachers = await Teacher.findAll({
+    where: { approvalStatus: 'approved' },
+    include: [{ 
+        model: User, 
+        where: { schoolCode: school.schoolId },   // ← ADD THIS
+        attributes: ['name', 'email'] 
+    }]
+});
 
     const startOfMonth = moment().startOf('month').format('YYYY-MM-DD');
     const endOfMonth = moment().endOf('month').format('YYYY-MM-DD');
@@ -481,10 +485,14 @@ exports.getTeacherWorkload = async (req, res) => {
       return res.status(404).json({ success: false, message: 'School not found' });
     }
     
-    const teachers = await Teacher.findAll({
-      where: { approvalStatus: 'approved' },
-      include: [{ model: User, attributes: ['name', 'email'] }]
-    });
+   const teachers = await Teacher.findAll({
+    where: { approvalStatus: 'approved' },
+    include: [{ 
+        model: User, 
+        where: { schoolCode: school.schoolId },   // ← ADD THIS
+        attributes: ['name', 'email'] 
+    }]
+});
 
     const workload = teachers.map(teacher => ({
       teacherId: teacher.id,
