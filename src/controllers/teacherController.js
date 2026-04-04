@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');
 const { Op } = require('sequelize');
-const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster } = require('../models');
+const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School } = require('../models');
 const { createAlert } = require('../services/notificationService');
 
 // ============ EXISTING FUNCTIONS (keep your existing ones, they work) ============
@@ -588,10 +588,14 @@ exports.getTodayDuty = async (userId) => {
     const teacher = await Teacher.findOne({ where: { userId } });
     if (!teacher) return null;
 
+    // Get the teacher's school to filter duty roster
+    const school = await School.findOne({ where: { schoolId: teacher.User.schoolCode } });
+    if (!school) return null;
+
     const today = new Date().toISOString().split('T')[0];
     
     const roster = await DutyRoster.findOne({
-      where: { date: today }
+      where: { schoolId: school.schoolId, date: today }
     });
 
     if (roster && roster.duties) {
@@ -751,43 +755,41 @@ exports.getMySubjects = async (req, res) => {
 // @access  Private/Teacher
 exports.getTeacherStats = async (req, res) => {
   try {
-    const teacher = await Teacher.findOne({ 
-      where: { userId: req.user.id }
-    });
-    
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) {
       return res.status(404).json({ success: false, message: 'Teacher not found' });
     }
 
-    let studentCount = 0;
-    let students = [];
+    // Collect all class names where this teacher teaches (same logic as getMyStudents)
+    let classNames = [];
     
+    // 1. If teacher is a class teacher, add that class
     if (teacher.classTeacher) {
+      classNames.push(teacher.classTeacher);
+    }
+    
+    // 2. Find all classes where teacher appears in subjectTeachers array
+    const allClasses = await Class.findAll({
+      where: { schoolCode: req.user.schoolCode, isActive: true }
+    });
+    
+    for (const cls of allClasses) {
+      if (cls.subjectTeachers && Array.isArray(cls.subjectTeachers)) {
+        if (cls.subjectTeachers.some(st => st.teacherId === teacher.id)) {
+          classNames.push(cls.name);
+        }
+      }
+    }
+    
+    // Remove duplicates
+    classNames = [...new Set(classNames)];
+    
+    let students = [];
+    if (classNames.length > 0) {
       students = await Student.findAll({
-        where: { grade: teacher.classTeacher },
+        where: { grade: { [Op.in]: classNames } },
         include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
       });
-      studentCount = students.length;
-    } else {
-      const classes = await Class.findAll({
-        where: {
-          schoolCode: req.user.schoolCode,
-          isActive: true,
-          [Op.or]: [
-            { teacherId: teacher.id },
-            { subjectTeachers: { [Op.contains]: [{ teacherId: teacher.id }] } }
-          ]
-        }
-      });
-      
-      const gradeNames = classes.map(c => c.name);
-      if (gradeNames.length > 0) {
-        students = await Student.findAll({
-          where: { grade: { [Op.in]: gradeNames } },
-          include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
-        });
-        studentCount = students.length;
-      }
     }
 
     let totalScore = 0;
@@ -836,7 +838,7 @@ exports.getTeacherStats = async (req, res) => {
     res.json({ 
       success: true, 
       data: {
-        studentCount,
+        studentCount: students.length,
         classAverage,
         subjects: teacher.subjects?.length || 0,
         classTeacher: teacher.classTeacher || null,
