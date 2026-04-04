@@ -67,20 +67,23 @@ exports.getMyStudents = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher profile not found' });
     }
 
-    // Collect all class names where this teacher teaches (either as class teacher or subject teacher)
-    let classNames = [];
+    // First, find the class where this teacher is the class teacher (via Class.teacherId)
+    const classItem = await Class.findOne({
+      where: { teacherId: teacher.id, schoolCode: req.user.schoolCode, isActive: true }
+    });
     
-    // 1. If teacher is a class teacher, add that class
-    if (teacher.classTeacher) {
+    let classNames = [];
+    if (classItem) {
+      classNames.push(classItem.name);
+    } else if (teacher.classTeacher) {
       classNames.push(teacher.classTeacher);
     }
     
-    // 2. Find all classes where teacher appears in subjectTeachers array
-    const classes = await Class.findAll({
+    // Also add classes where teacher is a subject teacher
+    const allClasses = await Class.findAll({
       where: { schoolCode: req.user.schoolCode, isActive: true }
     });
-    
-    for (const cls of classes) {
+    for (const cls of allClasses) {
       if (cls.subjectTeachers && Array.isArray(cls.subjectTeachers)) {
         if (cls.subjectTeachers.some(st => st.teacherId === teacher.id)) {
           classNames.push(cls.name);
@@ -88,14 +91,12 @@ exports.getMyStudents = async (req, res) => {
       }
     }
     
-    // Remove duplicates
     classNames = [...new Set(classNames)];
     
     if (classNames.length === 0) {
       return res.json({ success: true, data: [] });
     }
     
-    // Fetch all students in those classes
     const students = await Student.findAll({
       where: { grade: { [Op.in]: classNames } },
       include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
