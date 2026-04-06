@@ -1215,3 +1215,70 @@ exports.getClassStudentsForSubject = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Get teacher's subject performance and attendance trend
+// @route   GET /api/teacher/performance
+// @access  Private/Teacher
+exports.getPerformanceData = async (req, res) => {
+  try {
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
+    // Collect class names where teacher teaches
+    let classNames = [];
+    if (teacher.classTeacher) classNames.push(teacher.classTeacher);
+    const allClasses = await Class.findAll({ where: { schoolCode: req.user.schoolCode, isActive: true } });
+    for (const cls of allClasses) {
+      if (cls.subjectTeachers?.some(st => st.teacherId === teacher.id)) {
+        classNames.push(cls.name);
+      }
+    }
+    classNames = [...new Set(classNames)];
+    if (classNames.length === 0) {
+      return res.json({ success: true, data: { subjectAverages: [], attendanceTrend: [] } });
+    }
+
+    // Students in those classes
+    const students = await Student.findAll({ where: { grade: { [Op.in]: classNames } } });
+    const studentIds = students.map(s => s.id);
+
+    // Subject averages
+    const records = await AcademicRecord.findAll({ where: { studentId: { [Op.in]: studentIds } } });
+    const subjectScores = {};
+    records.forEach(rec => {
+      if (!subjectScores[rec.subject]) subjectScores[rec.subject] = { total: 0, count: 0 };
+      subjectScores[rec.subject].total += rec.score;
+      subjectScores[rec.subject].count++;
+    });
+    const subjectAverages = Object.entries(subjectScores).map(([subject, data]) => ({
+      subject,
+      average: Math.round(data.total / data.count)
+    }));
+
+    // Attendance trend (last 7 days)
+    const startDate = moment().subtract(6, 'days').format('YYYY-MM-DD');
+    const attendanceRecords = await Attendance.findAll({
+      where: { studentId: { [Op.in]: studentIds }, date: { [Op.gte]: startDate } }
+    });
+    const dailyStats = {};
+    for (let i = 0; i < 7; i++) {
+      const date = moment().subtract(6 - i, 'days').format('YYYY-MM-DD');
+      dailyStats[date] = { present: 0, total: 0 };
+    }
+    attendanceRecords.forEach(att => {
+      if (dailyStats[att.date]) {
+        dailyStats[att.date].total++;
+        if (att.status === 'present') dailyStats[att.date].present++;
+      }
+    });
+    const attendanceTrend = Object.entries(dailyStats).map(([date, stats]) => ({
+      date,
+      rate: stats.total ? Math.round((stats.present / stats.total) * 100) : 0
+    }));
+
+    res.json({ success: true, data: { subjectAverages, attendanceTrend } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
