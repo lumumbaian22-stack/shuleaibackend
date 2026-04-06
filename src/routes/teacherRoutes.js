@@ -50,4 +50,6 @@ router.post('/tasks', taskController.createTask);
 router.put('/tasks/:taskId', taskController.updateTask);
 router.delete('/tasks/:taskId', taskController.deleteTask);
 
+router.get('/performance', teacherController.getPerformanceData);
+
 module.exports = router;
