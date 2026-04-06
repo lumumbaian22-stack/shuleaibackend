@@ -9,42 +9,24 @@ const dutyFairness = require('../utils/dutyFairness');
 
 async function checkUnderstaffedDays(schoolId, startDate, endDate) {
   const rosters = await DutyRoster.findAll({
-    where: {
-      schoolId,
-      date: { [Op.between]: [startDate, endDate] }
-    }
+    where: { schoolId, date: { [Op.between]: [startDate, endDate] } }
   });
-
-  const understaffedDays = [];
   const requiredPerArea = { morning: 2, lunch: 3, afternoon: 2 };
-
+  const understaffedDays = [];
   rosters.forEach(roster => {
     const areaCount = {};
-    roster.duties.forEach(d => {
-      areaCount[d.type] = (areaCount[d.type] || 0) + 1;
-    });
-
+    roster.duties.forEach(d => { areaCount[d.type] = (areaCount[d.type] || 0) + 1; });
     const missing = [];
     Object.entries(requiredPerArea).forEach(([area, required]) => {
-      if ((areaCount[area] || 0) < required) {
-        missing.push(area);
-      }
+      if ((areaCount[area] || 0) < required) missing.push(area);
     });
-
-    if (missing.length > 0) {
-      understaffedDays.push({
-        date: roster.date,
-        missingAreas: missing
-      });
-    }
+    if (missing.length > 0) understaffedDays.push({ date: roster.date, missingAreas: missing });
   });
-
   return understaffedDays;
 }
 
 function generateRecommendations(teacherStats, departmentStats) {
   const recommendations = [];
-
   const avgDuties = teacherStats.reduce((a, b) => a + b.scheduled, 0) / teacherStats.length || 0;
   const overworked = teacherStats.filter(t => t.scheduled > avgDuties * 1.5);
   if (overworked.length > 0) {
@@ -54,7 +36,6 @@ function generateRecommendations(teacherStats, departmentStats) {
       teachers: overworked.map(t => t.teacherName)
     });
   }
-
   Object.entries(departmentStats).forEach(([dept, stats]) => {
     const deptAvg = stats.totalDuties / stats.teachers;
     if (deptAvg > 10) {
@@ -65,7 +46,6 @@ function generateRecommendations(teacherStats, departmentStats) {
       });
     }
   });
-
   return recommendations;
 }
 
@@ -74,18 +54,12 @@ function generateRecommendations(teacherStats, departmentStats) {
 exports.getDutyStats = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
     const startOfMonth = moment().startOf('month');
     const endOfMonth = moment().endOf('month');
-
     const rosters = await DutyRoster.findAll({
-      where: {
-        schoolId: school.schoolId,
-        date: { [Op.between]: [startOfMonth.format('YYYY-MM-DD'), endOfMonth.format('YYYY-MM-DD')] }
-      }
+      where: { schoolId: school.schoolId, date: { [Op.between]: [startOfMonth.format('YYYY-MM-DD'), endOfMonth.format('YYYY-MM-DD')] } }
     });
 
     const teachers = await Teacher.findAll({
@@ -107,7 +81,6 @@ exports.getDutyStats = async (req, res) => {
         };
       })
     };
-
     res.json({ success: true, data: stats });
   } catch (error) {
     console.error('Get duty stats error:', error);
@@ -119,20 +92,16 @@ exports.generateDutyRoster = async (req, res) => {
   try {
     const { startDate, endDate, type = 'auto' } = req.body;
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
     
     const start = moment(startDate || new Date());
     const end = moment(endDate || moment().add(7, 'days'));
     const days = end.diff(start, 'days') + 1;
-
     const dutySlots = ['morning', 'lunch', 'afternoon'];
     const rosters = [];
     const alerts = [];
     const understaffedAlerts = [];
 
-    // Reset weekly counts if Monday (FIXED: use loop instead of nested JSON update)
     if (moment().day() === 1) {
       const teachers = await Teacher.findAll({ where: { approvalStatus: 'approved' } });
       for (const teacher of teachers) {
@@ -144,30 +113,17 @@ exports.generateDutyRoster = async (req, res) => {
     for (let i = 0; i < days; i++) {
       const currentDate = moment(start).add(i, 'days');
       if (currentDate.day() === 0) continue;
-
       const dateStr = currentDate.format('YYYY-MM-DD');
-      const dayOfWeek = currentDate.format('dddd').toLowerCase();
-
-      const existing = await DutyRoster.findOne({
-        where: { schoolId: school.schoolId, date: dateStr }
-      });
+      const existing = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: dateStr } });
       if (existing) {
         rosters.push(existing);
         continue;
       }
-
       const dayDuties = [];
 
       for (const slot of dutySlots) {
-        const required = school.settings?.dutyManagement?.teachersPerSlot?.[slot] || 
-                        (slot === 'lunch' ? 3 : 2);
-
-        const { assigned, conflicts, shortage } = await dutyFairness.assignDutyFairly(
-          school.schoolId,
-          dateStr,
-          slot,
-          required
-        );
+        const required = school.settings?.dutyManagement?.teachersPerSlot?.[slot] || (slot === 'lunch' ? 3 : 2);
+        const { assigned, conflicts, shortage } = await dutyFairness.assignDutyFairly(school.schoolId, dateStr, slot, required);
 
         assigned.forEach(teacher => {
           dayDuties.push({
@@ -178,9 +134,7 @@ exports.generateDutyRoster = async (req, res) => {
             timeSlot: DUTY_TIME_SLOTS[slot],
             status: 'scheduled'
           });
-
-          dutyFairness.updateTeacherDutyStats(teacher.id, 'assign');
-
+          dutyFairness.updateTeacherDutyStats(teacher.id, 'assign', slot);
           alerts.push({
             userId: teacher.User?.id,
             role: 'teacher',
@@ -193,13 +147,7 @@ exports.generateDutyRoster = async (req, res) => {
         });
 
         if (shortage > 0) {
-          understaffedAlerts.push({
-            date: dateStr,
-            slot,
-            required,
-            assigned: assigned.length,
-            shortage
-          });
+          understaffedAlerts.push({ date: dateStr, slot, required, assigned: assigned.length, shortage });
         }
       }
 
@@ -209,38 +157,20 @@ exports.generateDutyRoster = async (req, res) => {
           date: dateStr,
           duties: dayDuties,
           createdBy: req.user.id,
-          metadata: { 
-            generationMethod: type,
-            generatedAt: new Date()
-          }
+          metadata: { generationMethod: type, generatedAt: new Date() }
         });
         rosters.push(roster);
       }
     }
 
-    if (alerts.length > 0) {
-      await Alert.bulkCreate(alerts);
-    }
+    if (alerts.length > 0) await Alert.bulkCreate(alerts);
 
-    const understaffed = await dutyFairness.checkUnderstaffedAreas(
-      school.schoolId,
-      moment().format('YYYY-MM-DD')
-    );
-
+    const understaffed = await dutyFairness.checkUnderstaffedAreas(school.schoolId, moment().format('YYYY-MM-DD'));
     if (understaffed.length > 0) {
-      const admins = await User.findAll({ 
-        where: { 
-          role: 'admin', 
-          schoolCode: school.schoolId 
-        } 
-      });
-
+      const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.schoolId } });
       for (const admin of admins) {
         await createAlert({
-          userId: admin.id,
-          role: 'admin',
-          type: 'duty',
-          severity: 'warning',
+          userId: admin.id, role: 'admin', type: 'duty', severity: 'warning',
           title: 'Understaffed Areas Detected',
           message: `${understaffed.length} areas need more teachers`,
           data: { understaffed }
@@ -255,19 +185,7 @@ exports.generateDutyRoster = async (req, res) => {
       });
     }
 
-    res.json({ 
-      success: true, 
-      message: `Generated ${rosters.length} rosters`, 
-      data: {
-        rosters,
-        understaffed: understaffedAlerts,
-        stats: {
-          totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0),
-          totalAlerts: alerts.length,
-          understaffedCount: understaffedAlerts.length
-        }
-      }
-    });
+    res.json({ success: true, message: `Generated ${rosters.length} rosters`, data: { rosters, understaffed: understaffedAlerts, stats: { totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0), totalAlerts: alerts.length, understaffedCount: understaffedAlerts.length } } });
   } catch (error) {
     console.error('Duty generation error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -277,38 +195,24 @@ exports.generateDutyRoster = async (req, res) => {
 exports.getFairnessReport = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
-   const teachers = await Teacher.findAll({
-    where: { approvalStatus: 'approved' },
-    include: [{ 
-        model: User, 
-        where: { schoolCode: school.schoolId },   // ← ADD THIS
-        attributes: ['name', 'email'] 
-    }]
-});
+    const teachers = await Teacher.findAll({
+      where: { approvalStatus: 'approved' },
+      include: [{ model: User, where: { schoolCode: school.schoolId }, attributes: ['name', 'email'] }]
+    });
 
     const startOfMonth = moment().startOf('month').format('YYYY-MM-DD');
     const endOfMonth = moment().endOf('month').format('YYYY-MM-DD');
-
     const rosters = await DutyRoster.findAll({
-      where: {
-        schoolId: school.schoolId,
-        date: { [Op.between]: [startOfMonth, endOfMonth] }
-      }
+      where: { schoolId: school.schoolId, date: { [Op.between]: [startOfMonth, endOfMonth] } }
     });
 
     const teacherStats = teachers.map(teacher => {
-      const teacherDuties = rosters.flatMap(r => 
-        r.duties.filter(d => d.teacherId === teacher.id)
-      );
-
+      const teacherDuties = rosters.flatMap(r => r.duties.filter(d => d.teacherId === teacher.id));
       const completed = teacherDuties.filter(d => d.status === 'completed').length;
       const missed = teacherDuties.filter(d => d.status === 'missed').length;
       const scheduled = teacherDuties.length;
-
       return {
         teacherId: teacher.id,
         teacherName: teacher.User?.name || 'Unknown',
@@ -319,6 +223,7 @@ exports.getFairnessReport = async (req, res) => {
         completionRate: scheduled ? ((completed / scheduled) * 100).toFixed(1) : 0,
         monthlyDutyCount: teacher.statistics?.monthlyDutyCount || 0,
         reliabilityScore: teacher.statistics?.reliabilityScore || 100,
+        points: teacher.statistics?.points || 0,
         preferences: teacher.dutyPreferences
       };
     });
@@ -326,14 +231,7 @@ exports.getFairnessReport = async (req, res) => {
     const departmentStats = {};
     teacherStats.forEach(stat => {
       const dept = stat.department;
-      if (!departmentStats[dept]) {
-        departmentStats[dept] = {
-          teachers: 0,
-          totalDuties: 0,
-          completedDuties: 0,
-          missedDuties: 0
-        };
-      }
+      if (!departmentStats[dept]) departmentStats[dept] = { teachers: 0, totalDuties: 0, completedDuties: 0, missedDuties: 0 };
       departmentStats[dept].teachers++;
       departmentStats[dept].totalDuties += stat.scheduled;
       departmentStats[dept].completedDuties += stat.completed;
@@ -349,11 +247,7 @@ exports.getFairnessReport = async (req, res) => {
     res.json({
       success: true,
       data: {
-        period: {
-          month: moment().format('MMMM YYYY'),
-          start: startOfMonth,
-          end: endOfMonth
-        },
+        period: { month: moment().format('MMMM YYYY'), start: startOfMonth, end: endOfMonth },
         summary: {
           totalTeachers: teachers.length,
           totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0),
@@ -375,65 +269,31 @@ exports.manualAdjustDuty = async (req, res) => {
   try {
     const { date, teacherId, newTeacherId, dutyType, reason } = req.body;
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
-    const roster = await DutyRoster.findOne({
-      where: { schoolId: school.schoolId, date }
-    });
+    const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date } });
+    if (!roster) return res.status(404).json({ success: false, message: 'Roster not found' });
 
-    if (!roster) {
-      return res.status(404).json({ success: false, message: 'Roster not found' });
-    }
-
-    const dutyIndex = roster.duties.findIndex(
-      d => d.teacherId === parseInt(teacherId) && d.type === dutyType
-    );
-
-    if (dutyIndex === -1) {
-      return res.status(404).json({ success: false, message: 'Duty not found' });
-    }
+    const dutyIndex = roster.duties.findIndex(d => d.teacherId === parseInt(teacherId) && d.type === dutyType);
+    if (dutyIndex === -1) return res.status(404).json({ success: false, message: 'Duty not found' });
 
     const oldTeacherId = roster.duties[dutyIndex].teacherId;
-    
     roster.duties[dutyIndex].teacherId = parseInt(newTeacherId);
     roster.duties[dutyIndex].teacherName = req.body.newTeacherName;
     roster.duties[dutyIndex].adjustedBy = req.user.id;
     roster.duties[dutyIndex].adjustedAt = new Date();
     roster.duties[dutyIndex].adjustmentReason = reason;
-
     await roster.save();
 
     await dutyFairness.updateTeacherDutyStats(oldTeacherId, 'unassign');
-    await dutyFairness.updateTeacherDutyStats(newTeacherId, 'assign');
+    await dutyFairness.updateTeacherDutyStats(newTeacherId, 'assign', dutyType);
 
-    const alerts = [
-      {
-        userId: oldTeacherId,
-        role: 'teacher',
-        type: 'duty',
-        severity: 'info',
-        title: 'Duty Adjustment',
-        message: `Your duty on ${moment(date).format('MMM Do')} has been reassigned.`
-      },
-      {
-        userId: newTeacherId,
-        role: 'teacher',
-        type: 'duty',
-        severity: 'info',
-        title: 'New Duty Assignment',
-        message: `You have been assigned to ${dutyType} duty on ${moment(date).format('MMM Do')}.`
-      }
-    ];
+    await Alert.bulkCreate([
+      { userId: oldTeacherId, role: 'teacher', type: 'duty', severity: 'info', title: 'Duty Adjustment', message: `Your duty on ${moment(date).format('MMM Do')} has been reassigned.` },
+      { userId: newTeacherId, role: 'teacher', type: 'duty', severity: 'info', title: 'New Duty Assignment', message: `You have been assigned to ${dutyType} duty on ${moment(date).format('MMM Do')}.` }
+    ]);
 
-    await Alert.bulkCreate(alerts);
-
-    res.json({
-      success: true,
-      message: 'Duty adjusted successfully',
-      data: roster.duties[dutyIndex]
-    });
+    res.json({ success: true, message: 'Duty adjusted successfully', data: roster.duties[dutyIndex] });
   } catch (error) {
     console.error('Manual adjust error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -443,35 +303,17 @@ exports.manualAdjustDuty = async (req, res) => {
 exports.getUnderstaffedAreas = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
     const today = moment().format('YYYY-MM-DD');
-    const nextWeek = moment().add(7, 'days'); // FIXED: convert to moment object
-
+    const nextWeek = moment().add(7, 'days');
     const understaffed = [];
-    
     for (let date = moment(today); date.isBefore(nextWeek); date.add(1, 'day')) {
       if (date.day() === 0) continue;
-      
-      const result = await dutyFairness.checkUnderstaffedAreas(
-        school.schoolId,
-        date.format('YYYY-MM-DD')
-      );
-      
-      if (result.length > 0) {
-        understaffed.push({
-          date: date.format('YYYY-MM-DD'),
-          areas: result
-        });
-      }
+      const result = await dutyFairness.checkUnderstaffedAreas(school.schoolId, date.format('YYYY-MM-DD'));
+      if (result.length > 0) understaffed.push({ date: date.format('YYYY-MM-DD'), areas: result });
     }
-
-    res.json({
-      success: true,
-      data: understaffed
-    });
+    res.json({ success: true, data: understaffed });
   } catch (error) {
     console.error('Understaffed areas error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -481,18 +323,12 @@ exports.getUnderstaffedAreas = async (req, res) => {
 exports.getTeacherWorkload = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
-    
-   const teachers = await Teacher.findAll({
-    where: { approvalStatus: 'approved' },
-    include: [{ 
-        model: User, 
-        where: { schoolCode: school.schoolId },   // ← ADD THIS
-        attributes: ['name', 'email'] 
-    }]
-});
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+
+    const teachers = await Teacher.findAll({
+      where: { approvalStatus: 'approved' },
+      include: [{ model: User, where: { schoolCode: school.schoolId }, attributes: ['name', 'email'] }]
+    });
 
     const workload = teachers.map(teacher => ({
       teacherId: teacher.id,
@@ -501,15 +337,12 @@ exports.getTeacherWorkload = async (req, res) => {
       monthlyDutyCount: teacher.statistics?.monthlyDutyCount || 0,
       weeklyDutyCount: teacher.statistics?.weeklyDutyCount || 0,
       reliabilityScore: teacher.statistics?.reliabilityScore || 100,
+      points: teacher.statistics?.points || 0,
       preferences: teacher.dutyPreferences,
-      status: teacher.statistics?.monthlyDutyCount > 10 ? 'overworked' : 
-              teacher.statistics?.monthlyDutyCount < 3 ? 'underworked' : 'balanced'
+      status: teacher.statistics?.monthlyDutyCount > 10 ? 'overworked' : teacher.statistics?.monthlyDutyCount < 3 ? 'underworked' : 'balanced'
     }));
 
-    res.json({
-      success: true,
-      data: workload.sort((a, b) => b.monthlyDutyCount - a.monthlyDutyCount)
-    });
+    res.json({ success: true, data: workload.sort((a, b) => b.monthlyDutyCount - a.monthlyDutyCount) });
   } catch (error) {
     console.error('Teacher workload error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -519,19 +352,11 @@ exports.getTeacherWorkload = async (req, res) => {
 exports.getTodayDuty = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
     const today = moment().format('YYYY-MM-DD');
-    
-    const roster = await DutyRoster.findOne({
-      where: { schoolId: school.schoolId, date: today }
-    });
-
-    if (!roster) {
-      return res.json({ success: true, data: { duties: [], message: 'No duty today' } });
-    }
+    const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
+    if (!roster) return res.json({ success: true, data: { duties: [], message: 'No duty today' } });
 
     const duties = roster.duties.map(d => ({
       ...d,
@@ -539,7 +364,6 @@ exports.getTodayDuty = async (req, res) => {
       checkedIn: !!d.checkedIn,
       checkedOut: !!d.checkedOut
     }));
-
     res.json({ success: true, data: { date: today, duties } });
   } catch (error) {
     console.error('Get today duty error:', error);
@@ -550,18 +374,12 @@ exports.getTodayDuty = async (req, res) => {
 exports.getWeeklyDuty = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
     const startOfWeek = moment().startOf('week');
     const endOfWeek = moment().endOf('week');
-
     const rosters = await DutyRoster.findAll({
-      where: {
-        schoolId: school.schoolId,
-        date: { [Op.between]: [startOfWeek.format('YYYY-MM-DD'), endOfWeek.format('YYYY-MM-DD')] }
-      },
+      where: { schoolId: school.schoolId, date: { [Op.between]: [startOfWeek.format('YYYY-MM-DD'), endOfWeek.format('YYYY-MM-DD')] } },
       order: [['date', 'ASC']]
     });
 
@@ -576,7 +394,6 @@ exports.getWeeklyDuty = async (req, res) => {
         duties: dayRoster ? dayRoster.duties : []
       });
     }
-
     res.json({ success: true, data: weekly });
   } catch (error) {
     console.error('Get weekly duty error:', error);
@@ -591,15 +408,10 @@ exports.checkInDuty = async (req, res) => {
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
     const today = moment().format('YYYY-MM-DD');
-
-    const roster = await DutyRoster.findOne({
-      where: { schoolId: school.schoolId, date: today }
-    });
+    const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
     if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
 
     const dutyIndex = roster.duties.findIndex(d => d.teacherId === teacher.id);
@@ -608,18 +420,12 @@ exports.checkInDuty = async (req, res) => {
     const currentTime = moment();
     const slot = roster.duties[dutyIndex].timeSlot;
     const start = moment(slot.start, 'HH:mm');
-    const end = moment(slot.end, 'HH:mm');
     const window = school.settings?.dutyManagement?.checkInWindow || 15;
-    
-    if (!currentTime.isBetween(start.clone().subtract(window, 'minutes'), end.clone().add(window, 'minutes'))) {
+    if (!currentTime.isBetween(start.clone().subtract(window, 'minutes'), start.clone().add(window, 'minutes'))) {
       return res.status(400).json({ success: false, message: `Check-in only allowed within ${window} minutes of duty time` });
     }
 
-    roster.duties[dutyIndex].checkedIn = {
-      at: new Date(),
-      by: req.user.id,
-      location: location || 'School'
-    };
+    roster.duties[dutyIndex].checkedIn = { at: new Date(), by: req.user.id, location: location || 'School' };
     roster.duties[dutyIndex].status = 'completed';
     roster.duties[dutyIndex].notes = notes || '';
     await roster.save();
@@ -630,28 +436,17 @@ exports.checkInDuty = async (req, res) => {
       teacherDuty.completedAt = new Date();
       teacherDuty.checkedIn = { at: new Date(), location };
       teacher.statistics.dutiesCompleted = (teacher.statistics.dutiesCompleted || 0) + 1;
-      if (teacher.updateReliabilityScore) teacher.updateReliabilityScore();
+      teacher.updateReliabilityScore();
       await teacher.save();
     }
 
-    const admins = await User.findAll({ 
-      where: { 
-        role: 'admin', 
-        schoolCode: school.schoolId 
-      } 
-    });
-    
+    const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.schoolId } });
     for (const admin of admins) {
       await createAlert({
-        userId: admin.id,
-        role: 'admin',
-        type: 'duty',
-        severity: 'info',
-        title: 'Teacher Checked In',
-        message: `${teacher.User?.name || 'Teacher'} checked in for ${roster.duties[dutyIndex].type} duty.`
+        userId: admin.id, role: 'admin', type: 'duty', severity: 'info',
+        title: 'Teacher Checked In', message: `${teacher.User?.name || 'Teacher'} checked in for ${roster.duties[dutyIndex].type} duty.`
       });
     }
-
     res.json({ success: true, message: 'Checked in successfully' });
   } catch (error) {
     console.error('Check in error:', error);
@@ -663,29 +458,18 @@ exports.checkOutDuty = async (req, res) => {
   try {
     const { location, notes } = req.body;
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
     const today = moment().format('YYYY-MM-DD');
-
-    const roster = await DutyRoster.findOne({
-      where: { schoolId: school.schoolId, date: today }
-    });
+    const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
     if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
 
     const dutyIndex = roster.duties.findIndex(d => d.teacherId === teacher.id);
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
 
-    roster.duties[dutyIndex].checkedOut = {
-      at: new Date(),
-      by: req.user.id,
-      location: location || 'School'
-    };
+    roster.duties[dutyIndex].checkedOut = { at: new Date(), by: req.user.id, location: location || 'School' };
     await roster.save();
-
     res.json({ success: true, message: 'Checked out successfully' });
   } catch (error) {
     console.error('Check out error:', error);
@@ -698,12 +482,8 @@ exports.updateDutyPreferences = async (req, res) => {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
-    teacher.dutyPreferences = {
-      ...teacher.dutyPreferences,
-      ...req.body
-    };
+    teacher.dutyPreferences = { ...teacher.dutyPreferences, ...req.body };
     await teacher.save();
-
     res.json({ success: true, data: teacher.dutyPreferences });
   } catch (error) {
     console.error('Update preferences error:', error);
@@ -711,34 +491,21 @@ exports.updateDutyPreferences = async (req, res) => {
   }
 };
 
-// Single consolidated requestDutySwap (keeping the more complete version)
 exports.requestDutySwap = async (req, res) => {
   try {
     const { dutyDate, reason, targetTeacherId } = req.body;
-    
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) {
-      return res.status(404).json({ success: false, message: 'Teacher not found' });
-    }
-    
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) {
-      return res.status(404).json({ success: false, message: 'School not found' });
-    }
-    
-    const roster = await DutyRoster.findOne({
-      where: { schoolId: school.schoolId, date: moment(dutyDate).format('YYYY-MM-DD') }
-    });
-    
-    if (!roster) {
-      return res.status(404).json({ success: false, message: 'No duty on that date' });
-    }
-    
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+
+    const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: moment(dutyDate).format('YYYY-MM-DD') } });
+    if (!roster) return res.status(404).json({ success: false, message: 'No duty on that date' });
+
     const duty = roster.duties.find(d => d.teacherId === teacher.id);
-    if (!duty) {
-      return res.status(403).json({ success: false, message: 'You are not on duty that day' });
-    }
-    
+    if (!duty) return res.status(403).json({ success: false, message: 'You are not on duty that day' });
+
     const swapRequest = {
       id: Date.now(),
       teacherId: teacher.id,
@@ -746,48 +513,27 @@ exports.requestDutySwap = async (req, res) => {
       targetTeacherId: targetTeacherId || null,
       date: dutyDate,
       dutyType: duty.type,
-      reason: reason,
+      reason,
       status: 'pending',
       createdAt: new Date()
     };
-    
+
     let swapRequests = [];
     const stored = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: 'swap_requests' } });
-    
-    if (stored && stored.duties) {
-      swapRequests = stored.duties;
-    }
-    
+    if (stored && stored.duties) swapRequests = stored.duties;
     swapRequests.push(swapRequest);
-    
-    await DutyRoster.upsert({
-      schoolId: school.schoolId,
-      date: 'swap_requests',
-      duties: swapRequests,
-      createdBy: req.user.id
-    });
-    
-    const admins = await User.findAll({ 
-      where: { role: 'admin', schoolCode: school.schoolId } 
-    });
-    
+    await DutyRoster.upsert({ schoolId: school.schoolId, date: 'swap_requests', duties: swapRequests, createdBy: req.user.id });
+
+    const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.schoolId } });
     for (const admin of admins) {
       await createAlert({
-        userId: admin.id,
-        role: 'admin',
-        type: 'duty',
-        severity: 'info',
+        userId: admin.id, role: 'admin', type: 'duty', severity: 'info',
         title: 'Duty Swap Request',
         message: `${teacher.User?.name} requests to swap duty on ${moment(dutyDate).format('MMM Do')}. Reason: ${reason}`,
         data: { swapRequest }
       });
     }
-    
-    res.json({ 
-      success: true, 
-      message: 'Swap request sent to admin',
-      data: swapRequest
-    });
+    res.json({ success: true, message: 'Swap request sent to admin', data: swapRequest });
   } catch (error) {
     console.error('Request swap error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -797,42 +543,31 @@ exports.requestDutySwap = async (req, res) => {
 exports.getAvailableSwaps = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) {
-      return res.status(404).json({ success: false, message: 'Teacher not found' });
-    }
-    
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    
-    const swapRequests = await DutyRoster.findOne({ 
-      where: { schoolId: school.schoolId, date: 'swap_requests' } 
-    });
-    
-    if (!swapRequests || !swapRequests.duties) {
-      return res.json({ success: true, data: [] });
-    }
-    
-    const available = swapRequests.duties.filter(req => 
-      req.status === 'pending' && 
-      req.teacherId !== teacher.id &&
-      (!req.targetTeacherId || req.targetTeacherId === teacher.id)
-    );
-    
+    const swapRequests = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: 'swap_requests' } });
+    if (!swapRequests || !swapRequests.duties) return res.json({ success: true, data: [] });
+
+    const available = swapRequests.duties.filter(req => req.status === 'pending' && req.teacherId !== teacher.id && (!req.targetTeacherId || req.targetTeacherId === teacher.id));
     const enriched = await Promise.all(available.map(async req => {
-      const requestingTeacher = await Teacher.findByPk(req.teacherId, {
-        include: [{ model: User, attributes: ['name'] }]
-      });
-      
-      return {
-        ...req,
-        teacherName: requestingTeacher?.User?.name || 'Unknown',
-        dutyDate: req.date,
-        dutyType: req.dutyType
-      };
+      const requestingTeacher = await Teacher.findByPk(req.teacherId, { include: [{ model: User, attributes: ['name'] }] });
+      return { ...req, teacherName: requestingTeacher?.User?.name || 'Unknown', dutyDate: req.date, dutyType: req.dutyType };
     }));
-    
     res.json({ success: true, data: enriched });
   } catch (error) {
     console.error('Get available swaps error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getTeacherPoints = async (req, res) => {
+  try {
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+    res.json({ success: true, data: { points: teacher.statistics?.points || 0 } });
+  } catch (error) {
+    console.error('Get teacher points error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
