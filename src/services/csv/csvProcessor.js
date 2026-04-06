@@ -1,7 +1,6 @@
 const fs = require('fs');
 const csv = require('csv-parser');
-const { Student, User, Parent, AcademicRecord, Attendance, Teacher, Class } = require('../models');
-const { Op } = require('sequelize');
+const { Student, User, Parent, AcademicRecord, Attendance, Teacher } = require('../models');
 
 class CSVProcessor {
   constructor(schoolCode, userId) {
@@ -37,7 +36,6 @@ class CSVProcessor {
                 continue;
               }
 
-              // Check if student already exists by email or name + grade
               let user = await User.findOne({ where: { email: parentEmail, role: 'student' } });
               let student;
               if (user) {
@@ -49,11 +47,10 @@ class CSVProcessor {
                 }
               }
 
-              // Create user
               user = await User.create({
                 name,
-                email: null, // students may not have email
-                password: 'Student123!', // default, will be changed on first login
+                email: null,
+                password: 'Student123!',
                 role: 'student',
                 phone: null,
                 schoolCode: this.schoolCode,
@@ -61,7 +58,6 @@ class CSVProcessor {
                 firstLogin: true
               });
 
-              // Create student profile
               student = await Student.create({
                 userId: user.id,
                 grade,
@@ -69,10 +65,8 @@ class CSVProcessor {
                 gender: gender === 'male' ? 'male' : gender === 'female' ? 'female' : null,
                 status: 'active'
               });
-
               created++;
 
-              // Link parent if email provided
               if (parentEmail) {
                 let parentUser = await User.findOne({ where: { email: parentEmail, role: 'parent' } });
                 let parent;
@@ -118,7 +112,6 @@ class CSVProcessor {
     let created = 0;
     let failed = 0;
 
-    // Get teacher
     const teacher = await Teacher.findOne({ where: { userId: this.userId } });
     if (!teacher) throw new Error('Teacher not found');
 
