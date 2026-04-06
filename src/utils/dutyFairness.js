@@ -155,13 +155,13 @@ const assignDutyFairly = async (schoolCode, date, dutyType, requiredCount = 1) =
 /**
  * Update teacher statistics after duty assignment
  */
-const updateTeacherDutyStats = async (teacherId, action = 'assign') => {
+const updateTeacherDutyStats = async (teacherId, action, dutyType = null) => {
   const teacher = await Teacher.findByPk(teacherId);
   if (!teacher) return;
-
   const stats = teacher.statistics || {};
-  
-  if (action === 'assign') {
+  const pointsMap = { morning: 10, lunch: 15, afternoon: 12, whole_day: 25 };
+  if (action === 'assign' && dutyType) {
+    stats.points = (stats.points || 0) + (pointsMap[dutyType] || 10);
     stats.monthlyDutyCount = (stats.monthlyDutyCount || 0) + 1;
     stats.weeklyDutyCount = (stats.weeklyDutyCount || 0) + 1;
     stats.totalDutiesAssigned = (stats.totalDutiesAssigned || 0) + 1;
@@ -171,15 +171,7 @@ const updateTeacherDutyStats = async (teacherId, action = 'assign') => {
   } else if (action === 'miss') {
     stats.dutiesMissed = (stats.dutiesMissed || 0) + 1;
   }
-
-  // Reset weekly count on Monday
-  const today = moment();
-  if (today.day() === 1) { // Monday
-    stats.weeklyDutyCount = 0;
-  }
-
   teacher.statistics = stats;
-  teacher.updateReliabilityScore();
   await teacher.save();
 };
 
