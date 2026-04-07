@@ -256,9 +256,8 @@ exports.getGroupMessages = async (req, res) => {
       where: {
         [Op.or]: [
           { receiverId: null },
-          { metadata: { type: 'group_message' } }
-        ],
-        senderId: { [Op.ne]: null }
+          { metadata: { [Op.contains]: { type: 'group_message' } } }
+        ]
       },
       include: [
         { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] }
