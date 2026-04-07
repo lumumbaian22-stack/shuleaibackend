@@ -271,3 +271,28 @@ exports.getGroupMessages = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Get private messages between two users
+// @route   GET /api/teacher/private-messages/:otherUserId
+// @access  Private/Teacher
+exports.getPrivateMessages = async (req, res) => {
+  try {
+    const { otherUserId } = req.params;
+    const messages = await Message.findAll({
+      where: {
+        [Op.or]: [
+          { senderId: req.user.id, receiverId: otherUserId },
+          { senderId: otherUserId, receiverId: req.user.id }
+        ]
+      },
+      include: [
+        { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] }
+      ],
+      order: [['createdAt', 'ASC']]
+    });
+    res.json({ success: true, data: messages });
+  } catch (error) {
+    console.error('Get private messages error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
