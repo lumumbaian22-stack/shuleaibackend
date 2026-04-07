@@ -39,7 +39,7 @@ router.post('/reply', teacherMessageController.replyToParent);
 
 // ============ STAFF CHAT (Teacher-Teacher) ============
 router.get('/staff-members', chatController.getStaffMembers);
-router.post('/group-message', chatController.sendGroupMessage);
+router.get('/group-messages', chatController.getGroupMessages);
 router.post('/private-message', chatController.sendPrivateMessage);
 router.get('/chat/messages/:otherUserId', chatController.getMessages);
 router.get('/chat/conversations', chatController.getConversations);
