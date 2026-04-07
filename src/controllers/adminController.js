@@ -335,24 +335,58 @@ exports.getAvailableTeachers = async (req, res) => {
   }
 };
 
+// In adminController.js
 exports.assignTeacherToClass = async (req, res) => {
   try {
     const { id } = req.params;
     const { teacherId } = req.body;
-    
-    const classItem = await Class.findOne({ where: { id, schoolCode: req.user.schoolCode } });
-    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-    
+
+    const classItem = await Class.findOne({
+      where: { id, schoolCode: req.user.schoolCode }
+    });
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
     const teacher = await Teacher.findOne({
       where: { id: teacherId },
       include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
     });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
-    
-    await classItem.update({ teacherId });
-    await teacher.update({ classTeacher: classItem.name });
-    
-    res.json({ success: true, message: `Teacher assigned to ${classItem.name} successfully`, data: classItem });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
+    }
+
+    // Remove previous class teacher if exists
+    if (classItem.teacherId) {
+      const oldTeacher = await Teacher.findByPk(classItem.teacherId);
+      if (oldTeacher) {
+        oldTeacher.classId = null;
+        oldTeacher.classTeacher = null;
+        await oldTeacher.save();
+      }
+    }
+
+    // If the teacher is already assigned to another class, remove that assignment first
+    if (teacher.classId && teacher.classId !== classItem.id) {
+      const oldClass = await Class.findByPk(teacher.classId);
+      if (oldClass) {
+        oldClass.teacherId = null;
+        await oldClass.save();
+      }
+    }
+
+    // Assign new teacher
+    await classItem.update({ teacherId: teacher.id });
+    await teacher.update({
+      classId: classItem.id,
+      classTeacher: classItem.name
+    });
+
+    res.json({
+      success: true,
+      message: `Teacher assigned to ${classItem.name} successfully`,
+      data: classItem
+    });
   } catch (error) {
     console.error('Assign teacher error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -362,8 +396,19 @@ exports.assignTeacherToClass = async (req, res) => {
 exports.removeTeacherFromClass = async (req, res) => {
   try {
     const { id } = req.params;
-    const classItem = await Class.findOne({ where: { id, schoolCode: req.user.schoolCode } });
+    const classItem = await Class.findOne({
+      where: { id, schoolCode: req.user.schoolCode }
+    });
     if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
+
+    if (classItem.teacherId) {
+      const teacher = await Teacher.findByPk(classItem.teacherId);
+      if (teacher) {
+        teacher.classId = null;
+        teacher.classTeacher = null;
+        await teacher.save();
+      }
+    }
     await classItem.update({ teacherId: null });
     res.json({ success: true, message: `Teacher removed from ${classItem.name}` });
   } catch (error) {
