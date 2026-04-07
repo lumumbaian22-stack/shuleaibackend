@@ -5,6 +5,7 @@ const csv = require('csv-parser');
 const { Op } = require('sequelize');
 const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School } = require('../models');
 const { createAlert } = require('../services/notificationService');
+const moment = require('moment');
 
 // ============ EXISTING FUNCTIONS (keep your existing ones, they work) ============
 
