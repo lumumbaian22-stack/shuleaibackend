@@ -326,7 +326,10 @@ exports.getAvailableTeachers = async (req, res) => {
   try {
     const teachers = await Teacher.findAll({
       where: { approvalStatus: 'approved' },
-      include: [{ model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id', 'name', 'email'] }]
+      include: [
+        { model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id', 'name', 'email'] },
+        { model: Class, attributes: ['id', 'name'] } // include assigned class
+      ]
     });
     res.json({ success: true, data: teachers });
   } catch (error) {
