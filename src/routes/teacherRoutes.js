@@ -32,6 +32,7 @@ router.get('/my-subjects', teacherController.getMySubjects);
 router.get('/classes/:classId/students', teacherController.getClassStudents);
 
 // ============ MESSAGING (Teacher-Parent) ============
+router.get('/parent-conversations', chatController.getParentConversations);
 router.get('/conversations', teacherMessageController.getConversations);
 router.get('/messages/:parentId', teacherMessageController.getMessages);
 router.put('/messages/read/:conversationId', teacherMessageController.markMessagesAsRead);
