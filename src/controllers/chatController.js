@@ -246,3 +246,28 @@ exports.getConversations = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// @desc    Get group messages (messages sent to all staff)
+// @route   GET /api/teacher/group-messages
+// @access  Private/Teacher
+exports.getGroupMessages = async (req, res) => {
+  try {
+    const messages = await Message.findAll({
+      where: {
+        [Op.or]: [
+          { receiverId: null },
+          { metadata: { type: 'group_message' } }
+        ],
+        senderId: { [Op.ne]: null }
+      },
+      include: [
+        { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] }
+      ],
+      order: [['createdAt', 'ASC']]
+    });
+    res.json({ success: true, data: messages });
+  } catch (error) {
+    console.error('Get group messages error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
