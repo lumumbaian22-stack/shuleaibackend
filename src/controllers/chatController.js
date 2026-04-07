@@ -296,3 +296,59 @@ exports.getPrivateMessages = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Get conversations with parents only
+// @route   GET /api/teacher/parent-conversations
+// @access  Private/Teacher
+exports.getParentConversations = async (req, res) => {
+  try {
+    // First, get all parents in the same school
+    const parents = await Parent.findAll({
+      include: [{ model: User, where: { schoolCode: req.user.schoolCode, isActive: true }, attributes: ['id', 'name'] }]
+    });
+    const parentUserIds = parents.map(p => p.userId);
+
+    // Get all messages where the other party is a parent
+    const messages = await Message.findAll({
+      where: {
+        [Op.or]: [
+          { senderId: req.user.id, receiverId: { [Op.in]: parentUserIds } },
+          { senderId: { [Op.in]: parentUserIds }, receiverId: req.user.id }
+        ]
+      },
+      include: [
+        { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
+        { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
+
+    // Group by parent user ID
+    const conversations = {};
+    messages.forEach(msg => {
+      const parentUserId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
+      const parentUser = msg.senderId === req.user.id ? msg.Receiver : msg.Sender;
+      
+      if (!conversations[parentUserId]) {
+        conversations[parentUserId] = {
+          userId: parentUserId,
+          userName: parentUser?.name || 'Parent',
+          userRole: 'parent',
+          lastMessage: msg.content,
+          lastMessageTime: msg.createdAt,
+          unreadCount: msg.receiverId === req.user.id && !msg.isRead ? 1 : 0,
+          studentName: null // You can fetch linked student if needed
+        };
+      }
+      
+      if (msg.receiverId === req.user.id && !msg.isRead) {
+        conversations[parentUserId].unreadCount++;
+      }
+    });
+
+    res.json({ success: true, data: Object.values(conversations) });
+  } catch (error) {
+    console.error('Get parent conversations error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
