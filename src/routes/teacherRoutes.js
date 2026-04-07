@@ -41,7 +41,7 @@ router.post('/reply', teacherMessageController.replyToParent);
 router.get('/staff-members', chatController.getStaffMembers);
 router.get('/group-messages', chatController.getGroupMessages);
 router.post('/private-message', chatController.sendPrivateMessage);
-router.get('/chat/messages/:otherUserId', chatController.getMessages);
+router.get('/chat/private-messages/:otherUserId', chatController.getMessages);
 router.get('/chat/conversations', chatController.getConversations);
 
 // ============ TASKS ============
