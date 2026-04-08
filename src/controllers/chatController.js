@@ -1,6 +1,8 @@
 const { User, Teacher, Message, Student, Parent } = require('../models');
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
+const { literal } = require('sequelize'); // Add at top of file
+
 
 // @desc    Get staff members in same school
 // @route   GET /api/teacher/staff-members
@@ -243,12 +245,7 @@ exports.getConversations = async (req, res) => {
 exports.getGroupMessages = async (req, res) => {
   try {
     const messages = await Message.findAll({
-      where: {
-        [Op.or]: [
-          { receiverId: null },
-          { '$metadata.type$': 'group_message' }   // ✅ FIXED: correct JSONB syntax
-        ]
-      },
+      where: literal(`(receiverId IS NULL OR metadata->>'type' = 'group_message')`),
       include: [
         { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] }
       ],
