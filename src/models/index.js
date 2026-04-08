@@ -176,6 +176,8 @@ Class.hasMany(TeacherSubjectAssignment, { foreignKey: 'classId' });
 // Add association
 Task.belongsTo(Teacher, { foreignKey: 'teacherId' });
 Teacher.hasMany(Task, { foreignKey: 'teacherId' });
+Teacher.belongsTo(Class, { foreignKey: 'classId' });
+Class.hasOne(Teacher, { foreignKey: 'classId' });
 
 // Add associations
 Class.belongsTo(Teacher, { foreignKey: 'teacherId' });
