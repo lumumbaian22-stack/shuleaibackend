@@ -1,4 +1,4 @@
-const { User, Teacher, Message, Student } = require('../models');
+const { User, Teacher, Message, Student, Parent } = require('../models');
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 
@@ -7,7 +7,6 @@ const { createAlert } = require('../services/notificationService');
 // @access  Private/Teacher
 exports.getStaffMembers = async (req, res) => {
     try {
-        // Get all teachers in the same school
         const teachers = await Teacher.findAll({
             include: [{
                 model: User,
@@ -20,13 +19,12 @@ exports.getStaffMembers = async (req, res) => {
             id: t.User.id,
             name: t.User.name,
             role: t.User.role,
-            isOnline: false, // You can track this with WebSocket
+            isOnline: false,
             teacherId: t.id,
             subjects: t.subjects,
             isClassTeacher: t.classTeacher !== null
         }));
         
-        // Also include admins
         const admins = await User.findAll({
             where: { schoolCode: req.user.schoolCode, role: 'admin', isActive: true },
             attributes: ['id', 'name', 'email', 'role']
@@ -56,7 +54,6 @@ exports.sendGroupMessage = async (req, res) => {
     try {
         const { content } = req.body;
         
-        // Get all staff in the same school
         const teachers = await Teacher.findAll({
             include: [{
                 model: User,
@@ -73,9 +70,8 @@ exports.sendGroupMessage = async (req, res) => {
         const recipients = [
             ...teachers.map(t => t.User.id),
             ...admins.map(a => a.id)
-        ].filter(id => id !== req.user.id); // Exclude sender
+        ].filter(id => id !== req.user.id);
         
-        // Create messages for all recipients
         const messages = recipients.map(recipientId => ({
             senderId: req.user.id,
             receiverId: recipientId,
@@ -85,7 +81,6 @@ exports.sendGroupMessage = async (req, res) => {
         
         await Message.bulkCreate(messages);
         
-        // Send real-time notifications via WebSocket
         if (global.io) {
             recipients.forEach(recipientId => {
                 global.io.to(`user-${recipientId}`).emit('new-group-message', {
@@ -112,7 +107,6 @@ exports.sendPrivateMessage = async (req, res) => {
     try {
         const { receiverId, content } = req.body;
         
-        // Verify receiver exists and is in same school
         const receiver = await User.findOne({
             where: { id: receiverId, schoolCode: req.user.schoolCode, isActive: true }
         });
@@ -128,7 +122,6 @@ exports.sendPrivateMessage = async (req, res) => {
             metadata: { type: 'private_message', senderName: req.user.name }
         });
         
-        // Send real-time notification
         if (global.io) {
             global.io.to(`user-${receiverId}`).emit('new-private-message', {
                 from: req.user.id,
@@ -139,7 +132,6 @@ exports.sendPrivateMessage = async (req, res) => {
             });
         }
         
-        // Create alert for recipient
         await createAlert({
             userId: receiverId,
             role: receiver.role,
@@ -177,7 +169,6 @@ exports.getMessages = async (req, res) => {
             order: [['createdAt', 'ASC']]
         });
         
-        // Mark messages as read
         await Message.update(
             { isRead: true, readAt: new Date() },
             {
@@ -215,7 +206,6 @@ exports.getConversations = async (req, res) => {
             order: [['createdAt', 'DESC']]
         });
         
-        // Group by conversation
         const conversations = {};
         messages.forEach(msg => {
             const otherUserId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
@@ -256,7 +246,7 @@ exports.getGroupMessages = async (req, res) => {
       where: {
         [Op.or]: [
           { receiverId: null },
-          { metadata: { [Op.contains]: { type: 'group_message' } } }
+          { '$metadata.type$': 'group_message' }   // ✅ FIXED: correct JSONB syntax
         ]
       },
       include: [
@@ -301,13 +291,11 @@ exports.getPrivateMessages = async (req, res) => {
 // @access  Private/Teacher
 exports.getParentConversations = async (req, res) => {
   try {
-    // First, get all parents in the same school
     const parents = await Parent.findAll({
       include: [{ model: User, where: { schoolCode: req.user.schoolCode, isActive: true }, attributes: ['id', 'name'] }]
     });
     const parentUserIds = parents.map(p => p.userId);
 
-    // Get all messages where the other party is a parent
     const messages = await Message.findAll({
       where: {
         [Op.or]: [
@@ -322,7 +310,6 @@ exports.getParentConversations = async (req, res) => {
       order: [['createdAt', 'DESC']]
     });
 
-    // Group by parent user ID
     const conversations = {};
     messages.forEach(msg => {
       const parentUserId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
@@ -336,7 +323,7 @@ exports.getParentConversations = async (req, res) => {
           lastMessage: msg.content,
           lastMessageTime: msg.createdAt,
           unreadCount: msg.receiverId === req.user.id && !msg.isRead ? 1 : 0,
-          studentName: null // You can fetch linked student if needed
+          studentName: null
         };
       }
       
