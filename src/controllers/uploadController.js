@@ -167,3 +167,12 @@ exports.validateCSV = async (req, res) => {
   }
   res.json({ success: true, message: 'File received' });
 };
+
+exports.downloadMarksTemplate = (req, res) => {
+  const template = `name,elimuid,subject,score,assessmentType,date,assessmentName,term,year
+John Doe,ELI-2024-001,Mathematics,85,exam,2024-04-10,Math Mid-Term,Term 1,2024
+Jane Smith,ELI-2024-002,English,78,test,2024-04-09,English Essay,Term 1,2024`;
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename=marks_template.csv');
+  res.send(template);
+};
