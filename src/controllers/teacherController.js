@@ -1286,27 +1286,45 @@ exports.getPerformanceData = async (req, res) => {
   }
 };
 
+// @desc    Update a mark
+// @route   PUT /api/teacher/marks/:recordId
 exports.updateMark = async (req, res) => {
   try {
     const { recordId } = req.params;
-    const { score, assessmentName, date } = req.body;
+    const { score, assessmentName, assessmentType, date, term, year } = req.body;
     const record = await AcademicRecord.findByPk(recordId);
     if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
-    await record.update({ score, assessmentName, date });
+    // Verify teacher owns this record
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (record.teacherId !== teacher.id) return res.status(403).json({ success: false, message: 'Not authorized' });
+    await record.update({ score, assessmentName, assessmentType, date, term, year });
     res.json({ success: true, data: record });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
+// @desc    Delete a mark
+// @route   DELETE /api/teacher/marks/:recordId
 exports.deleteMark = async (req, res) => {
   try {
     const { recordId } = req.params;
     const record = await AcademicRecord.findByPk(recordId);
     if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (record.teacherId !== teacher.id) return res.status(403).json({ success: false, message: 'Not authorized' });
     await record.destroy();
     res.json({ success: true, message: 'Mark deleted' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+};
+
+// @desc    Download marks CSV template
+// @route   GET /api/teacher/marks-template
+exports.downloadMarksTemplate = (req, res) => {
+  const template = `name,elimuid,subject,score,assessmentType,date,term,year,assessmentName\nJohn Doe,ELI-2024-001,Mathematics,85,exam,2024-03-15,Term 1,2024,Math Mid-Term`;
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename=marks_template.csv');
+  res.send(template);
 };
