@@ -399,17 +399,23 @@ exports.assignTeacherToClass = async (req, res) => {
 exports.removeTeacherFromClass = async (req, res) => {
   try {
     const { id } = req.params;
-    const classItem = await Class.findOne({
-      where: { id, schoolCode: req.user.schoolCode }
-    });
+    const classItem = await Class.findOne({ where: { id, schoolCode: req.user.schoolCode } });
     if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-
-    if (classItem.teacherId) {
-      const teacher = await Teacher.findByPk(classItem.teacherId);
+    const teacherId = classItem.teacherId;
+    if (teacherId) {
+      const teacher = await Teacher.findByPk(teacherId);
       if (teacher) {
         teacher.classId = null;
         teacher.classTeacher = null;
         await teacher.save();
+      }
+      // Remove this teacher from all subjectTeachers arrays in this school
+      const allClasses = await Class.findAll({ where: { schoolCode: req.user.schoolCode } });
+      for (const cls of allClasses) {
+        if (cls.subjectTeachers && cls.subjectTeachers.some(st => st.teacherId === teacherId)) {
+          const newSubjectTeachers = cls.subjectTeachers.filter(st => st.teacherId !== teacherId);
+          await cls.update({ subjectTeachers: newSubjectTeachers });
+        }
       }
     }
     await classItem.update({ teacherId: null });
