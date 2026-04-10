@@ -13,5 +13,6 @@ router.get('/preferences', userController.getPreferences);
 router.put('/preferences', userController.updatePreferences);
 router.get('/export', userController.exportMyData);
 router.post('/deactivate', userController.deactivateAccount);
+router.post('/profile-picture', userController.uploadProfilePicture);
 
 module.exports = router;
