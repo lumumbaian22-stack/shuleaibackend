@@ -14,6 +14,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: false
     },
+    replyToMessageId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: 'Messages', key: 'id' }
+    },
     isRead: {
       type: DataTypes.BOOLEAN,
       defaultValue: false
