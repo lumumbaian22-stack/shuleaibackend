@@ -49,6 +49,7 @@ router.post('/private-message', chatController.sendPrivateMessage);
 router.get('/group-messages', chatController.getGroupMessages);
 router.get('/private-messages/:otherUserId', chatController.getPrivateMessages);   // no /chat/
 router.get('/conversations', chatController.getConversations);
+router.get('/messages/:id', chatController.getMessage);
 
 // ============ TASKS ============
 router.get('/tasks', taskController.getTasks);
