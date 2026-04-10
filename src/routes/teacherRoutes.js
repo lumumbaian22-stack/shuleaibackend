@@ -17,6 +17,9 @@ router.post('/students/upload', teacherController.uploadStudentsCSV);
 router.get('/class-students', teacherController.getClassStudentsForSubject);
 router.get('/my-assignments', teacherController.getMyAssignments);
 
+router.put('/marks/:recordId', teacherController.updateMark);
+router.delete('/marks/:recordId', teacherController.deleteMark);
+
 // ============ ACADEMIC MANAGEMENT ============
 router.post('/marks', teacherController.enterMarks);
 router.post('/marks/bulk', teacherController.saveBulkMarks);
