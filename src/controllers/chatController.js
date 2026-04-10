@@ -245,7 +245,12 @@ exports.getConversations = async (req, res) => {
 exports.getGroupMessages = async (req, res) => {
   try {
     const messages = await Message.findAll({
-      where: literal(`("receiverId" IS NULL OR "metadata"->>'type' = 'group_message')`),
+      where: {
+        [Op.or]: [
+          { receiverId: null },
+          { metadata: { [Op.contains]: { type: 'group_message' } } }
+        ]
+      },
       include: [
         { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] }
       ],
