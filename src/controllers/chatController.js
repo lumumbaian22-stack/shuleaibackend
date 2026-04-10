@@ -53,53 +53,88 @@ exports.getStaffMembers = async (req, res) => {
 // @route   POST /api/teacher/group-message
 // @access  Private/Teacher
 exports.sendGroupMessage = async (req, res) => {
-    try {
-        const { content } = req.body;
-        
-        const teachers = await Teacher.findAll({
-            include: [{
-                model: User,
-                where: { schoolCode: req.user.schoolCode, isActive: true },
-                attributes: ['id']
-            }]
+  try {
+    const { content, replyToId } = req.body;
+    const teachers = await Teacher.findAll({
+      include: [{ model: User, where: { schoolCode: req.user.schoolCode, isActive: true }, attributes: ['id'] }]
+    });
+    const admins = await User.findAll({
+      where: { schoolCode: req.user.schoolCode, role: 'admin', isActive: true },
+      attributes: ['id']
+    });
+    const recipients = [...teachers.map(t => t.User.id), ...admins.map(a => a.id)].filter(id => id !== req.user.id);
+    const messages = recipients.map(recipientId => ({
+      senderId: req.user.id,
+      receiverId: recipientId,
+      content,
+      metadata: { type: 'group_message', senderName: req.user.name, replyToId },
+      replyToMessageId: replyToId || null
+    }));
+    await Message.bulkCreate(messages);
+    if (global.io) {
+      recipients.forEach(recipientId => {
+        global.io.to(`user-${recipientId}`).emit('new-group-message', {
+          from: req.user.id,
+          fromName: req.user.name,
+          content,
+          replyToId,
+          timestamp: new Date()
         });
-        
-        const admins = await User.findAll({
-            where: { schoolCode: req.user.schoolCode, role: 'admin', isActive: true },
-            attributes: ['id']
-        });
-        
-        const recipients = [
-            ...teachers.map(t => t.User.id),
-            ...admins.map(a => a.id)
-        ].filter(id => id !== req.user.id);
-        
-        const messages = recipients.map(recipientId => ({
-            senderId: req.user.id,
-            receiverId: recipientId,
-            content: content,
-            metadata: { type: 'group_message', senderName: req.user.name }
-        }));
-        
-        await Message.bulkCreate(messages);
-        
-        if (global.io) {
-            recipients.forEach(recipientId => {
-                global.io.to(`user-${recipientId}`).emit('new-group-message', {
-                    from: req.user.id,
-                    fromName: req.user.name,
-                    content: content,
-                    timestamp: new Date(),
-                    type: 'group'
-                });
-            });
-        }
-        
-        res.status(201).json({ success: true, message: 'Group message sent' });
-    } catch (error) {
-        console.error('Send group message error:', error);
-        res.status(500).json({ success: false, message: error.message });
+      });
     }
+    res.status(201).json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.sendPrivateMessage = async (req, res) => {
+  try {
+    const { receiverId, content, replyToId } = req.body;
+    const receiver = await User.findOne({ where: { id: receiverId, schoolCode: req.user.schoolCode, isActive: true } });
+    if (!receiver) return res.status(404).json({ success: false, message: 'Recipient not found' });
+    const message = await Message.create({
+      senderId: req.user.id,
+      receiverId,
+      content,
+      metadata: { type: 'private_message', senderName: req.user.name, replyToId },
+      replyToMessageId: replyToId || null
+    });
+    if (global.io) {
+      global.io.to(`user-${receiverId}`).emit('new-private-message', {
+        from: req.user.id,
+        fromName: req.user.name,
+        content,
+        replyToId,
+        timestamp: new Date()
+      });
+    }
+    await createAlert({
+      userId: receiverId,
+      role: receiver.role,
+      type: 'message',
+      severity: 'info',
+      title: `New message from ${req.user.name}`,
+      message: content.substring(0, 100)
+    });
+    res.status(201).json({ success: true, data: message });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getMessage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const message = await Message.findByPk(id, {
+      include: [{ model: User, as: 'Sender', attributes: ['id', 'name'] }]
+    });
+    res.json({ success: true, data: message });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 
 // @desc    Send private message to specific staff
