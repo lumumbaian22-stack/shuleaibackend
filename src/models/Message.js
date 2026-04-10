@@ -7,7 +7,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     receiverId: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true, // null for group messages
       references: { model: 'Users', key: 'id' }
     },
     content: {
@@ -18,7 +18,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       defaultValue: false
     },
-    readAt: DataTypes.DATE
+    readAt: DataTypes.DATE,
+    metadata: {
+      type: DataTypes.JSONB,
+      defaultValue: {}
+    }
   }, {
     timestamps: true
   });
