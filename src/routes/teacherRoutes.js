@@ -19,6 +19,7 @@ router.get('/my-assignments', teacherController.getMyAssignments);
 
 router.put('/marks/:recordId', teacherController.updateMark);
 router.delete('/marks/:recordId', teacherController.deleteMark);
+router.get('/marks-template', teacherController.downloadMarksTemplate);
 
 // ============ ACADEMIC MANAGEMENT ============
 router.post('/marks', teacherController.enterMarks);
