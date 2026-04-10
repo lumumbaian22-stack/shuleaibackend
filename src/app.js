@@ -147,6 +147,8 @@ app.post('/api/test/create-school', async (req, res) => {
   }
 });
 
+app.get('/api/config/support', configController.getSupportConfig);
+
 // ============ ROUTES ============
 // All routes must be valid routers (not objects)
 app.use('/api/auth', authRoutes);
