@@ -297,7 +297,14 @@ exports.getParentConversations = async (req, res) => {
       include: [{ model: User, where: { schoolCode: req.user.schoolCode, isActive: true }, attributes: ['id', 'name'] }]
     });
     const parentUserIds = parents.map(p => p.userId);
-
+    // Also fetch student for each parent
+    const studentsByParent = {};
+    for (const parent of parents) {
+      const students = await parent.getStudents({ include: [{ model: User, attributes: ['name'] }] });
+      if (students.length) {
+        studentsByParent[parent.userId] = students[0].User.name;
+      }
+    }
     const messages = await Message.findAll({
       where: {
         [Op.or]: [
@@ -311,12 +318,10 @@ exports.getParentConversations = async (req, res) => {
       ],
       order: [['createdAt', 'DESC']]
     });
-
     const conversations = {};
     messages.forEach(msg => {
       const parentUserId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
       const parentUser = msg.senderId === req.user.id ? msg.Receiver : msg.Sender;
-      
       if (!conversations[parentUserId]) {
         conversations[parentUserId] = {
           userId: parentUserId,
@@ -325,15 +330,13 @@ exports.getParentConversations = async (req, res) => {
           lastMessage: msg.content,
           lastMessageTime: msg.createdAt,
           unreadCount: msg.receiverId === req.user.id && !msg.isRead ? 1 : 0,
-          studentName: null
+          studentName: studentsByParent[parentUserId] || null
         };
       }
-      
       if (msg.receiverId === req.user.id && !msg.isRead) {
         conversations[parentUserId].unreadCount++;
       }
     });
-
     res.json({ success: true, data: Object.values(conversations) });
   } catch (error) {
     console.error('Get parent conversations error:', error);
