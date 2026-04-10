@@ -208,3 +208,16 @@ exports.deactivateAccount = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+//upload profile photo
+exports.uploadProfilePicture = async (req, res) => {
+  if (!req.files || !req.files.image) {
+    return res.status(400).json({ success: false, message: 'No image uploaded' });
+  }
+  const image = req.files.image;
+  const fileName = `profile_${req.user.id}_${Date.now()}.jpg`;
+  const uploadPath = path.join(__dirname, '../uploads/profiles/', fileName);
+  await image.mv(uploadPath);
+  await req.user.update({ profileImage: `/uploads/profiles/${fileName}` });
+  res.json({ success: true, data: { profileImage: req.user.profileImage } });
+};
