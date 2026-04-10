@@ -1,6 +1,6 @@
 const fs = require('fs');
 const csv = require('csv-parser');
-const { Student, User, Parent, AcademicRecord, Attendance, Teacher } = require('../../models');
+const { Student, User, Parent, Class, Teacher } = require('../../models');
 
 class CSVProcessor {
   constructor(schoolCode, userId) {
@@ -16,6 +16,14 @@ class CSVProcessor {
     let updated = 0;
     let failed = 0;
 
+    // Verify teacher and get assigned class
+    const teacher = await Teacher.findOne({ where: { userId: this.userId }, include: [{ model: Class, as: 'Class' }] });
+    if (!teacher || !teacher.classId) {
+      throw new Error('Only class teachers can upload students, and you must be assigned to a class.');
+    }
+    const targetClass = teacher.Class;
+    if (!targetClass) throw new Error('Assigned class not found.');
+
     return new Promise((resolve, reject) => {
       fs.createReadStream(filePath)
         .pipe(csv())
@@ -24,30 +32,39 @@ class CSVProcessor {
           for (const row of results) {
             try {
               const name = row.name?.trim();
-              const grade = row.grade?.trim();
+              const dob = row.dateOfBirth || row.dob;
               const parentEmail = row.parentEmail?.trim() || row.parentemail?.trim();
               const parentPhone = row.parentPhone?.trim() || row.parentphone?.trim();
-              const dob = row.dateOfBirth || row.dob;
               const gender = row.gender?.toLowerCase();
 
-              if (!name || !grade) {
-                errors.push({ row, error: 'Missing name or grade' });
+              if (!name) {
+                errors.push({ row, error: 'Missing name' });
                 failed++;
                 continue;
               }
 
-              let user = await User.findOne({ where: { email: parentEmail, role: 'student' } });
-              let student;
-              if (user) {
-                student = await Student.findOne({ where: { userId: user.id } });
-                if (student) {
-                  warnings.push({ row, message: `Student already exists: ${name}` });
-                  updated++;
-                  continue;
-                }
+              // Check duplicate: name + DOB + parentEmail
+              let existingStudent = null;
+              if (dob && parentEmail) {
+                existingStudent = await Student.findOne({
+                  include: [{
+                    model: User,
+                    where: {
+                      name,
+                      email: parentEmail,
+                      schoolCode: this.schoolCode
+                    }
+                  }]
+                });
+              }
+              if (existingStudent) {
+                errors.push({ row, error: `Duplicate student: ${name} with same DOB and parent email already exists.` });
+                failed++;
+                continue;
               }
 
-              user = await User.create({
+              // Create user
+              const user = await User.create({
                 name,
                 email: null,
                 password: 'Student123!',
@@ -58,15 +75,17 @@ class CSVProcessor {
                 firstLogin: true
               });
 
-              student = await Student.create({
+              // Create student – force teacher's class
+              const student = await Student.create({
                 userId: user.id,
-                grade,
+                grade: targetClass.name,
                 dateOfBirth: dob ? new Date(dob) : null,
                 gender: gender === 'male' ? 'male' : gender === 'female' ? 'female' : null,
                 status: 'active'
               });
               created++;
 
+              // Link parent
               if (parentEmail) {
                 let parentUser = await User.findOne({ where: { email: parentEmail, role: 'parent' } });
                 let parent;
