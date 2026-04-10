@@ -564,10 +564,23 @@ exports.getAvailableSwaps = async (req, res) => {
 exports.getTeacherPoints = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
     res.json({ success: true, data: { points: teacher.statistics?.points || 0 } });
   } catch (error) {
-    console.error('Get teacher points error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateTeacherPoints = async (req, res) => {
+  try {
+    const { points, reason } = req.body;
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) return res.status(404).json({ success: false });
+    const stats = teacher.statistics || {};
+    stats.points = (stats.points || 0) + points;
+    teacher.statistics = stats;
+    await teacher.save();
+    res.json({ success: true, data: { points: stats.points } });
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
