@@ -9,6 +9,7 @@ const session = require('express-session');
 const fileUpload = require('express-fileupload');
 const path = require('path');
 const { sequelize } = require('./models');
+const alertRoutes = require('./routes/alertRoutes');
 
 const multer = require('multer');
 const storage = multer.diskStorage({
@@ -163,6 +164,7 @@ app.use('/api/school', schoolRoutes);
 app.use('/api/help', helpRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/tasks', taskRoutes);
+app.use('/api/alerts', alertRoutes);
 
 // 404 handler - This must be AFTER all routes
 app.use((req, res) => {
