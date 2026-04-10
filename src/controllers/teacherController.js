@@ -758,108 +758,65 @@ exports.getMySubjects = async (req, res) => {
 exports.getTeacherStats = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) {
-      return res.status(404).json({ success: false, message: 'Teacher not found' });
-    }
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
-    // Collect all class names where this teacher teaches (same logic as getMyStudents)
+    // Collect class names
     let classNames = [];
-    
-    // 1. If teacher is a class teacher, add that class
-    if (teacher.classTeacher) {
-      classNames.push(teacher.classTeacher);
-    }
-    
-    // 2. Find all classes where teacher appears in subjectTeachers array
-    const allClasses = await Class.findAll({
-      where: { schoolCode: req.user.schoolCode, isActive: true }
-    });
-    
+    if (teacher.classTeacher) classNames.push(teacher.classTeacher);
+    const allClasses = await Class.findAll({ where: { schoolCode: req.user.schoolCode, isActive: true } });
     for (const cls of allClasses) {
-      if (cls.subjectTeachers && Array.isArray(cls.subjectTeachers)) {
-        if (cls.subjectTeachers.some(st => st.teacherId === teacher.id)) {
-          classNames.push(cls.name);
-        }
+      if (cls.subjectTeachers?.some(st => st.teacherId === teacher.id)) {
+        classNames.push(cls.name);
       }
     }
-    
-    // Remove duplicates
     classNames = [...new Set(classNames)];
-    
+
     let students = [];
-    if (classNames.length > 0) {
+    if (classNames.length) {
       students = await Student.findAll({
         where: { grade: { [Op.in]: classNames } },
-        include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+        include: [{ model: User, attributes: ['id', 'name'] }]
       });
     }
 
+    // Real attendance today
+    const today = new Date().toISOString().split('T')[0];
+    const attendanceToday = await Attendance.findAll({
+      where: {
+        studentId: { [Op.in]: students.map(s => s.id) },
+        date: today
+      }
+    });
+    const presentToday = attendanceToday.filter(a => a.status === 'present').length;
+    const attendanceTodayStr = `${presentToday}/${students.length}`;
+
+    // Real pending tasks
+    const pendingTasks = await Task.count({
+      where: { userId: req.user.id, status: { [Op.ne]: 'completed' } }
+    });
+
+    // Real class average
     let totalScore = 0;
     let scoreCount = 0;
     for (const student of students) {
-      const records = await AcademicRecord.findAll({
-        where: { studentId: student.id },
-        order: [['date', 'DESC']],
-        limit: 10
-      });
+      const records = await AcademicRecord.findAll({ where: { studentId: student.id } });
       const avg = records.length ? records.reduce((a,b) => a + b.score, 0) / records.length : 0;
-      student.average = Math.round(avg);
       totalScore += avg;
       scoreCount++;
     }
-    
-    const classAverage = scoreCount > 0 ? Math.round(totalScore / scoreCount) : 0;
+    const classAverage = scoreCount ? Math.round(totalScore / scoreCount) : 0;
 
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-    
-    const marksCount = await AcademicRecord.count({
-      where: {
-        teacherId: teacher.id,
-        createdAt: { [Op.gte]: startOfMonth }
-      }
-    });
-
-    const startOfWeek = new Date();
-    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
-    startOfWeek.setHours(0, 0, 0, 0);
-    
-    const studentsWithMarksThisWeek = await AcademicRecord.findAll({
-      where: {
-        teacherId: teacher.id,
-        date: { [Op.gte]: startOfWeek }
-      },
-      attributes: ['studentId'],
-      group: ['studentId']
-    });
-    
-    const markedStudentIds = studentsWithMarksThisWeek.map(s => s.studentId);
-    const pendingTasks = students.filter(s => !markedStudentIds.includes(s.id)).length;
-
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       data: {
         studentCount: students.length,
         classAverage,
-        subjects: teacher.subjects?.length || 0,
-        classTeacher: teacher.classTeacher || null,
-        reliabilityScore: teacher.statistics?.reliabilityScore || 100,
-        dutiesCompleted: teacher.statistics?.dutiesCompleted || 0,
-        marksEnteredThisMonth: marksCount,
-        pendingTasks,
-        students: students.map(s => ({
-          id: s.id,
-          name: s.User?.name,
-          elimuid: s.elimuid,
-          grade: s.grade,
-          average: s.average || 0,
-          attendance: 95
-        }))
+        attendanceToday: attendanceTodayStr,
+        pendingTasks
       }
     });
   } catch (error) {
-    console.error('Get teacher stats error:', error);
+    console.error(error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
