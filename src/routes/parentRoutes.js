@@ -11,6 +11,9 @@ router.post('/report-absence', parentController.reportAbsence);
 router.post('/pay', parentController.makePayment);
 router.get('/payments', parentController.getPayments);
 
+router.get('/fees/:studentId', parentController.getFees);
+router.post('/fees/pay', parentController.addPayment);
+
 router.get('/plans', parentController.getSubscriptionPlans);
 router.post('/upgrade-plan', parentController.upgradePlan);
 router.post('/payment-confirm', parentController.confirmPayment);
