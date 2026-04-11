@@ -17,4 +17,6 @@ router.post('/payment-confirm', parentController.confirmPayment);
 router.post('/message', parentController.sendMessage);
 router.get('/messages/:otherUserId', parentController.getMessages);
 
+router.get('/child/:studentId/analytics', parentController.getChildAnalytics);
+
 module.exports = router;
