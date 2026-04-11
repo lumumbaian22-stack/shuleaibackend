@@ -618,3 +618,50 @@ exports.getMessages = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.getChildAnalytics = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const parent = await Parent.findOne({ where: { userId: req.user.id } });
+    const student = await Student.findByPk(studentId);
+    if (!student || !(await parent.hasStudent(student))) return res.status(403).json({ success: false });
+
+    // Performance distribution
+    const records = await AcademicRecord.findAll({ where: { studentId } });
+    const gradeCount = { A:0, B:0, C:0, D:0, E:0 };
+    records.forEach(r => {
+      const grade = r.grade?.[0] || 'C';
+      if (gradeCount[grade] !== undefined) gradeCount[grade]++;
+      else gradeCount['C']++;
+    });
+
+    // Attendance over last 6 months
+    const sixMonthsAgo = new Date(); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth()-6);
+    const attendance = await Attendance.findAll({
+      where: { studentId, date: { [Op.gte]: sixMonthsAgo } },
+      order: [['date', 'ASC']]
+    });
+    const attendanceByMonth = {};
+    attendance.forEach(a => {
+      const month = a.date.toISOString().slice(0,7);
+      if (!attendanceByMonth[month]) attendanceByMonth[month] = { present:0, total:0 };
+      attendanceByMonth[month].total++;
+      if (a.status === 'present') attendanceByMonth[month].present++;
+    });
+    const attendanceTrend = Object.entries(attendanceByMonth).map(([month, data]) => ({
+      month,
+      rate: (data.present/data.total)*100
+    }));
+
+    // Progress over time (scores per subject)
+    const subjectProgress = {};
+    records.forEach(r => {
+      if (!subjectProgress[r.subject]) subjectProgress[r.subject] = [];
+      subjectProgress[r.subject].push({ date: r.date, score: r.score });
+    });
+
+    res.json({ success: true, data: { gradeDistribution: gradeCount, attendanceTrend, subjectProgress } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
