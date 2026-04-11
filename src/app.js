@@ -10,6 +10,7 @@ const fileUpload = require('express-fileupload');
 const path = require('path');
 const { sequelize } = require('./models');
 const alertRoutes = require('./routes/alertRoutes');
+const configController = require('./controllers/configController');
 
 const multer = require('multer');
 const storage = multer.diskStorage({
