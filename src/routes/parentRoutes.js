@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const parentController = require('../controllers/parentController');
+const feeController = require('../controllers/feeController');
 
 router.use(protect, authorize('parent'));
 
