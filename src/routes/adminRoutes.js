@@ -25,6 +25,8 @@ router.get('/teachers', adminController.getAllTeachers);
 router.put('/teachers/:teacherId', adminController.updateTeacher);
 router.delete('/teachers/:teacherId', adminController.deleteTeacher);
 
+router.post('/classes/subject-assign-batch', adminController.batchAssignSubjects);
+
 // ============ PARENT MANAGEMENT ============
 router.get('/parents', adminController.getAllParents);
 
