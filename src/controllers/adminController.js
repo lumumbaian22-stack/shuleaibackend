@@ -349,23 +349,15 @@ exports.assignTeacherToClass = async (req, res) => {
   try {
     const { id } = req.params;
     const { teacherId } = req.body;
-
-    const classItem = await Class.findOne({
-      where: { id, schoolCode: req.user.schoolCode }
-    });
-    if (!classItem) {
-      return res.status(404).json({ success: false, message: 'Class not found' });
-    }
-
+    const classItem = await Class.findOne({ where: { id, schoolCode: req.user.schoolCode } });
+    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
     const teacher = await Teacher.findOne({
       where: { id: teacherId },
       include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
     });
-    if (!teacher) {
-      return res.status(404).json({ success: false, message: 'Teacher not found' });
-    }
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
-    // Remove previous class teacher if exists
+    // Remove previous class teacher
     if (classItem.teacherId) {
       const oldTeacher = await Teacher.findByPk(classItem.teacherId);
       if (oldTeacher) {
@@ -374,8 +366,7 @@ exports.assignTeacherToClass = async (req, res) => {
         await oldTeacher.save();
       }
     }
-
-    // If the teacher is already assigned to another class, remove that assignment first
+    // If teacher was already class teacher of another class, remove that
     if (teacher.classId && teacher.classId !== classItem.id) {
       const oldClass = await Class.findByPk(teacher.classId);
       if (oldClass) {
@@ -383,24 +374,14 @@ exports.assignTeacherToClass = async (req, res) => {
         await oldClass.save();
       }
     }
-
-    // Assign new teacher
     await classItem.update({ teacherId: teacher.id });
-    await teacher.update({
-      classId: classItem.id,
-      classTeacher: classItem.name
-    });
-
-    res.json({
-      success: true,
-      message: `Teacher assigned to ${classItem.name} successfully`,
-      data: classItem
-    });
+    await teacher.update({ classId: classItem.id, classTeacher: classItem.name });
+    res.json({ success: true, message: `Teacher assigned to ${classItem.name}` });
   } catch (error) {
-    console.error('Assign teacher error:', error);
+    console.error(error);
     res.status(500).json({ success: false, message: error.message });
   }
-};
+};;
 
 exports.removeTeacherFromClass = async (req, res) => {
   try {
