@@ -4,6 +4,7 @@ const path = require('path');
 const csv = require('csv-parser');
 const { Op } = require('sequelize');
 const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School } = require('../models');
+const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
 const moment = require('moment');
 
@@ -206,7 +207,6 @@ exports.enterMarks = async (req, res) => {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     const { getGradeFromScore } = require('../utils/curriculumHelper'); // create this helper
     const grade = getGradeFromScore(score, school.system, school.settings?.schoolLevel || 'secondary');
-    record.grade = grade;
     
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) {
@@ -224,7 +224,8 @@ exports.enterMarks = async (req, res) => {
       score,
       teacherId: teacher.id,
       date: date || new Date(),
-      isPublished: true
+      isPublished: true,
+       record.grade = grade
     });
 
     if (score < 50) {
