@@ -25,6 +25,9 @@ const Task = require('./Task')(sequelize, DataTypes);
 const Competency = require('./Competency')(sequelize, DataTypes);
 const LearningOutcome = require('./LearningOutcome')(sequelize, DataTypes);
 const StudentCompetencyProgress = require('./StudentCompetencyProgress')(sequelize, DataTypes);
+const HomeTaskAssignment = require('./HomeTaskAssignment')(sequelize, DataTypes);
+const HomeTask = require('./HomeTask')(sequelize, DataTypes);
+
 
 // --- Associations ---
 // Associations
@@ -220,7 +223,9 @@ module.exports = {
     Settings,
     TeacherSubjectAssignment,
     Task,
+    HomeTask,
     Competency,
     LearningOutcome,
+    HomeTaskAssignment,
     StudentCompetencyProgress
 };
