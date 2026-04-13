@@ -345,6 +345,7 @@ exports.getAvailableTeachers = async (req, res) => {
 };
 
 // In adminController.js
+// Replace the existing assignTeacherToClass with:
 exports.assignTeacherToClass = async (req, res) => {
   try {
     const { id } = req.params;
@@ -376,12 +377,41 @@ exports.assignTeacherToClass = async (req, res) => {
     }
     await classItem.update({ teacherId: teacher.id });
     await teacher.update({ classId: classItem.id, classTeacher: classItem.name });
-    res.json({ success: true, message: `Teacher assigned to ${classItem.name}` });
+    res.json({ success: true, message: `Teacher assigned to ${classItem.name} successfully` });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: error.message });
   }
-};;
+};
+
+// Add batch subject assignment
+exports.batchAssignSubjects = async (req, res) => {
+  try {
+    const { classId, assignments } = req.body; // assignments: [{ teacherId, subject }]
+    const classItem = await Class.findOne({ where: { id: classId, schoolCode: req.user.schoolCode } });
+    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
+    let subjectTeachers = classItem.subjectTeachers || [];
+    for (const ass of assignments) {
+      const teacher = await Teacher.findByPk(ass.teacherId);
+      if (!teacher) continue;
+      const teacherName = teacher.User?.name || 'Unknown';
+      // Remove existing assignment for this subject
+      subjectTeachers = subjectTeachers.filter(st => st.subject !== ass.subject);
+      subjectTeachers.push({
+        id: Date.now().toString() + Math.random(),
+        teacherId: ass.teacherId,
+        teacherName,
+        subject: ass.subject,
+        assignedAt: new Date(),
+        assignedBy: req.user.id
+      });
+    }
+    await classItem.update({ subjectTeachers });
+    res.json({ success: true, message: 'Subjects assigned successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 exports.removeTeacherFromClass = async (req, res) => {
   try {
