@@ -551,3 +551,32 @@ exports.getAttendanceStats = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.batchAssignSubjects = async (req, res) => {
+  try {
+    const { classId, assignments } = req.body; // assignments: [{ teacherId, subject }]
+    const classItem = await Class.findOne({ where: { id: classId, schoolCode: req.user.schoolCode } });
+    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
+    let subjectTeachers = classItem.subjectTeachers || [];
+    for (const ass of assignments) {
+      const teacher = await Teacher.findByPk(ass.teacherId);
+      if (!teacher) continue;
+      const teacherName = teacher.User?.name || 'Unknown';
+      // Remove existing assignment for this subject (if any)
+      subjectTeachers = subjectTeachers.filter(st => st.subject !== ass.subject);
+      // Add new
+      subjectTeachers.push({
+        id: Date.now().toString() + Math.random(),
+        teacherId: ass.teacherId,
+        teacherName,
+        subject: ass.subject,
+        assignedAt: new Date(),
+        assignedBy: req.user.id
+      });
+    }
+    await classItem.update({ subjectTeachers });
+    res.json({ success: true, message: 'Subjects assigned successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
