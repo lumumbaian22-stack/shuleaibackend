@@ -118,3 +118,51 @@ exports.getMessages = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.sendGroupMessage = async (req, res) => {
+  try {
+    const { content, replyToId } = req.body;
+    const student = await Student.findOne({ where: { userId: req.user.id } });
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    const classmates = await Student.findAll({ where: { grade: student.grade, id: { [Op.ne]: student.id } } });
+    const recipients = classmates.map(s => s.userId);
+    const messages = recipients.map(receiverId => ({
+      senderId: req.user.id,
+      receiverId,
+      content,
+      replyToMessageId: replyToId || null,
+      metadata: { type: 'student_group', studentName: req.user.name }
+    }));
+    await Message.bulkCreate(messages);
+    if (global.io) {
+      recipients.forEach(recipientId => {
+        global.io.to(`user-${recipientId}`).emit('new-student-message', { from: req.user.id, content, replyToId });
+      });
+    }
+    res.status(201).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getGroupMessages = async (req, res) => {
+  try {
+    const student = await Student.findOne({ where: { userId: req.user.id } });
+    if (!student) return res.status(404).json({ success: false });
+    const classmates = await Student.findAll({ where: { grade: student.grade } });
+    const classmateIds = classmates.map(s => s.userId);
+    const messages = await Message.findAll({
+      where: {
+        [Op.or]: [
+          { senderId: req.user.id, receiverId: { [Op.in]: classmateIds } },
+          { senderId: { [Op.in]: classmateIds }, receiverId: req.user.id }
+        ]
+      },
+      include: [{ model: User, as: 'Sender', attributes: ['id', 'name'] }],
+      order: [['createdAt', 'ASC']]
+    });
+    res.json({ success: true, data: messages });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
