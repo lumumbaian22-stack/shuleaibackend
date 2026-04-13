@@ -11,6 +11,7 @@ const path = require('path');
 const { sequelize } = require('./models');
 const alertRoutes = require('./routes/alertRoutes');
 const configController = require('./controllers/configController');
+const competencyRoutes = require('./routes/competencyRoutes');
 
 const multer = require('multer');
 const storage = multer.diskStorage({
@@ -168,6 +169,7 @@ app.use('/api/help', helpRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api/cbe', competencyRoutes);
 
 // 404 handler - This must be AFTER all routes
 app.use((req, res) => {
