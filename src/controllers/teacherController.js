@@ -203,6 +203,10 @@ exports.addStudent = async (req, res) => {
 exports.enterMarks = async (req, res) => {
   try {
     const { studentId, subject, score, assessmentType, assessmentName, date, term, year } = req.body;
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    const { getGradeFromScore } = require('../utils/curriculumHelper'); // create this helper
+    const grade = getGradeFromScore(score, school.system, school.settings?.schoolLevel || 'secondary');
+    record.grade = grade;
     
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) {
