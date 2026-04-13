@@ -121,6 +121,7 @@ const authController = {
           requireApproval: true,
           autoApproveDomains: [],
           schoolLevel: schoolLevel || 'secondary',
+          curriculum: curriculum || 'cbc',
           dutyManagement: {
             enabled: true,
             reminderHours: 24,
