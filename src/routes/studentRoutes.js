@@ -22,4 +22,7 @@ router.get('/attendance', studentController.getAttendance);
 router.post('/message', studentController.sendMessage);
 router.get('/messages/:otherUserId', studentController.getMessages);
 
+router.post('/group-message', studentController.sendGroupMessage);
+router.get('/group-messages', studentController.getGroupMessages);
+
 module.exports = router;
