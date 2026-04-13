@@ -22,8 +22,20 @@ const Class = require('./Class')(sequelize, DataTypes);
 const Settings = require('./Settings')(sequelize, DataTypes);
 const TeacherSubjectAssignment = require('./TeacherSubjectAssignment')(sequelize);
 const Task = require('./Task')(sequelize, DataTypes);
+const Competency = require('./Competency')(sequelize, DataTypes);
+const LearningOutcome = require('./LearningOutcome')(sequelize, DataTypes);
+const StudentCompetencyProgress = require('./StudentCompetencyProgress')(sequelize, DataTypes);
 
 // --- Associations ---
+// Associations
+Competency.hasMany(LearningOutcome, { foreignKey: 'competencyId' });
+LearningOutcome.belongsTo(Competency, { foreignKey: 'competencyId' });
+
+LearningOutcome.hasMany(StudentCompetencyProgress, { foreignKey: 'learningOutcomeId' });
+StudentCompetencyProgress.belongsTo(LearningOutcome, { foreignKey: 'learningOutcomeId' });
+
+Student.hasMany(StudentCompetencyProgress, { foreignKey: 'studentId' });
+StudentCompetencyProgress.belongsTo(Student, { foreignKey: 'studentId' });
 
 // User to role-specific profiles
 User.hasOne(Student, { foreignKey: 'userId', onDelete: 'CASCADE' });
@@ -207,5 +219,8 @@ module.exports = {
     Class,
     Settings,
     TeacherSubjectAssignment,
-    Task
+    Task,
+    Competency,
+    LearningOutcome,
+    StudentCompetencyProgress
 };
