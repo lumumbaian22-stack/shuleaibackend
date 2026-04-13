@@ -227,7 +227,13 @@ exports.getAllParents = async (req, res) => {
 exports.getSchoolSettings = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    res.json({ success: true, data: school });
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    
+    // Add curriculum alias for frontend compatibility
+    const schoolData = school.toJSON();
+    schoolData.curriculum = school.system;
+    
+    res.json({ success: true, data: schoolData });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
