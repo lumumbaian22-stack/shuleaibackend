@@ -36,6 +36,9 @@ const parentMessageRoutes = require('./routes/parentMessageRoutes');
 const helpRoutes = require('./routes/helpRoutes');
 const userRoutes = require('./routes/userRoutes');
 const taskRoutes = require('./routes/taskRoutes');
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
+const homeTaskRoutes = require('./routes/homeTaskRoutes');
+const classAnalyticsRoutes = require('./routes/classAnalyticsRoutes');
 
 const app = express();
 
@@ -170,6 +173,9 @@ app.use('/api/user', userRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/cbe', competencyRoutes);
+app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/home-tasks', homeTaskRoutes);
+app.use('/api/class-analytics', classAnalyticsRoutes);
 
 // 404 handler - This must be AFTER all routes
 app.use((req, res) => {
