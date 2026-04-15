@@ -1,6 +1,10 @@
 const sequelize = require('../config/database');
 const { DataTypes } = require('sequelize');
 
+const UserConsent = require('./UserConsent')(sequelize, DataTypes);
+const ParentChildConsent = require('./ParentChildConsent')(sequelize, DataTypes);
+const SchoolDPA = require('./SchoolDPA')(sequelize, DataTypes);
+
 // Import all models
 const User = require('./User')(sequelize, DataTypes);
 const School = require('./School')(sequelize, DataTypes);
