@@ -231,5 +231,8 @@ module.exports = {
     Competency,
     LearningOutcome,
     HomeTaskAssignment,
+    SchoolDPA,
+    ParentChildConsent,
+    UserConsent,
     StudentCompetencyProgress
 };
