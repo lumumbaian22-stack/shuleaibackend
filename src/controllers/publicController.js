@@ -1,5 +1,6 @@
 const { School, DutyRoster } = require('../models');
 const moment = require('moment');
+const { Op } = require('sequelize');
 
 // @desc    Get public duty view for today
 // @route   GET /api/public/duty/today
