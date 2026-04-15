@@ -12,7 +12,6 @@ const { sequelize } = require('./models');
 const alertRoutes = require('./routes/alertRoutes');
 const configController = require('./controllers/configController');
 const competencyRoutes = require('./routes/competencyRoutes');
-app.use('/api/consent', require('./routes/consentRoutes'));
 const { requireConsent, requireDPA, requireParentalConsent } = require('./middleware/consent');
 
 const multer = require('multer');
@@ -38,6 +37,7 @@ const parentMessageRoutes = require('./routes/parentMessageRoutes');
 const helpRoutes = require('./routes/helpRoutes');
 const userRoutes = require('./routes/userRoutes');
 const taskRoutes = require('./routes/taskRoutes');
+const consentRoutes = require('./routes/consentRoutes');
 //const subscriptionRoutes = require('./routes/subscriptionRoutes');
 //const homeTaskRoutes = require('./routes/homeTaskRoutes');
 //const classAnalyticsRoutes = require('./routes/classAnalyticsRoutes');
@@ -156,36 +156,41 @@ app.post('/api/test/create-school', async (req, res) => {
 
 app.get('/api/config/support', configController.getSupportConfig);
 
-// ============ ROUTES ============
-// All routes must be valid routers (not objects)
+// ============ PUBLIC ROUTES (NO CONSENT REQUIRED) ============
 app.use('/api/auth', authRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/duty', dutyRoutes);
 app.use('/api/public', publicRoutes);
-app.use('/api/super-admin', superAdminRoutes);
-app.use('/api/teacher', teacherRoutes);
-app.use('/api/parent', parentRoutes);
-app.use('/api/parent-messages', parentMessageRoutes);  // Changed to avoid conflict
-app.use('/api/student', studentRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/api/upload', uploadRoutes);
-app.use('/api/school', schoolRoutes);
-app.use('/api/help', helpRoutes);
-app.use('/api/user', userRoutes);
-app.use('/api/tasks', taskRoutes);
-app.use('/api/alerts', alertRoutes);
-app.use('/api/cbe', competencyRoutes);
+
+// ============ PROTECTED ROUTES (CONSENT REQUIRED) ============
+// Apply consent middleware to all authenticated routes
+// Note: The `protect` middleware is applied inside each route file.
+// We apply consent globally here to ensure all protected endpoints check consent.
+app.use('/api/admin', requireConsent, requireDPA, adminRoutes);
+app.use('/api/duty', requireConsent, dutyRoutes);
+app.use('/api/super-admin', requireConsent, superAdminRoutes);
+app.use('/api/teacher', requireConsent, teacherRoutes);
+app.use('/api/parent', requireConsent, parentRoutes);
+app.use('/api/parent-messages', requireConsent, parentMessageRoutes);
+app.use('/api/student', requireConsent, studentRoutes);
+app.use('/api/analytics', requireConsent, analyticsRoutes);
+app.use('/api/upload', requireConsent, uploadRoutes);
+app.use('/api/school', requireConsent, schoolRoutes);
+app.use('/api/help', requireConsent, helpRoutes);
+app.use('/api/user', requireConsent, userRoutes);
+app.use('/api/tasks', requireConsent, taskRoutes);
+app.use('/api/alerts', requireConsent, alertRoutes);
+app.use('/api/cbe', requireConsent, competencyRoutes);
+app.use('/api/consent', consentRoutes); // consent routes themselves don't need consent middleware (handled internally)
 //app.use('/api/subscription', subscriptionRoutes);
 //app.use('/api/home-tasks', homeTaskRoutes);
 //app.use('/api/class-analytics', classAnalyticsRoutes);
 
-// 404 handler - This must be AFTER all routes
+// ============ 404 HANDLER ============
 app.use((req, res) => {
   console.log('404 Not Found:', req.method, req.url);
   res.status(404).json({ success: false, message: 'Route not found' });
 });
 
-// Error handler
+// ============ ERROR HANDLER ============
 app.use((err, req, res, next) => {
   console.error('Error:', err.stack);
   res.status(err.status || 500).json({
