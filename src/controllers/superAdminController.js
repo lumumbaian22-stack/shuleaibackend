@@ -335,6 +335,13 @@ exports.approveRequest = async (req, res) => {
             message: `Your request to change school name to "${request.newName}" has been approved.`
         });
 
+        if (global.io) {
+          global.io.to(`school-${school.schoolId}`).emit('school-name-changed', {
+            newName: school.name,
+            schoolId: school.schoolId
+          });
+        }
+
         res.json({ success: true, message: 'Request approved' });
     } catch (error) {
         console.error('Approve request error:', error);
