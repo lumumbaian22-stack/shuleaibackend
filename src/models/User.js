@@ -41,6 +41,12 @@ module.exports = (sequelize, DataTypes) => {
       }
     }
   }, {
+    
+    firstLogin: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true
+    },
+
     timestamps: true,
     hooks: {
       beforeSave: async (user) => {
