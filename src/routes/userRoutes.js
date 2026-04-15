@@ -7,7 +7,7 @@ const upload = require('../middleware/upload');
 
 // All user routes require authentication
 router.use(protect);
-
+router.get('/alerts', userController.getAlerts);
 router.get('/stats', userController.getUserStats);
 router.put('/profile', userController.updateProfile);
 router.get('/preferences', userController.getPreferences);
