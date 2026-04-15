@@ -204,14 +204,16 @@ exports.addStudent = async (req, res) => {
 exports.enterMarks = async (req, res) => {
   try {
     const { studentId, subject, score, assessmentType, assessmentName, date, term, year } = req.body;
-    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    const { getGradeFromScore } = require('../utils/curriculumHelper'); // create this helper
-    const grade = getGradeFromScore(score, school.system, school.settings?.schoolLevel || 'secondary');
     
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) {
       return res.status(404).json({ success: false, message: 'Teacher not found' });
     }
+
+    // Get school curriculum for grade calculation
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    const { getGradeFromScore } = require('../utils/curriculumHelper');
+    const grade = getGradeFromScore(score, school.system, school.settings?.schoolLevel || 'secondary');
 
     const record = await AcademicRecord.create({
       studentId,
@@ -225,7 +227,7 @@ exports.enterMarks = async (req, res) => {
       teacherId: teacher.id,
       date: date || new Date(),
       isPublished: true,
-       record.grade = grade
+      grade: grade   // ✅ added here
     });
 
     if (score < 50) {
