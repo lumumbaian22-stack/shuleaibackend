@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { Teacher, DutyRoster, Alert } = require('../models');
+const { Teacher, DutyRoster, Alert, User } = require('../models');
 const moment = require('moment');
 const { createAlert } = require('../services/notificationService');
 const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
