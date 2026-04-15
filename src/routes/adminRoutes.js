@@ -1,22 +1,14 @@
+cat > src/routes/adminRoutes.js << 'EOF'
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const { validate, validationRules } = require('../middleware/validation');
-const { requireConsent, requireDPA } = require('../middleware/consent');
 const teacherSignupController = require('../controllers/teacherSignupController');
 const dutyController = require('../controllers/dutyController');
 const adminController = require('../controllers/adminController');
 const classController = require('../controllers/classController');
 
-// All admin routes require authentication and admin/super_admin role
-router.use(protect);
-router.use(authorize('admin', 'super_admin'));
-
-// Require basic consent (Terms & Privacy) for all authenticated users
-//router.use(requireConsent);
-
-// Require DPA for admin actions involving student data
-router.use(requireDPA);
+router.use(protect, authorize('admin', 'super_admin'));
 
 // ============ DASHBOARD ============
 router.get('/dashboard', adminController.getDashboardStats);
@@ -74,3 +66,4 @@ router.get('/settings', adminController.getSchoolSettings);
 router.put('/settings', adminController.updateSchoolSettings);
 
 module.exports = router;
+EOF
