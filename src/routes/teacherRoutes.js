@@ -1,13 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
+const { requireConsent } = require('../middleware/consent');
 const teacherController = require('../controllers/teacherController');
 const teacherMessageController = require('../controllers/teacherMessageController');
 const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
 
 // All teacher routes require authentication and teacher role
-router.use(protect, authorize('teacher'));
+router.use(protect);
+router.use(authorize('teacher'));
+
+// Require basic consent (Terms & Privacy)
+router.use(requireConsent);
 
 // ============ STUDENT MANAGEMENT ============
 router.get('/students', teacherController.getMyStudents);
@@ -47,7 +52,7 @@ router.get('/staff-members', chatController.getStaffMembers);
 router.post('/group-message', chatController.sendGroupMessage);
 router.post('/private-message', chatController.sendPrivateMessage);
 router.get('/group-messages', chatController.getGroupMessages);
-router.get('/private-messages/:otherUserId', chatController.getPrivateMessages);   // no /chat/
+router.get('/private-messages/:otherUserId', chatController.getPrivateMessages);
 router.get('/conversations', chatController.getConversations);
 router.get('/messages/:id', chatController.getMessage);
 
