@@ -1312,3 +1312,56 @@ exports.searchHelpArticles = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Get growth data for charts
+// @route   GET /api/super-admin/growth-data
+exports.getGrowthData = async (req, res) => {
+  try {
+    const schools = await School.findAll({
+      attributes: ['createdAt'],
+      order: [['createdAt', 'ASC']]
+    });
+    
+    // Group by month
+    const monthly = {};
+    schools.forEach(s => {
+      const month = s.createdAt.toISOString().slice(0, 7);
+      monthly[month] = (monthly[month] || 0) + 1;
+    });
+    
+    const labels = Object.keys(monthly).sort();
+    const values = labels.map(m => monthly[m]);
+    
+    res.json({ success: true, data: { labels, values } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get school distribution by level
+// @route   GET /api/super-admin/school-distribution
+exports.getSchoolDistribution = async (req, res) => {
+  try {
+    const schools = await School.findAll({
+      attributes: ['settings']
+    });
+    
+    const distribution = { primary: 0, secondary: 0, both: 0 };
+    schools.forEach(s => {
+      const level = s.settings?.schoolLevel || 'secondary';
+      if (level === 'primary') distribution.primary++;
+      else if (level === 'secondary') distribution.secondary++;
+      else if (level === 'both') distribution.both++;
+    });
+    
+    res.json({ 
+      success: true, 
+      data: { 
+        labels: ['Primary', 'Secondary', 'Both'],
+        values: [distribution.primary, distribution.secondary, distribution.both]
+      } 
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
