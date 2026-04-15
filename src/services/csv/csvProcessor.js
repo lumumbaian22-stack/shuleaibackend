@@ -1,7 +1,6 @@
 const fs = require('fs');
 const csv = require('csv-parser');
-const { Student, User, Parent, Class, Teacher } = require('../../models');
-
+const { Student, User, Parent, Class, Teacher, AcademicRecord, Attendance } = require('../../models');
 class CSVProcessor {
   constructor(schoolCode, userId) {
     this.schoolCode = schoolCode;
