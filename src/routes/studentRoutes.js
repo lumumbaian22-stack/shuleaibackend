@@ -3,16 +3,19 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const studentController = require('../controllers/studentController');
 const authController = require('../controllers/authController');
+const { requireConsent } = require('../middleware/consent');
 
-router.post('/set-first-password', authController.setFirstPassword);
 
 router.use(protect, authorize('student'));
+router.use(requireConsent);
+
+router.post('/set-first-password', authController.setFirstPassword);
 
 // Comment out the problematic line
 // router.get('/dashboard', studentController.getDashboard);
 
 // Use a simple route instead
-router.get('/dashboard', studentController.getDashboard);;
+router.get('/dashboard', studentController.getDashboard);
 
 router.get('/materials', studentController.getMaterials);
 router.get('/grades', studentController.getGrades);
