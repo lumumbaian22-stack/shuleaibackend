@@ -15,6 +15,11 @@ module.exports = (sequelize, DataTypes) => {
         return `TCH-${year}-${random}`;
       }
     },
+    classId: {
+      type: DataTypes.INTEGER,
+       allowNull: true,
+       references: { model: 'Classes', key: 'id' }
+    },
     subjects: {
       type: DataTypes.ARRAY(DataTypes.STRING),
       defaultValue: []
