@@ -12,6 +12,7 @@ const { sequelize } = require('./models');
 const alertRoutes = require('./routes/alertRoutes');
 const configController = require('./controllers/configController');
 const competencyRoutes = require('./routes/competencyRoutes');
+const { requireConsent, requireDPA, requireParentalConsent } = require('./middleware/consent');
 
 const multer = require('multer');
 const storage = multer.diskStorage({
