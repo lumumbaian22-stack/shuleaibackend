@@ -1,6 +1,7 @@
 const { School, User, Admin, SchoolNameRequest, Student, Teacher, Parent, ApprovalRequest } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
+const { sequelize } = require('../models');
 
 // @desc    Get platform overview
 // @route   GET /api/super-admin/overview
