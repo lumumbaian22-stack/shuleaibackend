@@ -41,23 +41,24 @@ io.on('connection', (socket) => {
 
 // Test database connection and sync models
 sequelize.authenticate()
-    .then(() => {
-        console.log('✅ Database connection test SUCCESSFUL');
-        // Sync models (use `alter: true` only in development)
-        const syncOptions = { alter: process.env.NODE_ENV === 'development' };
-        return sequelize.sync(syncOptions);
-    })
-    .then(() => {
-        console.log('✅ Database models synchronized');
-        // Start server
-        server.listen(PORT, () => {
-            console.log(`✅ Server running on port ${PORT}`);
-        });
-    })
-    .catch(err => {
-        console.error('❌ Database or sync error:', err);
-        process.exit(1);
+  .then(() => {
+    console.log('✅ Database connection test SUCCESSFUL');
+    if (process.env.NODE_ENV === 'development') {
+      return sequelize.sync({ alter: true });
+    }
+  })
+  .then(() => {
+    if (process.env.NODE_ENV === 'development') {
+      console.log('✅ Database models synchronized');
+    }
+    server.listen(PORT, () => {
+      console.log(`✅ Server running on port ${PORT}`);
     });
+  })
+  .catch(err => {
+    console.error('❌ Database or sync error:', err);
+    process.exit(1);
+  });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
