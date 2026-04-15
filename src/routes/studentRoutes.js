@@ -12,9 +12,7 @@ router.use(protect, authorize('student'));
 // router.get('/dashboard', studentController.getDashboard);
 
 // Use a simple route instead
-router.get('/dashboard', (req, res) => {
-    res.json({ success: true, message: 'Dashboard endpoint', user: req.user });
-});
+router.get('/dashboard', studentController.getDashboard);;
 
 router.get('/materials', studentController.getMaterials);
 router.get('/grades', studentController.getGrades);
