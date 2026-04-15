@@ -2,6 +2,7 @@
 const { User, Student, Teacher, Parent, AcademicRecord, Attendance } = require('../models');
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
+const path = require('path');
 
 // @desc    Get user statistics for profile
 // @route   GET /api/user/stats
