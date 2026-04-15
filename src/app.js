@@ -12,6 +12,7 @@ const { sequelize } = require('./models');
 const alertRoutes = require('./routes/alertRoutes');
 const configController = require('./controllers/configController');
 const competencyRoutes = require('./routes/competencyRoutes');
+app.use('/api/consent', require('./routes/consentRoutes'));
 const { requireConsent, requireDPA, requireParentalConsent } = require('./middleware/consent');
 
 const multer = require('multer');
