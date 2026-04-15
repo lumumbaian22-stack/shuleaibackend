@@ -222,3 +222,18 @@ exports.uploadProfilePicture = async (req, res) => {
   await req.user.update({ profileImage: `/uploads/profiles/${fileName}` });
   res.json({ success: true, data: { profileImage: req.user.profileImage } });
 };
+
+// @desc    Get user alerts
+// @route   GET /api/user/alerts
+exports.getAlerts = async (req, res) => {
+  try {
+    const alerts = await Alert.findAll({
+      where: { userId: req.user.id },
+      order: [['createdAt', 'DESC']],
+      limit: 50
+    });
+    res.json({ success: true, data: alerts });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
