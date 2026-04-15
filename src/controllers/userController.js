@@ -1,5 +1,5 @@
 // src/controllers/userController.js
-const { User, Student, Teacher, Parent, AcademicRecord, Attendance } = require('../models');
+const { User, Student, Teacher, Parent, AcademicRecord, Attendance, Alert } = require('../models');
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 const path = require('path');
