@@ -8,7 +8,7 @@ router.use(protect);
 router.use(authorize('parent'));
 
 // Require basic consent (Terms & Privacy)
-router.use(requireConsent);
+//router.use(requireConsent);
 
 // Routes that don't need parental consent (child list, payments, etc.)
 router.get('/children', parentController.getChildren);
