@@ -10,6 +10,7 @@ router.get('/child/:studentId/summary', parentController.getChildSummary);
 router.post('/report-absence', parentController.reportAbsence);
 router.post('/pay', parentController.makePayment);
 router.get('/payments', parentController.getPayments);
+router.get('/child/:studentId/attendance/today', parentController.getChildTodayAttendance);
 
 // Fee routes – now defined
 router.get('/fees/:studentId', parentController.getFees);
