@@ -12,7 +12,7 @@ router.use(protect);
 router.use(authorize('teacher'));
 
 // Require basic consent (Terms & Privacy)
-router.use(requireConsent);
+//router.use(requireConsent);
 
 // ============ STUDENT MANAGEMENT ============
 router.get('/students', teacherController.getMyStudents);
