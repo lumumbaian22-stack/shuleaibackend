@@ -735,3 +735,28 @@ exports.addPayment = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Get child's live attendance for today
+// @route   GET /api/parent/child/:studentId/attendance/today
+exports.getChildTodayAttendance = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const parent = await Parent.findOne({ where: { userId: req.user.id } });
+    const student = await Student.findByPk(studentId);
+    if (!student || !(await parent.hasStudent(student))) {
+      return res.status(403).json({ success: false, message: 'Not your child' });
+    }
+    
+    const today = new Date().toISOString().split('T')[0];
+    const attendance = await Attendance.findOne({
+      where: { studentId, date: today }
+    });
+    
+    res.json({ 
+      success: true, 
+      data: attendance || { status: 'not_recorded' } 
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
