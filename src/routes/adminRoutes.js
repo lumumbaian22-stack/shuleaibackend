@@ -13,7 +13,7 @@ router.use(protect);
 router.use(authorize('admin', 'super_admin'));
 
 // Require basic consent (Terms & Privacy) for all authenticated users
-router.use(requireConsent);
+//router.use(requireConsent);
 
 // Require DPA for admin actions involving student data
 router.use(requireDPA);
