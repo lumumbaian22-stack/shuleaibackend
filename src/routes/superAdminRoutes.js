@@ -50,4 +50,7 @@ router.post('/backup', superAdminController.runSystemBackup);
 router.post('/cache/clear', superAdminController.clearPlatformCache);
 router.get('/export', superAdminController.exportPlatformData);
 
+router.get('/growth-data', superAdminController.getGrowthData);
+router.get('/school-distribution', superAdminController.getSchoolDistribution);
+
 module.exports = router;
