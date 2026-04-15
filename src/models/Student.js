@@ -34,6 +34,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM('excelling', 'average', 'struggling', 'critical'),
       defaultValue: 'average'
     },
+     points: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
     // Updated payment/subscription fields
     paymentStatus: {
       type: DataTypes.JSONB,
