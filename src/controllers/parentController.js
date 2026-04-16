@@ -12,7 +12,6 @@ exports.getChildren = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Parent profile not found' });
     }
 
-    // Use 'students' alias as defined in your association (NOT 'children')
     const children = await parent.getStudents({ 
       include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }] 
     });
@@ -107,7 +106,6 @@ exports.reportAbsence = async (req, res) => {
     // Handle single date or date range
     const dates = [];
     if (startDate && endDate) {
-      // Generate date range
       const start = new Date(startDate);
       const end = new Date(endDate);
       for (let d = start; d <= end; d.setDate(d.getDate() + 1)) {
@@ -137,7 +135,6 @@ exports.reportAbsence = async (req, res) => {
     const createdRecords = [];
     
     for (const absenceDate of dates) {
-      // Check if attendance already recorded
       const [attendance, created] = await Attendance.findOrCreate({
         where: { studentId, date: absenceDate },
         defaults: {
@@ -183,30 +180,22 @@ exports.reportAbsence = async (req, res) => {
         }
       });
 
-      // Also send email notification (implement if you have email service)
-      // await sendEmail(classTeacher.User.email, 'Student Absence Report', emailContent);
-    }
-
-    // Notify school admin as well
-    const admins = await User.findAll({ 
-      where: { role: 'admin', schoolCode: req.user.schoolCode } 
-    });
-
-    for (const admin of admins) {
-      await createAlert({
-        userId: admin.id,
-        role: 'admin',
-        type: 'attendance',
-        severity: 'info',
-        title: '📋 Parent Reported Absence',
-        message: `${student.User.name} reported absent by parent. Reason: ${reason}`,
-        data: {
-          studentId: student.id,
-          studentName: student.User.name,
-          dates: dates,
-          reason: reason
-        }
+      // Notify school admin as well
+      const admins = await User.findAll({ 
+        where: { role: 'admin', schoolCode: req.user.schoolCode } 
       });
+
+      for (const admin of admins) {
+        await createAlert({
+          userId: admin.id,
+          role: 'admin',
+          type: 'attendance',
+          severity: 'info',
+          title: '📋 Parent Reported Absence',
+          message: `${student.User.name} reported absent by parent. Reason: ${reason}`,
+          data: { studentId: student.id, studentName: student.User.name, dates, reason }
+        });
+      }
     }
 
     res.status(201).json({ 
@@ -226,48 +215,9 @@ exports.reportAbsence = async (req, res) => {
 exports.getSubscriptionPlans = async (req, res) => {
   try {
     const plans = [
-      {
-        id: 'basic',
-        name: 'Basic',
-        price: 3,
-        currency: 'USD',
-        interval: 'month',
-        features: [
-          'View attendance records',
-          'View basic grades',
-          'Report absence',
-          'Email notifications'
-        ]
-      },
-      {
-        id: 'premium',
-        name: 'Premium',
-        price: 10,
-        currency: 'USD',
-        interval: 'month',
-        features: [
-          'Everything in Basic',
-          'Detailed academic progress',
-          'Teacher comments and feedback',
-          'Payment history',
-          'SMS notifications'
-        ]
-      },
-      {
-        id: 'ultimate',
-        name: 'Ultimate',
-        price: 20,
-        currency: 'USD',
-        interval: 'month',
-        features: [
-          'Everything in Premium',
-          'Live chat with teachers',
-          'Video conference access',
-          'Priority support',
-          'Downloadable reports',
-          'Multi-child discount'
-        ]
-      }
+      { id: 'basic', name: 'Basic', price: 3, currency: 'USD', interval: 'month', features: ['View attendance records', 'View basic grades', 'Report absence', 'Email notifications'] },
+      { id: 'premium', name: 'Premium', price: 10, currency: 'USD', interval: 'month', features: ['Everything in Basic', 'Detailed academic progress', 'Teacher comments and feedback', 'Payment history', 'SMS notifications'] },
+      { id: 'ultimate', name: 'Ultimate', price: 20, currency: 'USD', interval: 'month', features: ['Everything in Premium', 'Live chat with teachers', 'Video conference access', 'Priority support', 'Downloadable reports', 'Multi-child discount'] }
     ];
 
     res.json({ success: true, data: plans });
@@ -315,9 +265,6 @@ exports.makePayment = async (req, res) => {
         paymentDate: new Date()
       }
     });
-
-    // In production, integrate with payment gateway here
-    // For M-Pesa, Stripe, etc.
 
     res.status(201).json({ 
       success: true, 
@@ -492,7 +439,7 @@ exports.upgradePlan = async (req, res) => {
 // @access  Private/Parent
 exports.sendMessage = async (req, res) => {
   try {
-    const { studentId, message, recipientType } = req.body; // recipientType: 'teacher' or 'admin'
+    const { studentId, message, recipientType } = req.body;
     
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId, { 
@@ -507,7 +454,6 @@ exports.sendMessage = async (req, res) => {
     let recipientName = '';
 
     if (recipientType === 'teacher') {
-      // Get class teacher
       const classTeacher = await Teacher.findOne({
         where: { classTeacher: student.grade },
         include: [{ model: User, attributes: ['id', 'name'] }]
@@ -520,7 +466,6 @@ exports.sendMessage = async (req, res) => {
       recipientId = classTeacher.User.id;
       recipientName = classTeacher.User.name;
     } else if (recipientType === 'admin') {
-      // Get school admin
       const admin = await User.findOne({
         where: { role: 'admin', schoolCode: req.user.schoolCode }
       });
@@ -535,7 +480,6 @@ exports.sendMessage = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid recipient type' });
     }
 
-    // Create message
     const { Message } = require('../models');
     const newMessage = await Message.create({
       senderId: req.user.id,
@@ -548,7 +492,6 @@ exports.sendMessage = async (req, res) => {
       }
     });
 
-    // Send real-time notification via WebSocket
     if (global.io) {
       global.io.to(`user-${recipientId}`).emit('new-message', {
         from: req.user.id,
@@ -559,7 +502,6 @@ exports.sendMessage = async (req, res) => {
       });
     }
 
-    // Create alert for recipient
     await createAlert({
       userId: recipientId,
       role: recipientType === 'teacher' ? 'teacher' : 'admin',
@@ -619,6 +561,9 @@ exports.getMessages = async (req, res) => {
   }
 };
 
+// @desc    Get child analytics
+// @route   GET /api/parent/child/:studentId/analytics
+// @access  Private/Parent
 exports.getChildAnalytics = async (req, res) => {
   try {
     const { studentId } = req.params;
@@ -707,7 +652,7 @@ exports.addPayment = async (req, res) => {
         schoolCode: student.User.schoolCode,
         term,
         year,
-        totalAmount: 5000, // default, can be configured
+        totalAmount: 5000,
         paidAmount: 0,
         status: 'unpaid'
       });
