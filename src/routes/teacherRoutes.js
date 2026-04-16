@@ -14,7 +14,7 @@ router.use(authorize('teacher'));
 // Require basic consent (Terms & Privacy)
 //router.use(requireConsent);
 
-router.get('/gradebook', exports.getClassGradebook);
+router.get('/gradebook', teacherController.getClassGradebook);
 
 // ============ STUDENT MANAGEMENT ============
 router.get('/students', teacherController.getMyStudents);
