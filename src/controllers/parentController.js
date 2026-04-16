@@ -705,3 +705,39 @@ exports.getChildTodayAttendance = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// In parentController.js
+exports.getConversations = async (req, res) => {
+  try {
+    const parent = await Parent.findOne({ where: { userId: req.user.id } });
+    const messages = await Message.findAll({
+      where: {
+        [Op.or]: [{ senderId: req.user.id }, { receiverId: req.user.id }]
+      },
+      include: [
+        { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
+        { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
+    // Group by conversation...
+    const conversations = {};
+    messages.forEach(msg => {
+      const otherId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
+      if (!conversations[otherId]) {
+        conversations[otherId] = {
+          userId: otherId,
+          userName: msg.senderId === req.user.id ? msg.Receiver?.name : msg.Sender?.name,
+          lastMessage: msg.content,
+          lastMessageTime: msg.createdAt,
+          unreadCount: msg.receiverId === req.user.id && !msg.isRead ? 1 : 0
+        };
+      } else if (msg.receiverId === req.user.id && !msg.isRead) {
+        conversations[otherId].unreadCount++;
+      }
+    });
+    res.json({ success: true, data: Object.values(conversations) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
