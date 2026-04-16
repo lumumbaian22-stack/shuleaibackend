@@ -1365,3 +1365,11 @@ exports.getSchoolDistribution = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.updateSubscriptionPlan = async (req, res) => {
+  const { planId, price, features } = req.body;
+  const plan = await SubscriptionPlan.findByPk(planId);
+  if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });
+  await plan.update({ price_kes: price, features });
+  res.json({ success: true, data: plan });
+};
