@@ -53,6 +53,8 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 app.use(compression());
 
+app.use('/api/home-tasks', homeTaskRoutes);
+
 app.use(fileUpload({
   limits: { fileSize: process.env.MAX_FILE_SIZE || 50 * 1024 * 1024 },
   useTempFiles: true,
