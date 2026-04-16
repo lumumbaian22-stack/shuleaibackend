@@ -17,4 +17,23 @@ router.post('/deactivate', userController.deactivateAccount);
 router.post('/profile-picture', userController.uploadProfilePicture);
 router.post('/profile-picture', upload.single('picture'), userController.uploadProfilePicture);
 
+// @desc    Get consent status for current user
+// @route   GET /api/consent/status
+router.get('/consent/status', protect, async (req, res) => {
+  try {
+    const { UserConsent } = require('../models');
+    const consent = await UserConsent.findOne({ where: { userId: req.user.id } });
+    res.json({ 
+      success: true, 
+      data: { 
+        termsAccepted: consent?.termsAccepted || false,
+        privacyAccepted: consent?.privacyAccepted || false,
+        dpaAccepted: false // Add DPA check if needed
+      } 
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;
