@@ -34,3 +34,31 @@ exports.markAllAsRead = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// Create an alert (admin only)
+exports.createAlert = async (req, res) => {
+  try {
+    const { userId, role, type, severity, title, message, data } = req.body;
+    // Only admin or super admin can create alerts for others
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const alert = await Alert.create({
+      userId,
+      role,
+      type: type || 'system',
+      severity: severity || 'info',
+      title,
+      message,
+      data: data || {}
+    });
+    // Emit via socket
+    if (global.io) {
+      global.io.to(`user-${userId}`).emit('alert', alert);
+    }
+    res.status(201).json({ success: true, data: alert });
+  } catch (error) {
+    console.error('Create alert error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
