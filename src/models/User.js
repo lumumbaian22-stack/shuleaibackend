@@ -25,7 +25,7 @@ module.exports = (sequelize, DataTypes) => {
     phone: DataTypes.STRING,
     schoolCode: {
       type: DataTypes.STRING,
-       allowNull: true
+      allowNull: true
     },
     profileImage: DataTypes.STRING,
     isActive: {
@@ -33,6 +33,10 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: true
     },
     lastLogin: DataTypes.DATE,
+    firstLogin: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true
+    },
     preferences: {
       type: DataTypes.JSONB,
       defaultValue: {
@@ -41,12 +45,6 @@ module.exports = (sequelize, DataTypes) => {
       }
     }
   }, {
-    
-    firstLogin: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: true
-    },
-
     timestamps: true,
     hooks: {
       beforeSave: async (user) => {
@@ -79,10 +77,10 @@ module.exports = (sequelize, DataTypes) => {
       phone: this.phone,
       profileImage: this.profileImage,
       schoolCode: this.schoolCode,
-      isActive: this.isActive
+      isActive: this.isActive,
+      firstLogin: this.firstLogin
     };
   };
 
   return User;
-
 };
