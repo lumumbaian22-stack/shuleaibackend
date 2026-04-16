@@ -11,7 +11,6 @@ router.post('/report-absence', parentController.reportAbsence);
 router.post('/pay', parentController.makePayment);
 router.get('/payments', parentController.getPayments);
 
-// Fee routes
 router.get('/fees/:studentId', parentController.getFees);
 router.post('/fees/pay', parentController.addPayment);
 
@@ -21,12 +20,10 @@ router.post('/payment-confirm', parentController.confirmPayment);
 router.post('/message', parentController.sendMessage);
 router.get('/messages/:otherUserId', parentController.getMessages);
 
-router.get('/conversations', parentMessageController.getConversations);
+// Use parentController.getConversations instead of parentMessageController
+router.get('/conversations', parentController.getConversations);
 
-// Analytics
 router.get('/child/:studentId/analytics', parentController.getChildAnalytics);
-
-// Live attendance
 router.get('/child/:studentId/attendance/today', parentController.getChildTodayAttendance);
 
 module.exports = router;
