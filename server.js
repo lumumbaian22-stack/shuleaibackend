@@ -1,29 +1,57 @@
 require('dotenv').config();
 const path = require('path');
-
-// Correct path to app.js in src folder
 const app = require('./src/app');
-
 const http = require('http');
 const socketio = require('socket.io');
 const { sequelize } = require('./src/models');
+const jwt = require('jsonwebtoken');
+const { User } = require('./src/models');
 
-// Determine port
 const PORT = process.env.PORT || 5000;
 
-// Create HTTP server
 const server = http.createServer(app);
 
-// Socket.io setup
 const io = socketio(server, {
     cors: { origin: process.env.FRONTEND_URL || '*', credentials: true }
 });
 global.io = io;
 
+// Socket.IO authentication middleware
+io.use(async (socket, next) => {
+    const token = socket.handshake.auth.token;
+    if (!token) {
+        return next(new Error('Authentication error: No token provided'));
+    }
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const user = await User.findByPk(decoded.id);
+        if (!user || !user.isActive) {
+            return next(new Error('Authentication error: Invalid user'));
+        }
+        socket.userId = user.id;
+        socket.userRole = user.role;
+        socket.schoolCode = user.schoolCode;
+        next();
+    } catch (err) {
+        next(new Error('Authentication error: Invalid token'));
+    }
+});
+
 io.on('connection', (socket) => {
+    console.log(`✅ WebSocket connected: user ${socket.userId} (${socket.userRole})`);
+
+    // Join user's personal room
+    socket.join(`user-${socket.userId}`);
+
+    // Join school room if applicable
+    if (socket.schoolCode) {
+        socket.join(`school-${socket.schoolCode}`);
+    }
+
     socket.on('join', (userId) => {
         if (userId) socket.join(`user-${userId}`);
     });
+
     socket.on('private-message', (data) => {
         io.to(`user-${data.to}`).emit('private-message', {
             from: socket.userId,
@@ -31,11 +59,16 @@ io.on('connection', (socket) => {
             timestamp: new Date()
         });
     });
+
     socket.on('typing', (data) => {
         socket.to(`user-${data.to}`).emit('typing', {
             from: socket.userId,
             isTyping: data.isTyping
         });
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`WebSocket disconnected: user ${socket.userId}`);
     });
 });
 
@@ -60,13 +93,10 @@ sequelize.authenticate()
     process.exit(1);
   });
 
-// Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-    // Optionally exit or log, but don't crash immediately
 });
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
     console.error('❌ Uncaught Exception:', err);
     process.exit(1);
