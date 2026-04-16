@@ -1292,3 +1292,43 @@ exports.downloadMarksTemplate = (req, res) => {
   res.setHeader('Content-Disposition', 'attachment; filename=marks_template.csv');
   res.send(template);
 };
+
+exports.getClassGradebook = async (req, res) => {
+  try {
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher || !teacher.classId) {
+      return res.status(403).json({ success: false, message: 'No class assigned' });
+    }
+    const classItem = await Class.findByPk(teacher.classId);
+    const students = await Student.findAll({
+      where: { grade: classItem.name },
+      include: [{ model: User, attributes: ['id', 'name'] }],
+      order: [['createdAt', 'ASC']]
+    });
+    const studentIds = students.map(s => s.id);
+    const records = await AcademicRecord.findAll({ where: { studentId: studentIds } });
+    
+    // Build subject list from records or teacher's subjects
+    const subjects = [...new Set(records.map(r => r.subject))];
+    
+    const gradebook = students.map(student => {
+      const studentRecords = records.filter(r => r.studentId === student.id);
+      const scores = {};
+      subjects.forEach(subj => {
+        const subjRecords = studentRecords.filter(r => r.subject === subj);
+        const avg = subjRecords.length ? subjRecords.reduce((sum, r) => sum + r.score, 0) / subjRecords.length : null;
+        scores[subj] = avg ? Math.round(avg) : '-';
+      });
+      return {
+        id: student.id,
+        name: student.User.name,
+        elimuid: student.elimuid,
+        scores
+      };
+    });
+    
+    res.json({ success: true, data: { students: gradebook, subjects } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
