@@ -1293,42 +1293,79 @@ exports.downloadMarksTemplate = (req, res) => {
   res.send(template);
 };
 
+// @desc    Get gradebook for teacher's class (all students with subject scores)
+// @route   GET /api/teacher/gradebook
+// @access  Private/Teacher
 exports.getClassGradebook = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher || !teacher.classId) {
-      return res.status(403).json({ success: false, message: 'No class assigned' });
+    if (!teacher) {
+      return res.status(404).json({ success: false, message: 'Teacher not found' });
     }
-    const classItem = await Class.findByPk(teacher.classId);
+
+    // Get the class where this teacher is the class teacher
+    const classItem = await Class.findOne({
+      where: { teacherId: teacher.id, schoolCode: req.user.schoolCode, isActive: true }
+    });
+
+    if (!classItem) {
+      return res.status(403).json({ success: false, message: 'No class assigned as class teacher' });
+    }
+
     const students = await Student.findAll({
       where: { grade: classItem.name },
       include: [{ model: User, attributes: ['id', 'name'] }],
       order: [['createdAt', 'ASC']]
     });
+
     const studentIds = students.map(s => s.id);
-    const records = await AcademicRecord.findAll({ where: { studentId: studentIds } });
-    
-    // Build subject list from records or teacher's subjects
-    const subjects = [...new Set(records.map(r => r.subject))];
-    
+    const records = await AcademicRecord.findAll({
+      where: { studentId: studentIds },
+      include: [{ model: Student, attributes: ['id'] }]
+    });
+
+    // Build list of all subjects taught in this class (from records and teacher's subjects)
+    const subjectsFromRecords = [...new Set(records.map(r => r.subject))];
+    const teacherSubjects = teacher.subjects || [];
+    const allSubjects = [...new Set([...subjectsFromRecords, ...teacherSubjects])].sort();
+
+    // Build gradebook: for each student, compute average per subject
     const gradebook = students.map(student => {
       const studentRecords = records.filter(r => r.studentId === student.id);
       const scores = {};
-      subjects.forEach(subj => {
-        const subjRecords = studentRecords.filter(r => r.subject === subj);
-        const avg = subjRecords.length ? subjRecords.reduce((sum, r) => sum + r.score, 0) / subjRecords.length : null;
-        scores[subj] = avg ? Math.round(avg) : '-';
+      allSubjects.forEach(subject => {
+        const subjectRecords = studentRecords.filter(r => r.subject === subject);
+        const avg = subjectRecords.length
+          ? Math.round(subjectRecords.reduce((sum, r) => sum + r.score, 0) / subjectRecords.length)
+          : null;
+        scores[subject] = avg;
       });
+
+      // Overall average
+      const allScores = Object.values(scores).filter(s => s !== null);
+      const overallAvg = allScores.length
+        ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length)
+        : null;
+
       return {
         id: student.id,
         name: student.User.name,
         elimuid: student.elimuid,
-        scores
+        scores,
+        overallAverage: overallAvg
       };
     });
-    
-    res.json({ success: true, data: { students: gradebook, subjects } });
+
+    res.json({
+      success: true,
+      data: {
+        className: classItem.name,
+        subjects: allSubjects,
+        students: gradebook
+      }
+    });
   } catch (error) {
+    console.error('Get class gradebook error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
