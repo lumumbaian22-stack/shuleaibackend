@@ -80,18 +80,38 @@ exports.completeTask = async (req, res) => {
   try {
     const { id } = req.params;
     const { parentFeedback, studentFeedback } = req.body;
-    const assignment = await HomeTaskAssignment.findByPk(id);
-    if (!assignment) return res.status(404).json({ success: false, message: 'Assignment not found' });
-    const task = await HomeTask.findByPk(assignment.taskId);
+
+    const assignment = await HomeTaskAssignment.findByPk(id, {
+      include: [{ model: HomeTask }, { model: Student }]
+    });
+
+    if (!assignment) {
+      return res.status(404).json({ success: false, message: 'Assignment not found' });
+    }
+
+    const task = assignment.HomeTask;
+    const student = assignment.Student;
+
     assignment.status = 'completed';
     assignment.completedAt = new Date();
     assignment.parentFeedback = parentFeedback || {};
     assignment.studentFeedback = studentFeedback || {};
     assignment.pointsEarned = task.points;
     await assignment.save();
-    // Optionally update student's total points (add to a new field or separate table)
-    res.json({ success: true, data: assignment });
+
+    // Award points to student
+    student.points = (student.points || 0) + task.points;
+    await student.save();
+
+    res.json({
+      success: true,
+      data: {
+        assignment,
+        studentPoints: student.points
+      }
+    });
   } catch (error) {
+    console.error('Complete task error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
