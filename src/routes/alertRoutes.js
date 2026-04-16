@@ -9,4 +9,6 @@ router.get('/', alertController.getMyAlerts);
 router.put('/:id/read', alertController.markAlertAsRead);
 router.put('/read-all', alertController.markAllAsRead);
 
+router.post('/', protect, authorize('admin', 'super_admin'), alertController.createAlert);
+
 module.exports = router;
