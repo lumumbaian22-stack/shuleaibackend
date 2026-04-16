@@ -21,6 +21,8 @@ router.post('/payment-confirm', parentController.confirmPayment);
 router.post('/message', parentController.sendMessage);
 router.get('/messages/:otherUserId', parentController.getMessages);
 
+router.get('/conversations', parentMessageController.getConversations);
+
 // Analytics
 router.get('/child/:studentId/analytics', parentController.getChildAnalytics);
 
