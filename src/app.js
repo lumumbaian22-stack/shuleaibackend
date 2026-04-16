@@ -131,4 +131,10 @@ app.use((err, req, res, next) => {
   });
 });
 
+app.get('/api/consent/status', protect, async (req, res) => {
+  const { UserConsent } = require('./models');
+  const consent = await UserConsent.findOne({ where: { userId: req.user.id } });
+  res.json({ success: true, data: { termsAccepted: consent?.termsAccepted, privacyAccepted: consent?.privacyAccepted } });
+});
+
 module.exports = app;
