@@ -40,22 +40,8 @@ module.exports = (sequelize, DataTypes) => {
     date: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     isPublished: { type: DataTypes.BOOLEAN, defaultValue: false }
   }, {
-    timestamps: true,
-   // hooks: {
-     // beforeSave: (record) => {
-      //  const score = record.score;
-       // if (score >= 80) record.grade = 'A';
-       // else if (score >= 75) record.grade = 'A-';
-      //  else if (score >= 70) record.grade = 'B+';
-      //  else if (score >= 65) record.grade = 'B';
-      //  else if (score >= 60) record.grade = 'B-';
-       // else if (score >= 55) record.grade = 'C+';
-     //   else if (score >= 50) record.grade = 'C';
-      //  else if (score >= 45) record.grade = 'C-';
-     //   else if (score >= 40) record.grade = 'D+';
-      //  else record.grade = 'E';
-      }
-    }
+    timestamps: true
+    // The beforeSave hook has been removed – grading is now handled in the controller
   });
 
   return AcademicRecord;
