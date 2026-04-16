@@ -32,9 +32,7 @@ const StudentCompetencyProgress = require('./StudentCompetencyProgress')(sequeli
 const HomeTaskAssignment = require('./HomeTaskAssignment')(sequelize, DataTypes);
 const HomeTask = require('./HomeTask')(sequelize, DataTypes);
 
-
 // --- Associations ---
-// Associations
 Competency.hasMany(LearningOutcome, { foreignKey: 'competencyId' });
 LearningOutcome.belongsTo(Competency, { foreignKey: 'competencyId' });
 
@@ -57,79 +55,72 @@ Parent.belongsTo(User, { foreignKey: 'userId' });
 User.hasOne(Admin, { foreignKey: 'userId', onDelete: 'CASCADE' });
 Admin.belongsTo(User, { foreignKey: 'userId' });
 
-// School <-> User associations - FIXED with proper aliases
-// Base association for all users
-School.hasMany(User, { 
-    foreignKey: 'schoolCode', 
+// School <-> User associations
+School.hasMany(User, {
+    foreignKey: 'schoolCode',
     sourceKey: 'schoolId',
-    as: 'users'  // This creates the 'users' alias for all users in a school
+    as: 'users'
 });
 
-// Specific association for admins only - THIS IS WHAT YOUR CONTROLLER NEEDS
-School.hasMany(User, { 
-    foreignKey: 'schoolCode', 
+School.hasMany(User, {
+    foreignKey: 'schoolCode',
     sourceKey: 'schoolId',
-    as: 'admins',  // This must match what you use in superAdminController
-    scope: { role: 'admin' } // This automatically filters for users with role 'admin'
+    as: 'admins',
+    scope: { role: 'admin' }
 });
 
-// Specific association for teachers only
-School.hasMany(User, { 
-    foreignKey: 'schoolCode', 
+School.hasMany(User, {
+    foreignKey: 'schoolCode',
     sourceKey: 'schoolId',
     as: 'teachers',
     scope: { role: 'teacher' }
 });
 
-// Specific association for parents only
-School.hasMany(User, { 
-    foreignKey: 'schoolCode', 
+School.hasMany(User, {
+    foreignKey: 'schoolCode',
     sourceKey: 'schoolId',
     as: 'parents',
     scope: { role: 'parent' }
 });
 
-// Specific association for students only
-School.hasMany(User, { 
-    foreignKey: 'schoolCode', 
+School.hasMany(User, {
+    foreignKey: 'schoolCode',
     sourceKey: 'schoolId',
     as: 'students',
     scope: { role: 'student' }
 });
 
-User.belongsTo(School, { 
-    foreignKey: 'schoolCode', 
-    targetKey: 'schoolId' 
+User.belongsTo(School, {
+    foreignKey: 'schoolCode',
+    targetKey: 'schoolId'
 });
 
-// Student-Parent many-to-many relationship
+// Student-Parent many-to-many
 const StudentParent = sequelize.define('StudentParent', {
-  studentId: { 
-    type: DataTypes.INTEGER, 
+  studentId: {
+    type: DataTypes.INTEGER,
     references: { model: 'Students', key: 'id' },
     onDelete: 'CASCADE'
   },
-  parentId: { 
-    type: DataTypes.INTEGER, 
+  parentId: {
+    type: DataTypes.INTEGER,
     references: { model: 'Parents', key: 'id' },
     onDelete: 'CASCADE'
   }
 });
 
-// Define the relationships with proper aliases
-Student.belongsToMany(Parent, { 
-  through: StudentParent, 
+Student.belongsToMany(Parent, {
+  through: StudentParent,
   foreignKey: 'studentId',
-  as: 'parents'  // This creates student.getParents(), student.addParent(), etc.
+  as: 'parents'
 });
 
-Parent.belongsToMany(Student, { 
-  through: StudentParent, 
+Parent.belongsToMany(Student, {
+  through: StudentParent,
   foreignKey: 'parentId',
-  as: 'students'  // This creates parent.getStudents(), parent.addStudent(), etc.
+  as: 'students'
 });
 
-// Also add these direct relationships if you need them
 Student.hasMany(StudentParent, { foreignKey: 'studentId' });
 StudentParent.belongsTo(Student, { foreignKey: 'studentId' });
 
@@ -186,24 +177,43 @@ SchoolNameRequest.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'scho
 User.hasMany(SchoolNameRequest, { foreignKey: 'requestedBy' });
 School.hasMany(SchoolNameRequest, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
 
-// Add associations
+// TeacherSubjectAssignment
 TeacherSubjectAssignment.belongsTo(Teacher, { foreignKey: 'teacherId' });
 TeacherSubjectAssignment.belongsTo(Class, { foreignKey: 'classId' });
 Teacher.hasMany(TeacherSubjectAssignment, { foreignKey: 'teacherId' });
 Class.hasMany(TeacherSubjectAssignment, { foreignKey: 'classId' });
 
-// Add association
-Task.belongsTo(Teacher, { foreignKey: 'teacherId' });
-Teacher.hasMany(Task, { foreignKey: 'teacherId' });
+// Task - CORRECTED: belongs to User, not Teacher
+Task.belongsTo(User, { foreignKey: 'userId' });
+User.hasMany(Task, { foreignKey: 'userId' });
+
+// Class-Teacher
 Teacher.belongsTo(Class, { foreignKey: 'classId' });
 Class.hasOne(Teacher, { foreignKey: 'classId' });
 
-// Add associations
 Class.belongsTo(Teacher, { foreignKey: 'teacherId' });
 Teacher.hasMany(Class, { foreignKey: 'teacherId' });
 
 Class.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
 School.hasMany(Class, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
+
+// HomeTask associations
+HomeTask.belongsTo(Competency, { foreignKey: 'competencyId' });
+HomeTask.belongsTo(LearningOutcome, { foreignKey: 'learningOutcomeId' });
+HomeTaskAssignment.belongsTo(Student, { foreignKey: 'studentId' });
+HomeTaskAssignment.belongsTo(HomeTask, { foreignKey: 'taskId' });
+Student.hasMany(HomeTaskAssignment, { foreignKey: 'studentId' });
+HomeTask.hasMany(HomeTaskAssignment, { foreignKey: 'taskId' });
+
+// Consent models associations
+UserConsent.belongsTo(User, { foreignKey: 'userId' });
+User.hasOne(UserConsent, { foreignKey: 'userId' });
+
+ParentChildConsent.belongsTo(User, { as: 'ParentUser', foreignKey: 'parentId' });
+ParentChildConsent.belongsTo(Student, { foreignKey: 'studentId' });
+
+SchoolDPA.belongsTo(School, { foreignKey: 'schoolId', targetKey: 'schoolId' });
+SchoolDPA.belongsTo(User, { foreignKey: 'adminId' });
 
 module.exports = {
     sequelize,
