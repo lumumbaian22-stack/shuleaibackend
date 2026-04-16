@@ -41,7 +41,7 @@ module.exports = (sequelize, DataTypes) => {
     isPublished: { type: DataTypes.BOOLEAN, defaultValue: false }
   }, {
     timestamps: true,
-    hooks: {
+   // hooks: {
      // beforeSave: (record) => {
       //  const score = record.score;
        // if (score >= 80) record.grade = 'A';
