@@ -8,20 +8,9 @@ const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const fileUpload = require('express-fileupload');
 const path = require('path');
-const { sequelize } = require('./models');
-const alertRoutes = require('./routes/alertRoutes');
-const configController = require('./controllers/configController');
-const competencyRoutes = require('./routes/competencyRoutes');
-const { requireConsent, requireDPA, requireParentalConsent } = require('./middleware/consent');
+const fs = require('fs');
 
-const multer = require('multer');
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
-});
-const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
-
-// Routes
+// Routes – ensure all files exist and export a router
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const dutyRoutes = require('./routes/dutyRoutes');
@@ -37,18 +26,14 @@ const parentMessageRoutes = require('./routes/parentMessageRoutes');
 const helpRoutes = require('./routes/helpRoutes');
 const userRoutes = require('./routes/userRoutes');
 const taskRoutes = require('./routes/taskRoutes');
-const consentRoutes = require('./routes/consentRoutes');
-//const subscriptionRoutes = require('./routes/subscriptionRoutes');
-//const homeTaskRoutes = require('./routes/homeTaskRoutes');
-//const classAnalyticsRoutes = require('./routes/classAnalyticsRoutes');
+const alertRoutes = require('./routes/alertRoutes');
+const competencyRoutes = require('./routes/competencyRoutes');
 
 const app = express();
 
 // ============ MIDDLEWARE ============
-// Security
 app.use(helmet());
 
-// CORS - Allow frontend
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
   credentials: true,
@@ -56,7 +41,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -64,13 +48,11 @@ const limiter = rateLimit({
 });
 app.use('/api', limiter);
 
-// Body parsing
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 app.use(compression());
 
-// File upload
 app.use(fileUpload({
   limits: { fileSize: process.env.MAX_FILE_SIZE || 50 * 1024 * 1024 },
   useTempFiles: true,
@@ -78,12 +60,10 @@ app.use(fileUpload({
   createParentPath: true
 }));
 
-// Logging
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
-// Session - Use a proper store in production (Redis, etc.)
 app.use(session({
   secret: process.env.SESSION_SECRET || 'session-secret',
   resave: false,
@@ -96,9 +76,7 @@ app.use(session({
   }
 }));
 
-// Static uploads
 const uploadDir = path.join(__dirname, '../uploads');
-const fs = require('fs');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -109,88 +87,42 @@ app.get('/health', (req, res) => {
   res.json({ success: true, timestamp: new Date().toISOString() });
 });
 
-app.get('/api/test/db', async (req, res) => {
-  try {
-    const { School } = require('./models');
-    const count = await School.count();
-    res.json({
-      success: true,
-      message: 'Database connected',
-      schoolCount: count
-    });
-  } catch (error) {
-    console.error('Database test error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: error.message
-    });
+// ============ ROUTES ============
+// Verify each imported route is a valid router function
+const routeModules = {
+  '/api/auth': authRoutes,
+  '/api/admin': adminRoutes,
+  '/api/duty': dutyRoutes,
+  '/api/public': publicRoutes,
+  '/api/super-admin': superAdminRoutes,
+  '/api/teacher': teacherRoutes,
+  '/api/parent': parentRoutes,
+  '/api/student': studentRoutes,
+  '/api/analytics': analyticsRoutes,
+  '/api/upload': uploadRoutes,
+  '/api/school': schoolRoutes,
+  '/api/parent-messages': parentMessageRoutes,
+  '/api/help': helpRoutes,
+  '/api/user': userRoutes,
+  '/api/tasks': taskRoutes,
+  '/api/alerts': alertRoutes,
+  '/api/cbe': competencyRoutes
+};
+
+Object.entries(routeModules).forEach(([path, router]) => {
+  if (typeof router === 'function') {
+    app.use(path, router);
+  } else {
+    console.error(`❌ Route module for ${path} is not a valid router function. Got:`, typeof router);
   }
 });
 
-app.post('/api/test/create-school', async (req, res) => {
-  try {
-    const { School } = require('./models');
-    const testSchool = await School.create({
-      name: 'Test School ' + Date.now(),
-      system: 'cbc',
-      status: 'pending'
-    });
-    res.json({
-      success: true,
-      school: {
-        id: testSchool.id,
-        schoolId: testSchool.schoolId,
-        shortCode: testSchool.shortCode,
-        name: testSchool.name
-      }
-    });
-  } catch (error) {
-    console.error('Test school creation error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-app.get('/api/config/support', configController.getSupportConfig);
-
-// ============ PUBLIC ROUTES (NO CONSENT REQUIRED) ============
-app.use('/api/auth', authRoutes);
-app.use('/api/public', publicRoutes);
-
-// ============ PROTECTED ROUTES (CONSENT REQUIRED) ============
-// Apply consent middleware to all authenticated routes
-// Note: The `protect` middleware is applied inside each route file.
-// We apply consent globally here to ensure all protected endpoints check consent.
-app.use('/api/admin', requireConsent, requireDPA, adminRoutes);
-app.use('/api/duty', requireConsent, dutyRoutes);
-app.use('/api/super-admin', requireConsent, superAdminRoutes);
-app.use('/api/teacher', requireConsent, teacherRoutes);
-app.use('/api/parent', requireConsent, parentRoutes);
-app.use('/api/parent-messages', requireConsent, parentMessageRoutes);
-app.use('/api/student', requireConsent, studentRoutes);
-app.use('/api/analytics', requireConsent, analyticsRoutes);
-app.use('/api/upload', requireConsent, uploadRoutes);
-app.use('/api/school', requireConsent, schoolRoutes);
-app.use('/api/help', requireConsent, helpRoutes);
-app.use('/api/user', requireConsent, userRoutes);
-app.use('/api/tasks', requireConsent, taskRoutes);
-app.use('/api/alerts', requireConsent, alertRoutes);
-app.use('/api/cbe', requireConsent, competencyRoutes);
-app.use('/api/consent', consentRoutes); // consent routes themselves don't need consent middleware (handled internally)
-//app.use('/api/subscription', subscriptionRoutes);
-//app.use('/api/home-tasks', homeTaskRoutes);
-//app.use('/api/class-analytics', classAnalyticsRoutes);
-
-// ============ 404 HANDLER ============
+// 404 handler
 app.use((req, res) => {
-  console.log('404 Not Found:', req.method, req.url);
   res.status(404).json({ success: false, message: 'Route not found' });
 });
 
-// ============ ERROR HANDLER ============
+// Error handler
 app.use((err, req, res, next) => {
   console.error('Error:', err.stack);
   res.status(err.status || 500).json({
