@@ -1,4 +1,3 @@
-cat > src/routes/adminRoutes.js << 'EOF'
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
@@ -66,4 +65,3 @@ router.get('/settings', adminController.getSchoolSettings);
 router.put('/settings', adminController.updateSchoolSettings);
 
 module.exports = router;
-EOF
