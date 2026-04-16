@@ -215,9 +215,9 @@ exports.reportAbsence = async (req, res) => {
 exports.getSubscriptionPlans = async (req, res) => {
   try {
     const plans = [
-      { id: 'basic', name: 'Basic', price: 3, currency: 'USD', interval: 'month', features: ['View attendance records', 'View basic grades', 'Report absence', 'Email notifications'] },
-      { id: 'premium', name: 'Premium', price: 10, currency: 'USD', interval: 'month', features: ['Everything in Basic', 'Detailed academic progress', 'Teacher comments and feedback', 'Payment history', 'SMS notifications'] },
-      { id: 'ultimate', name: 'Ultimate', price: 20, currency: 'USD', interval: 'month', features: ['Everything in Premium', 'Live chat with teachers', 'Video conference access', 'Priority support', 'Downloadable reports', 'Multi-child discount'] }
+      { id: 'basic', name: 'Basic', price: 150, currency: 'KES', interval: 'month', features: ['View attendance records', 'View basic grades', 'Report absence', 'Email notifications'] },
+      { id: 'premium', name: 'Premium', price: 300, currency: 'KES', interval: 'month', features: ['Everything in Basic', 'Detailed academic progress', 'Teacher comments and feedback', 'Payment history', 'SMS notifications'] },
+      { id: 'ultimate', name: 'Ultimate', price: 800, currency: 'KES', interval: 'month', features: ['Everything in Premium', 'Live chat with teachers', 'Video conference access', 'Priority support', 'Downloadable reports', 'Multi-child discount'] }
     ];
 
     res.json({ success: true, data: plans });
