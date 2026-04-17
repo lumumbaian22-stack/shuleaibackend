@@ -10,7 +10,7 @@ const fileUpload = require('express-fileupload');
 const path = require('path');
 const fs = require('fs');
 
-// ============ ROUTES ============
+// Routes
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const dutyRoutes = require('./routes/dutyRoutes');
@@ -28,7 +28,8 @@ const userRoutes = require('./routes/userRoutes');
 const taskRoutes = require('./routes/taskRoutes');
 const alertRoutes = require('./routes/alertRoutes');
 const competencyRoutes = require('./routes/competencyRoutes');
-const homeTaskRoutes = require('./routes/homeTaskRoutes');   // ✅ FIX: import added
+const homeTaskRoutes = require('./routes/homeTaskRoutes');
+const consentRoutes = require('./routes/consentRoutes');   // <-- ADDED
 
 const app = express();
 
@@ -106,7 +107,8 @@ app.use('/api/user', userRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/cbe', competencyRoutes);
-app.use('/api/home-tasks', homeTaskRoutes);   // ✅ now properly defined
+app.use('/api/home-tasks', homeTaskRoutes);
+app.use('/api/consent', consentRoutes);   // <-- ADDED
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {
