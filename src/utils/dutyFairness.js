@@ -6,6 +6,7 @@ const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
 
 /**
  * Check if a teacher has timetable conflict
+ */
 const hasTimetableConflict = (teacher, dayOfWeek, dutyType) => {
   const dutyTime = DUTY_TIME_SLOTS[dutyType]?.start;
   if (!dutyTime) return false;
