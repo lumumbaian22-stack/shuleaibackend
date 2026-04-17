@@ -7,14 +7,8 @@ const teacherMessageController = require('../controllers/teacherMessageControlle
 const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
 
-// All teacher routes require authentication and teacher role
 router.use(protect);
 router.use(authorize('teacher'));
-
-// Require basic consent (Terms & Privacy)
-//router.use(requireConsent);
-
-router.get('/gradebook', teacherController.getClassGradebook);
 
 // ============ STUDENT MANAGEMENT ============
 router.get('/students', teacherController.getMyStudents);
@@ -41,6 +35,7 @@ router.get('/stats', teacherController.getTeacherStats);
 router.get('/my-class', teacherController.getMyClass);
 router.get('/my-subjects', teacherController.getMySubjects);
 router.get('/classes/:classId/students', teacherController.getClassStudents);
+router.get('/gradebook', teacherController.getClassGradebook);
 
 // ============ MESSAGING (Teacher-Parent) ============
 router.get('/parent-conversations', chatController.getParentConversations);
@@ -48,6 +43,7 @@ router.get('/conversations', teacherMessageController.getConversations);
 router.get('/messages/:parentId', teacherMessageController.getMessages);
 router.put('/messages/read/:conversationId', teacherMessageController.markMessagesAsRead);
 router.post('/reply', teacherMessageController.replyToParent);
+router.delete('/messages/:messageId', teacherController.deleteMessage);  // NEW
 
 // ============ STAFF CHAT (Teacher-Teacher) ============
 router.get('/staff-members', chatController.getStaffMembers);
