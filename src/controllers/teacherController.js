@@ -59,7 +59,7 @@ exports.getDashboard = async (req, res) => {
   }
 };
 
-// @desc    Get teacher's students
+// @desc    Get teacher's students with subject matrix (ENHANCED)
 // @route   GET /api/teacher/students
 // @access  Private/Teacher
 exports.getMyStudents = async (req, res) => {
@@ -69,42 +69,136 @@ exports.getMyStudents = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher profile not found' });
     }
 
-    // First, find the class where this teacher is the class teacher (via Class.teacherId)
+    // Determine if teacher is a class teacher or subject teacher
     const classItem = await Class.findOne({
       where: { teacherId: teacher.id, schoolCode: req.user.schoolCode, isActive: true }
     });
-    
+
     let classNames = [];
     if (classItem) {
       classNames.push(classItem.name);
     } else if (teacher.classTeacher) {
       classNames.push(teacher.classTeacher);
     }
-    
+
     // Also add classes where teacher is a subject teacher
     const allClasses = await Class.findAll({
       where: { schoolCode: req.user.schoolCode, isActive: true }
     });
+    const subjectAssignments = [];
     for (const cls of allClasses) {
       if (cls.subjectTeachers && Array.isArray(cls.subjectTeachers)) {
-        if (cls.subjectTeachers.some(st => st.teacherId === teacher.id)) {
-          classNames.push(cls.name);
+        const assignment = cls.subjectTeachers.find(st => st.teacherId === teacher.id);
+        if (assignment) {
+          subjectAssignments.push({
+            classId: cls.id,
+            className: cls.name,
+            subject: assignment.subject
+          });
+          if (!classNames.includes(cls.name)) {
+            classNames.push(cls.name);
+          }
         }
       }
     }
-    
+
     classNames = [...new Set(classNames)];
-    
+
     if (classNames.length === 0) {
       return res.json({ success: true, data: [] });
     }
-    
+
+    // Get all students in these classes
     const students = await Student.findAll({
       where: { grade: { [Op.in]: classNames } },
       include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
     });
+
+    // For each student, fetch their academic records and attendance
+    const studentIds = students.map(s => s.id);
+    const academicRecords = await AcademicRecord.findAll({
+      where: { studentId: { [Op.in]: studentIds } }
+    });
+    const attendanceRecords = await Attendance.findAll({
+      where: { studentId: { [Op.in]: studentIds } }
+    });
+
+    // Get all subjects taught in these classes (for class teacher matrix)
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    const curriculum = school?.system || 'cbc';
+    const curriculumHelper = require('../utils/curriculumHelper');
+    const allSubjects = new Set();
     
-    res.json({ success: true, data: students });
+    // Collect subjects from curriculum and custom subjects
+    if (classItem) {
+      const curriculumSubjects = curriculumHelper.getSubjectsForCurriculum(curriculum, school?.settings?.schoolLevel || 'both');
+      curriculumSubjects.forEach(s => allSubjects.add(s));
+      const customSubjects = school?.settings?.customSubjects || [];
+      customSubjects.forEach(s => allSubjects.add(s));
+    }
+
+    // Build subject matrix data
+    const studentData = students.map(student => {
+      const user = student.User;
+      const studentRecords = academicRecords.filter(r => r.studentId === student.id);
+      const studentAttendance = attendanceRecords.filter(a => a.studentId === student.id);
+      
+      // Calculate attendance rate
+      const present = studentAttendance.filter(a => a.status === 'present').length;
+      const attendanceRate = studentAttendance.length ? Math.round((present / studentAttendance.length) * 100) : 100;
+
+      // Calculate subject scores
+      const subjectScores = {};
+      if (classItem) {
+        // Class teacher: show all subjects
+        for (const subject of allSubjects) {
+          const subjectRecords = studentRecords.filter(r => r.subject === subject);
+          const avg = subjectRecords.length
+            ? Math.round(subjectRecords.reduce((sum, r) => sum + r.score, 0) / subjectRecords.length)
+            : null;
+          subjectScores[subject] = avg;
+        }
+      } else {
+        // Subject teacher: only show assigned subjects
+        for (const assignment of subjectAssignments) {
+          const subjectRecords = studentRecords.filter(r => r.subject === assignment.subject);
+          const avg = subjectRecords.length
+            ? Math.round(subjectRecords.reduce((sum, r) => sum + r.score, 0) / subjectRecords.length)
+            : null;
+          subjectScores[assignment.subject] = avg;
+        }
+      }
+
+      // Overall average
+      const allScores = Object.values(subjectScores).filter(s => s !== null);
+      const overallAvg = allScores.length
+        ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length)
+        : null;
+
+      return {
+        id: student.id,
+        userId: user.id,
+        name: user.name,
+        email: user.email,
+        elimuid: student.elimuid,
+        grade: student.grade,
+        status: student.status,
+        attendance: attendanceRate,
+        subjectScores,
+        overallAverage: overallAvg
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        students: studentData,
+        isClassTeacher: !!classItem,
+        subjects: classItem ? Array.from(allSubjects) : subjectAssignments.map(a => a.subject),
+        classNames,
+        teacherName: req.user.name
+      }
+    });
   } catch (error) {
     console.error('Get my students error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -227,7 +321,7 @@ exports.enterMarks = async (req, res) => {
       teacherId: teacher.id,
       date: date || new Date(),
       isPublished: true,
-      grade: grade   // ✅ added here
+      grade: grade
     });
 
     if (score < 50) {
@@ -592,12 +686,66 @@ exports.replyToParent = async (req, res) => {
     }
 };
 
+// @desc    Delete a message (soft delete)
+// @route   DELETE /api/teacher/messages/:messageId
+// @access  Private/Teacher
+exports.deleteMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { deleteFor } = req.body; // 'everyone' or 'me'
+
+    const message = await Message.findByPk(messageId);
+
+    if (!message) {
+      return res.status(404).json({ success: false, message: 'Message not found' });
+    }
+
+    // Check authorization: only sender can delete, or admin
+    if (message.senderId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Not authorized to delete this message' });
+    }
+
+    if (deleteFor === 'everyone') {
+      // Mark as deleted for everyone
+      message.content = '[This message was deleted]';
+      message.metadata = { ...message.metadata, deleted: true, deletedBy: req.user.id, deletedAt: new Date() };
+      await message.save();
+    } else {
+      // Delete for self only: store in metadata that this user deleted it
+      const deletedFor = message.metadata?.deletedFor || [];
+      if (!deletedFor.includes(req.user.id)) {
+        deletedFor.push(req.user.id);
+        message.metadata = { ...message.metadata, deletedFor };
+        await message.save();
+      }
+    }
+
+    // Emit event to update UI for other users
+    if (global.io) {
+      global.io.to(`user-${message.receiverId}`).emit('message-deleted', {
+        messageId: message.id,
+        deleteFor
+      });
+      if (message.senderId !== req.user.id) {
+        global.io.to(`user-${message.senderId}`).emit('message-deleted', {
+          messageId: message.id,
+          deleteFor
+        });
+      }
+    }
+
+    res.json({ success: true, message: 'Message deleted' });
+  } catch (error) {
+    console.error('Delete message error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.getTodayDuty = async (userId) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId } });
     if (!teacher) return null;
 
-    // Get the teacher's school to filter duty roster
     const school = await School.findOne({ where: { schoolId: teacher.User.schoolCode } });
     if (!school) return null;
 
@@ -684,7 +832,6 @@ exports.getMyClass = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher not found' });
     }
 
-    // Get the class this teacher is assigned to
     const classItem = await Class.findOne({
       where: { teacherId: teacher.id, schoolCode: req.user.schoolCode, isActive: true }
     });
@@ -728,12 +875,10 @@ exports.getMySubjects = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher not found' });
     }
 
-    // Get all classes in the school
     const allClasses = await Class.findAll({
       where: { schoolCode: req.user.schoolCode, isActive: true }
     });
 
-    // Format subjects with class information
     const subjects = teacher.subjects || [];
     const subjectList = subjects.map(subject => {
       const classes = allClasses.filter(cls => {
@@ -767,7 +912,6 @@ exports.getTeacherStats = async (req, res) => {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
-    // Collect class names
     let classNames = [];
     if (teacher.classTeacher) classNames.push(teacher.classTeacher);
     const allClasses = await Class.findAll({ where: { schoolCode: req.user.schoolCode, isActive: true } });
@@ -786,7 +930,6 @@ exports.getTeacherStats = async (req, res) => {
       });
     }
 
-    // Real attendance today
     const today = new Date().toISOString().split('T')[0];
     const attendanceToday = await Attendance.findAll({
       where: {
@@ -797,12 +940,10 @@ exports.getTeacherStats = async (req, res) => {
     const presentToday = attendanceToday.filter(a => a.status === 'present').length;
     const attendanceTodayStr = `${presentToday}/${students.length}`;
 
-    // Real pending tasks
     const pendingTasks = await Task.count({
       where: { userId: req.user.id, status: { [Op.ne]: 'completed' } }
     });
 
-    // Real class average
     let totalScore = 0;
     let scoreCount = 0;
     for (const student of students) {
@@ -848,7 +989,6 @@ exports.getClassStudents = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Class not found' });
     }
     
-    // Verify teacher has access to this class
     const isClassTeacher = classItem.teacherId === teacher.id;
     const isSubjectTeacher = classItem.subjectTeachers?.some(st => st.teacherId === teacher.id);
     
@@ -856,9 +996,8 @@ exports.getClassStudents = async (req, res) => {
       return res.status(403).json({ success: false, message: 'You do not have access to this class' });
     }
     
-    // FIXED: Use classItem.name (the class name) not teacher.classTeacher
     const students = await Student.findAll({
-      where: { grade: classItem.name },  // ← FIXED: Use classItem.name
+      where: { grade: classItem.name },
       include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }],
       order: [['createdAt', 'ASC']]
     });
@@ -903,12 +1042,10 @@ exports.uploadStudentsCSV = async (req, res) => {
         const defaultPassword = 'Student123!';
         let successCount = 0;
         
-        // Use the teacher's own class for all uploaded students
         const targetGrade = teacher.classTeacher;
         
         for (const row of results) {
           try {
-            // Name is required; grade is ignored (we use teacher's class)
             if (!row.name) {
               errors.push({ row, error: 'Missing name' });
               continue;
@@ -926,7 +1063,7 @@ exports.uploadStudentsCSV = async (req, res) => {
             
             const student = await Student.create({
               userId: user.id,
-              grade: targetGrade,  // ← Override with teacher's class
+              grade: targetGrade,
               dateOfBirth: row.dob || row.dateOfBirth || null,
               gender: row.gender || null
             });
@@ -1184,14 +1321,11 @@ exports.getClassStudentsForSubject = async (req, res) => {
 // @desc    Get teacher's subject performance and attendance trend
 // @route   GET /api/teacher/performance
 // @access  Private/Teacher
-// Inside teacherController.js, add or update this method:
-
 exports.getPerformanceData = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
-    // Collect class names where this teacher teaches
     let classNames = [];
     if (teacher.classTeacher) classNames.push(teacher.classTeacher);
     const allClasses = await Class.findAll({ where: { schoolCode: req.user.schoolCode, isActive: true } });
@@ -1205,11 +1339,9 @@ exports.getPerformanceData = async (req, res) => {
       return res.json({ success: true, data: { subjectAverages: [], attendanceTrend: [] } });
     }
 
-    // Students in those classes
     const students = await Student.findAll({ where: { grade: { [Op.in]: classNames } } });
     const studentIds = students.map(s => s.id);
 
-    // Subject averages (real data)
     const records = await AcademicRecord.findAll({ where: { studentId: { [Op.in]: studentIds } } });
     const subjectScores = {};
     records.forEach(rec => {
@@ -1222,7 +1354,6 @@ exports.getPerformanceData = async (req, res) => {
       average: Math.round(data.total / data.count)
     }));
 
-    // Attendance trend (last 7 days)
     const startDate = moment().subtract(6, 'days').format('YYYY-MM-DD');
     const attendanceRecords = await Attendance.findAll({
       where: { studentId: { [Op.in]: studentIds }, date: { [Op.gte]: startDate } }
@@ -1258,7 +1389,6 @@ exports.updateMark = async (req, res) => {
     const { score, assessmentName, assessmentType, date, term, year } = req.body;
     const record = await AcademicRecord.findByPk(recordId);
     if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
-    // Verify teacher owns this record
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (record.teacherId !== teacher.id) return res.status(403).json({ success: false, message: 'Not authorized' });
     await record.update({ score, assessmentName, assessmentType, date, term, year });
@@ -1303,7 +1433,6 @@ exports.getClassGradebook = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher not found' });
     }
 
-    // Get the class where this teacher is the class teacher
     const classItem = await Class.findOne({
       where: { teacherId: teacher.id, schoolCode: req.user.schoolCode, isActive: true }
     });
@@ -1324,12 +1453,10 @@ exports.getClassGradebook = async (req, res) => {
       include: [{ model: Student, attributes: ['id'] }]
     });
 
-    // Build list of all subjects taught in this class (from records and teacher's subjects)
     const subjectsFromRecords = [...new Set(records.map(r => r.subject))];
     const teacherSubjects = teacher.subjects || [];
     const allSubjects = [...new Set([...subjectsFromRecords, ...teacherSubjects])].sort();
 
-    // Build gradebook: for each student, compute average per subject
     const gradebook = students.map(student => {
       const studentRecords = records.filter(r => r.studentId === student.id);
       const scores = {};
@@ -1341,7 +1468,6 @@ exports.getClassGradebook = async (req, res) => {
         scores[subject] = avg;
       });
 
-      // Overall average
       const allScores = Object.values(scores).filter(s => s !== null);
       const overallAvg = allScores.length
         ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length)
