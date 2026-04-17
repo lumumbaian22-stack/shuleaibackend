@@ -10,7 +10,7 @@ const fileUpload = require('express-fileupload');
 const path = require('path');
 const fs = require('fs');
 
-// Routes – ensure all files exist and export a router
+// ============ ROUTES ============
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const dutyRoutes = require('./routes/dutyRoutes');
@@ -28,6 +28,7 @@ const userRoutes = require('./routes/userRoutes');
 const taskRoutes = require('./routes/taskRoutes');
 const alertRoutes = require('./routes/alertRoutes');
 const competencyRoutes = require('./routes/competencyRoutes');
+const homeTaskRoutes = require('./routes/homeTaskRoutes');   // ✅ FIX: import added
 
 const app = express();
 
@@ -52,8 +53,6 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 app.use(compression());
-
-app.use('/api/home-tasks', homeTaskRoutes);
 
 app.use(fileUpload({
   limits: { fileSize: process.env.MAX_FILE_SIZE || 50 * 1024 * 1024 },
@@ -84,59 +83,43 @@ if (!fs.existsSync(uploadDir)) {
 }
 app.use('/uploads', express.static(uploadDir));
 
-// ============ TEST ENDPOINTS ============
+// ============ TEST ENDPOINT ============
 app.get('/health', (req, res) => {
   res.json({ success: true, timestamp: new Date().toISOString() });
 });
 
-// ============ ROUTES ============
-// Verify each imported route is a valid router function
-const routeModules = {
-  '/api/auth': authRoutes,
-  '/api/admin': adminRoutes,
-  '/api/duty': dutyRoutes,
-  '/api/public': publicRoutes,
-  '/api/super-admin': superAdminRoutes,
-  '/api/teacher': teacherRoutes,
-  '/api/parent': parentRoutes,
-  '/api/student': studentRoutes,
-  '/api/analytics': analyticsRoutes,
-  '/api/upload': uploadRoutes,
-  '/api/school': schoolRoutes,
-  '/api/parent-messages': parentMessageRoutes,
-  '/api/help': helpRoutes,
-  '/api/user': userRoutes,
-  '/api/tasks': taskRoutes,
-  '/api/alerts': alertRoutes,
-  '/api/cbe': competencyRoutes
-};
+// ============ MOUNT ROUTES ============
+app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/duty', dutyRoutes);
+app.use('/api/public', publicRoutes);
+app.use('/api/super-admin', superAdminRoutes);
+app.use('/api/teacher', teacherRoutes);
+app.use('/api/parent', parentRoutes);
+app.use('/api/student', studentRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/upload', uploadRoutes);
+app.use('/api/school', schoolRoutes);
+app.use('/api/parent-messages', parentMessageRoutes);
+app.use('/api/help', helpRoutes);
+app.use('/api/user', userRoutes);
+app.use('/api/tasks', taskRoutes);
+app.use('/api/alerts', alertRoutes);
+app.use('/api/cbe', competencyRoutes);
+app.use('/api/home-tasks', homeTaskRoutes);   // ✅ now properly defined
 
-Object.entries(routeModules).forEach(([path, router]) => {
-  if (typeof router === 'function') {
-    app.use(path, router);
-  } else {
-    console.error(`❌ Route module for ${path} is not a valid router function. Got:`, typeof router);
-  }
-});
-
-// 404 handler
+// ============ 404 HANDLER ============
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Route not found' });
 });
 
-// Error handler
+// ============ ERROR HANDLER ============
 app.use((err, req, res, next) => {
   console.error('Error:', err.stack);
   res.status(err.status || 500).json({
     success: false,
     message: err.message || 'Internal server error'
   });
-});
-
-app.get('/api/consent/status', protect, async (req, res) => {
-  const { UserConsent } = require('./models');
-  const consent = await UserConsent.findOne({ where: { userId: req.user.id } });
-  res.json({ success: true, data: { termsAccepted: consent?.termsAccepted, privacyAccepted: consent?.privacyAccepted } });
 });
 
 module.exports = app;
