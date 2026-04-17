@@ -210,17 +210,36 @@ exports.deactivateAccount = async (req, res) => {
   }
 };
 
-//upload profile photo
+// @desc    Upload profile picture
+// @route   POST /api/user/profile-picture
+// @access  Private
 exports.uploadProfilePicture = async (req, res) => {
-  if (!req.files || !req.files.image) {
-    return res.status(400).json({ success: false, message: 'No image uploaded' });
+  try {
+    // Check for file using either 'picture' or 'image' field
+    const file = req.files?.picture || req.files?.image;
+    if (!file) {
+      return res.status(400).json({ success: false, message: 'No image uploaded' });
+    }
+
+    const fileName = `profile_${req.user.id}_${Date.now()}.jpg`;
+    const uploadDir = path.join(__dirname, '../uploads/profiles/');
+    
+    // Ensure directory exists
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    
+    const uploadPath = path.join(uploadDir, fileName);
+    await file.mv(uploadPath);
+    
+    const profileImageUrl = `/uploads/profiles/${fileName}`;
+    await req.user.update({ profileImage: profileImageUrl });
+    
+    res.json({ success: true, data: { profileImage: profileImageUrl } });
+  } catch (error) {
+    console.error('Profile upload error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
-  const image = req.files.image;
-  const fileName = `profile_${req.user.id}_${Date.now()}.jpg`;
-  const uploadPath = path.join(__dirname, '../uploads/profiles/', fileName);
-  await image.mv(uploadPath);
-  await req.user.update({ profileImage: `/uploads/profiles/${fileName}` });
-  res.json({ success: true, data: { profileImage: req.user.profileImage } });
 };
 
 // @desc    Get user alerts
