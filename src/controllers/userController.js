@@ -3,10 +3,9 @@ const { User, Student, Teacher, Parent, AcademicRecord, Attendance, Alert } = re
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 const path = require('path');
+const fs = require('fs');
 
 // @desc    Get user statistics for profile
-// @route   GET /api/user/stats
-// @access  Private
 exports.getUserStats = async (req, res) => {
   try {
     const user = req.user;
@@ -29,7 +28,6 @@ exports.getUserStats = async (req, res) => {
       stats.reliabilityScore = teacher?.statistics?.reliabilityScore || 100;
       stats.dutiesCompleted = teacher?.statistics?.dutiesCompleted || 0;
       
-      // Get students count
       let studentCount = 0;
       if (teacher.classTeacher) {
         studentCount = await Student.count({ where: { grade: teacher.classTeacher } });
@@ -44,34 +42,20 @@ exports.getUserStats = async (req, res) => {
       stats.gender = student?.gender;
       stats.dateOfBirth = student?.dateOfBirth;
       
-      // Get academic stats
-      const records = await AcademicRecord.findAll({
-        where: { studentId: student.id },
-        order: [['date', 'DESC']]
-      });
+      const records = await AcademicRecord.findAll({ where: { studentId: student.id }, order: [['date', 'DESC']] });
       const avg = records.length ? records.reduce((a,b) => a + b.score, 0) / records.length : 0;
       stats.averageScore = Math.round(avg);
       stats.totalAssessments = records.length;
       
-      // Get attendance stats
-      const attendance = await Attendance.findAll({
-        where: { studentId: student.id }
-      });
+      const attendance = await Attendance.findAll({ where: { studentId: student.id } });
       const present = attendance.filter(a => a.status === 'present').length;
       stats.attendanceRate = attendance.length ? Math.round((present / attendance.length) * 100) : 0;
       
     } else if (user.role === 'parent') {
       const parent = await Parent.findOne({ where: { userId: user.id } });
-      const children = await parent.getStudents({ 
-        include: [{ model: User, attributes: ['name'] }]
-      });
+      const children = await parent.getStudents({ include: [{ model: User, attributes: ['name'] }] });
       stats.childrenCount = children.length;
-      stats.children = children.map(c => ({
-        id: c.id,
-        name: c.User?.name,
-        grade: c.grade,
-        elimuid: c.elimuid
-      }));
+      stats.children = children.map(c => ({ id: c.id, name: c.User?.name, grade: c.grade, elimuid: c.elimuid }));
     }
     
     res.json({ success: true, data: stats });
@@ -82,23 +66,17 @@ exports.getUserStats = async (req, res) => {
 };
 
 // @desc    Update user profile
-// @route   PUT /api/user/profile
-// @access  Private
 exports.updateProfile = async (req, res) => {
   try {
     const { name, email, phone } = req.body;
     
-    // Check if email is already taken by another user
     if (email && email !== req.user.email) {
       const existing = await User.findOne({ where: { email, id: { [Op.ne]: req.user.id } } });
-      if (existing) {
-        return res.status(400).json({ success: false, message: 'Email already in use' });
-      }
+      if (existing) return res.status(400).json({ success: false, message: 'Email already in use' });
     }
     
     await req.user.update({ name, email, phone });
     
-    // Create alert for profile update
     await createAlert({
       userId: req.user.id,
       role: req.user.role,
@@ -116,22 +94,15 @@ exports.updateProfile = async (req, res) => {
 };
 
 // @desc    Get user preferences
-// @route   GET /api/user/preferences
-// @access  Private
 exports.getPreferences = async (req, res) => {
   try {
-    res.json({ success: true, data: req.user.preferences || {
-      notifications: { email: true, sms: false, push: true },
-      theme: 'light'
-    } });
+    res.json({ success: true, data: req.user.preferences || { notifications: { email: true, sms: false, push: true }, theme: 'light' } });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // @desc    Update user preferences
-// @route   PUT /api/user/preferences
-// @access  Private
 exports.updatePreferences = async (req, res) => {
   try {
     req.user.preferences = { ...req.user.preferences, ...req.body.preferences };
@@ -143,17 +114,10 @@ exports.updatePreferences = async (req, res) => {
 };
 
 // @desc    Export user data
-// @route   GET /api/user/export
-// @access  Private
 exports.exportMyData = async (req, res) => {
   try {
     const user = req.user;
-    let exportData = {
-      user: user.getPublicProfile(),
-      createdAt: user.createdAt,
-      lastLogin: user.lastLogin,
-      preferences: user.preferences
-    };
+    let exportData = { user: user.getPublicProfile(), createdAt: user.createdAt, lastLogin: user.lastLogin, preferences: user.preferences };
     
     if (user.role === 'teacher') {
       const teacher = await Teacher.findOne({ where: { userId: user.id } });
@@ -180,16 +144,12 @@ exports.exportMyData = async (req, res) => {
 };
 
 // @desc    Deactivate account
-// @route   POST /api/user/deactivate
-// @access  Private
 exports.deactivateAccount = async (req, res) => {
   try {
     const { reason } = req.body;
-    
     req.user.isActive = false;
     await req.user.save();
     
-    // Notify admins
     const admins = await User.findAll({ where: { role: 'admin', schoolCode: req.user.schoolCode } });
     for (const admin of admins) {
       await createAlert({
@@ -210,12 +170,10 @@ exports.deactivateAccount = async (req, res) => {
   }
 };
 
-// @desc    Upload profile picture
-// @route   POST /api/user/profile-picture
-// @access  Private
+// @desc    Upload profile picture (FIXED)
 exports.uploadProfilePicture = async (req, res) => {
   try {
-    // Check for file using either 'picture' or 'image' field
+    // Accept either 'picture' or 'image' field
     const file = req.files?.picture || req.files?.image;
     if (!file) {
       return res.status(400).json({ success: false, message: 'No image uploaded' });
@@ -224,7 +182,6 @@ exports.uploadProfilePicture = async (req, res) => {
     const fileName = `profile_${req.user.id}_${Date.now()}.jpg`;
     const uploadDir = path.join(__dirname, '../uploads/profiles/');
     
-    // Ensure directory exists
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
@@ -243,7 +200,6 @@ exports.uploadProfilePicture = async (req, res) => {
 };
 
 // @desc    Get user alerts
-// @route   GET /api/user/alerts
 exports.getAlerts = async (req, res) => {
   try {
     const alerts = await Alert.findAll({
