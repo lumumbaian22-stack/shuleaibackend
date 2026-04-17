@@ -84,13 +84,52 @@ const CURRICULUMS = {
 
 function getGradeFromScore(score, curriculum, level) {
   const curriculumData = CURRICULUMS[curriculum];
-  if (!curriculumData) return 'N/A';
-  const scale = curriculumData[level] || curriculumData.primary;
-  for (const g of scale) {
-    const [min, max] = g.range.split('-').map(Number);
-    if (score >= min && score <= max) return g.grade;
+  if (!curriculumData) return { grade: 'N/A', description: 'Not available' };
+
+  // Normalize level
+  let normalizedLevel = level;
+  if (level === 'both') normalizedLevel = 'secondary';
+  if (!curriculumData[normalizedLevel]) normalizedLevel = 'primary';
+
+  const scale = curriculumData[normalizedLevel];
+  const scoreNum = Number(score);
+  
+  if (isNaN(scoreNum)) {
+    return { grade: 'N/A', description: 'Invalid score' };
   }
-  return 'N/A';
+
+  for (const gradeInfo of scale) {
+    const [min, max] = gradeInfo.range.split('-').map(Number);
+    if (scoreNum >= min && scoreNum <= max) {
+      return gradeInfo;
+    }
+  }
+  return { grade: 'N/A', description: 'Invalid score' };
 }
 
-module.exports = { getGradeFromScore };
+// Helper to get subjects for a curriculum and level
+function getSubjectsForCurriculum(curriculum, level) {
+  const subjects = {
+    cbc: {
+      primary: ['Mathematics', 'English', 'Kiswahili', 'Science', 'Social Studies', 'CRE/IRE', 'Physical Education'],
+      secondary: ['Mathematics', 'English', 'Kiswahili', 'Biology', 'Chemistry', 'Physics', 'History', 'Geography', 'CRE/IRE', 'Business Studies', 'Agriculture', 'Computer Studies']
+    },
+    '844': {
+      primary: ['Mathematics', 'English', 'Kiswahili', 'Science', 'Social Studies', 'CRE/IRE'],
+      secondary: ['Mathematics', 'English', 'Kiswahili', 'Biology', 'Chemistry', 'Physics', 'History', 'Geography', 'CRE/IRE', 'Business Studies', 'Agriculture', 'Computer Studies']
+    },
+    british: {
+      primary: ['English', 'Mathematics', 'Science', 'History', 'Geography', 'Art', 'Music', 'PE'],
+      secondary: ['English', 'Mathematics', 'Biology', 'Chemistry', 'Physics', 'History', 'Geography', 'French', 'Spanish', 'Computer Science', 'Business', 'Economics']
+    },
+    american: {
+      primary: ['English Language Arts', 'Mathematics', 'Science', 'Social Studies', 'Art', 'Music', 'PE'],
+      secondary: ['English', 'Mathematics', 'Biology', 'Chemistry', 'Physics', 'History', 'Government', 'Economics', 'Spanish', 'French', 'Computer Science']
+    }
+  };
+  
+  const levelKey = level === 'both' ? 'secondary' : level;
+  return subjects[curriculum]?.[levelKey] || subjects.cbc.secondary;
+}
+
+module.exports = { getGradeFromScore, getSubjectsForCurriculum, CURRICULUMS };
