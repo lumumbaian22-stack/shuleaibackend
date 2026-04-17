@@ -6,17 +6,25 @@ const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
 
 /**
  * Check if a teacher has timetable conflict
- */
 const hasTimetableConflict = (teacher, dayOfWeek, dutyType) => {
   const dutyTime = DUTY_TIME_SLOTS[dutyType]?.start;
   if (!dutyTime) return false;
   
-  return teacher.checkTimetableConflict(dayOfWeek, dutyTime);
+  const timetable = teacher.timetable || {};
+  const daySchedule = timetable[dayOfWeek] || [];
+  
+  const [dutyHour, dutyMinute] = dutyTime.split(':').map(Number);
+  const dutyMinutes = dutyHour * 60 + dutyMinute;
+  
+  return daySchedule.some(period => {
+    const [startHour, startMinute] = (period.start || '00:00').split(':').map(Number);
+    const [endHour, endMinute] = (period.end || '00:00').split(':').map(Number);
+    const startMinutes = startHour * 60 + startMinute;
+    const endMinutes = endHour * 60 + endMinute;
+    return dutyMinutes >= startMinutes && dutyMinutes <= endMinutes;
+  });
 };
 
-/**
- * Get teachers sorted by fairness (least duties first)
- */
 const getTeachersByFairness = async (schoolCode, date, excludeTeacherIds = []) => {
   const startOfMonth = moment().startOf('month').format('YYYY-MM-DD');
   const endOfMonth = moment().endOf('month').format('YYYY-MM-DD');
