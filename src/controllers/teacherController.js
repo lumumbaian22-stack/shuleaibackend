@@ -8,7 +8,11 @@ const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
 const moment = require('moment');
 
-// ============ DASHBOARD ============
+// ============ EXISTING FUNCTIONS (keep your existing ones, they work) ============
+
+// @desc    Get teacher's dashboard
+// @route   GET /api/teacher/dashboard
+// @access  Private/Teacher
 exports.getDashboard = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
@@ -55,7 +59,9 @@ exports.getDashboard = async (req, res) => {
   }
 };
 
-// ============ GET MY STUDENTS WITH SUBJECT MATRIX ============
+// @desc    Get teacher's students
+// @route   GET /api/teacher/students
+// @access  Private/Teacher
 exports.getMyStudents = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
@@ -63,7 +69,6 @@ exports.getMyStudents = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher profile not found' });
     }
 
-    // Find class where teacher is class teacher
     const classItem = await Class.findOne({
       where: { teacherId: teacher.id, schoolCode: req.user.schoolCode, isActive: true }
     });
@@ -75,7 +80,6 @@ exports.getMyStudents = async (req, res) => {
       classNames.push(teacher.classTeacher);
     }
 
-    // Find subject teaching assignments
     const allClasses = await Class.findAll({
       where: { schoolCode: req.user.schoolCode, isActive: true }
     });
@@ -102,7 +106,6 @@ exports.getMyStudents = async (req, res) => {
       return res.json({ success: true, data: { students: [], isClassTeacher: false, subjects: [], classNames: [] } });
     }
 
-    // Get all students in these classes
     const students = await Student.findAll({
       where: { grade: { [Op.in]: classNames } },
       include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
@@ -110,7 +113,6 @@ exports.getMyStudents = async (req, res) => {
 
     const studentIds = students.map(s => s.id);
 
-    // Get academic records and attendance
     const academicRecords = await AcademicRecord.findAll({
       where: { studentId: { [Op.in]: studentIds } }
     });
@@ -118,7 +120,6 @@ exports.getMyStudents = async (req, res) => {
       where: { studentId: { [Op.in]: studentIds } }
     });
 
-    // Determine subjects to display
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     const curriculum = school?.system || 'cbc';
     const curriculumHelper = require('../utils/curriculumHelper');
@@ -133,7 +134,6 @@ exports.getMyStudents = async (req, res) => {
 
     const displaySubjects = classItem ? Array.from(allSubjects) : subjectAssignments.map(a => a.subject);
 
-    // Build student data with subject scores
     const studentData = students.map(student => {
       const user = student.User;
       const studentRecords = academicRecords.filter(r => r.studentId === student.id);
@@ -196,7 +196,9 @@ exports.getMyStudents = async (req, res) => {
   }
 };
 
-// ============ ADD STUDENT ============
+// @desc    Add a new student with default password
+// @route   POST /api/teacher/students
+// @access  Private/Teacher
 exports.addStudent = async (req, res) => {
   try {
     const { name, grade, parentEmail, dateOfBirth, gender } = req.body;
@@ -275,7 +277,9 @@ exports.addStudent = async (req, res) => {
   }
 };
 
-// ============ ENTER MARKS (WITH CBC GRADING) ============
+// @desc    Enter marks for a student
+// @route   POST /api/teacher/marks
+// @access  Private/Teacher
 exports.enterMarks = async (req, res) => {
   try {
     const { studentId, subject, score, assessmentType, assessmentName, date, term, year } = req.body;
@@ -342,7 +346,9 @@ exports.enterMarks = async (req, res) => {
   }
 };
 
-// ============ TAKE ATTENDANCE ============
+// @desc    Take attendance
+// @route   POST /api/teacher/attendance
+// @access  Private/Teacher
 exports.takeAttendance = async (req, res) => {
   try {
     const { studentId, date, status, reason } = req.body;
@@ -389,7 +395,9 @@ exports.takeAttendance = async (req, res) => {
   }
 };
 
-// ============ ADD COMMENT ============
+// @desc    Add a comment about a student
+// @route   POST /api/teacher/comment
+// @access  Private/Teacher
 exports.addComment = async (req, res) => {
   try {
     const { studentId, comment } = req.body;
@@ -424,7 +432,9 @@ exports.addComment = async (req, res) => {
   }
 };
 
-// ============ UPLOAD MARKS CSV ============
+// @desc    Upload CSV of marks
+// @route   POST /api/teacher/upload/marks
+// @access  Private/Teacher
 exports.uploadMarksCSV = async (req, res) => {
   if (!req.files || !req.files.file) {
     return res.status(400).json({ success: false, message: 'No file uploaded' });
@@ -511,6 +521,7 @@ exports.uploadMarksCSV = async (req, res) => {
 };
 
 // ============ MESSAGE FUNCTIONS ============
+
 exports.getConversations = async (req, res) => {
     try {
         const messages = await Message.findAll({
@@ -607,6 +618,48 @@ exports.markMessagesAsRead = async (req, res) => {
     }
 };
 
+exports.deleteMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { deleteFor } = req.body;
+
+    const message = await Message.findByPk(messageId);
+
+    if (!message) {
+      return res.status(404).json({ success: false, message: 'Message not found' });
+    }
+
+    if (message.senderId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
+
+    if (deleteFor === 'everyone') {
+      message.content = '[This message was deleted]';
+      message.metadata = { ...message.metadata, deleted: true, deletedBy: req.user.id, deletedAt: new Date() };
+      await message.save();
+    } else {
+      const deletedFor = message.metadata?.deletedFor || [];
+      if (!deletedFor.includes(req.user.id)) {
+        deletedFor.push(req.user.id);
+        message.metadata = { ...message.metadata, deletedFor };
+        await message.save();
+      }
+    }
+
+    if (global.io) {
+      global.io.to(`user-${message.receiverId}`).emit('message-deleted', { messageId: message.id, deleteFor });
+      if (message.senderId !== req.user.id) {
+        global.io.to(`user-${message.senderId}`).emit('message-deleted', { messageId: message.id, deleteFor });
+      }
+    }
+
+    res.json({ success: true, message: 'Message deleted' });
+  } catch (error) {
+    console.error('Delete message error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.replyToParent = async (req, res) => {
     try {
         const { parentId, message, originalMessageId } = req.body;
@@ -658,50 +711,6 @@ exports.replyToParent = async (req, res) => {
     }
 };
 
-// ============ DELETE MESSAGE ============
-exports.deleteMessage = async (req, res) => {
-  try {
-    const { messageId } = req.params;
-    const { deleteFor } = req.body; // 'everyone' or 'me'
-
-    const message = await Message.findByPk(messageId);
-
-    if (!message) {
-      return res.status(404).json({ success: false, message: 'Message not found' });
-    }
-
-    if (message.senderId !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Not authorized' });
-    }
-
-    if (deleteFor === 'everyone') {
-      message.content = '[This message was deleted]';
-      message.metadata = { ...message.metadata, deleted: true, deletedBy: req.user.id, deletedAt: new Date() };
-      await message.save();
-    } else {
-      const deletedFor = message.metadata?.deletedFor || [];
-      if (!deletedFor.includes(req.user.id)) {
-        deletedFor.push(req.user.id);
-        message.metadata = { ...message.metadata, deletedFor };
-        await message.save();
-      }
-    }
-
-    if (global.io) {
-      global.io.to(`user-${message.receiverId}`).emit('message-deleted', { messageId: message.id, deleteFor });
-      if (message.senderId !== req.user.id) {
-        global.io.to(`user-${message.senderId}`).emit('message-deleted', { messageId: message.id, deleteFor });
-      }
-    }
-
-    res.json({ success: true, message: 'Message deleted' });
-  } catch (error) {
-    console.error('Delete message error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ============ GET TODAY DUTY ============
 exports.getTodayDuty = async (userId) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId } });
@@ -727,7 +736,6 @@ exports.getTodayDuty = async (userId) => {
   }
 };
 
-// ============ DELETE STUDENT ============
 exports.deleteStudent = async (req, res) => {
   try {
     const { studentId } = req.params;
@@ -776,7 +784,11 @@ exports.deleteStudent = async (req, res) => {
   }
 };
 
-// ============ GET MY CLASS ============
+// ============ NEW FUNCTIONS - FIXED ============
+
+// @desc    Get teacher's assigned class
+// @route   GET /api/teacher/my-class
+// @access  Private/Teacher
 exports.getMyClass = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
@@ -807,7 +819,10 @@ exports.getMyClass = async (req, res) => {
   }
 };
 
-// ============ GET MY SUBJECTS ============
+
+// @desc    Get teacher's assigned subjects
+// @route   GET /api/teacher/my-subjects
+// @access  Private/Teacher
 exports.getMySubjects = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
@@ -839,7 +854,9 @@ exports.getMySubjects = async (req, res) => {
   }
 };
 
-// ============ GET TEACHER STATS ============
+// @desc    Get teacher stats
+// @route   GET /api/teacher/stats
+// @access  Private/Teacher
 exports.getTeacherStats = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
@@ -893,7 +910,9 @@ exports.getTeacherStats = async (req, res) => {
   }
 };
 
-// ============ GET CLASS STUDENTS ============
+// @desc    Get students for a specific class (for marks entry)
+// @route   GET /api/teacher/classes/:classId/students
+// @access  Private/Teacher
 exports.getClassStudents = async (req, res) => {
   try {
     const { classId } = req.params;
@@ -913,7 +932,7 @@ exports.getClassStudents = async (req, res) => {
     
     const students = await Student.findAll({
       where: { grade: classItem.name },
-      include: [{ model: User, attributes: ['id', '11'] }],
+      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }],  // FIXED
       order: [['createdAt', 'ASC']]
     });
     
@@ -924,7 +943,9 @@ exports.getClassStudents = async (req, res) => {
   }
 };
 
-// ============ UPLOAD STUDENTS CSV ============
+// @desc    Bulk upload students via CSV
+// @route   POST /api/teacher/students/upload
+// @access  Private/Teacher
 exports.uploadStudentsCSV = async (req, res) => {
   try {
     if (!req.files || !req.files.file) {
@@ -1017,7 +1038,9 @@ exports.uploadStudentsCSV = async (req, res) => {
   }
 };
 
-// ============ SAVE BULK MARKS ============
+// @desc    Bulk save marks
+// @route   POST /api/teacher/marks/bulk
+// @access  Private/Teacher
 exports.saveBulkMarks = async (req, res) => {
   try {
     const { classId, subject, assessmentType, assessmentName, date, marks } = req.body;
@@ -1070,7 +1093,9 @@ exports.saveBulkMarks = async (req, res) => {
   }
 };
 
-// ============ GET MY ASSIGNMENTS ============
+// @desc    Get teacher's assignments
+// @route   GET /api/teacher/my-assignments
+// @access  Private/Teacher
 exports.getMyAssignments = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
@@ -1110,7 +1135,9 @@ exports.getMyAssignments = async (req, res) => {
   }
 };
 
-// ============ GET CLASS STUDENTS FOR SUBJECT ============
+// @desc    Get students for a specific class and subject
+// @route   GET /api/teacher/class-students
+// @access  Private/Teacher
 exports.getClassStudentsForSubject = async (req, res) => {
   try {
     const { classId, subject } = req.query;
@@ -1146,7 +1173,11 @@ exports.getClassStudentsForSubject = async (req, res) => {
   }
 };
 
-// ============ GET PERFORMANCE DATA ============
+// @desc    Get teacher's subject performance and attendance trend
+// @route   GET /api/teacher/performance
+// @access  Private/Teacher
+// Inside teacherController.js, add or update this method:
+
 exports.getPerformanceData = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
@@ -1201,7 +1232,8 @@ exports.getPerformanceData = async (req, res) => {
   }
 };
 
-// ============ UPDATE MARK ============
+// @desc    Update a mark
+// @route   PUT /api/teacher/marks/:recordId
 exports.updateMark = async (req, res) => {
   try {
     const { recordId } = req.params;
@@ -1217,7 +1249,8 @@ exports.updateMark = async (req, res) => {
   }
 };
 
-// ============ DELETE MARK ============
+// @desc    Delete a mark
+// @route   DELETE /api/teacher/marks/:recordId
 exports.deleteMark = async (req, res) => {
   try {
     const { recordId } = req.params;
@@ -1232,7 +1265,8 @@ exports.deleteMark = async (req, res) => {
   }
 };
 
-// ============ DOWNLOAD MARKS TEMPLATE ============
+// @desc    Download marks CSV template
+// @route   GET /api/teacher/marks-template
 exports.downloadMarksTemplate = (req, res) => {
   const template = `name,elimuid,subject,score,assessmentType,date,term,year,assessmentName\nJohn Doe,ELI-2024-001,Mathematics,85,exam,2024-03-15,Term 1,2024,Math Mid-Term`;
   res.setHeader('Content-Type', 'text/csv');
@@ -1240,7 +1274,9 @@ exports.downloadMarksTemplate = (req, res) => {
   res.send(template);
 };
 
-// ============ GET CLASS GRADEBOOK ============
+// @desc    Get gradebook for teacher's class (all students with subject scores)
+// @route   GET /api/teacher/gradebook
+// @access  Private/Teacher
 exports.getClassGradebook = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
