@@ -384,21 +384,29 @@ exports.assignTeacherToClass = async (req, res) => {
   }
 };
 
-// Add batch subject assignment
+// @desc    Batch assign subjects to teachers
+// @route   POST /api/admin/classes/subject-assign-batch
+// @access  Private/Admin
 exports.batchAssignSubjects = async (req, res) => {
   try {
     const { classId, assignments } = req.body; // assignments: [{ teacherId, subject }]
     const classItem = await Class.findOne({ where: { id: classId, schoolCode: req.user.schoolCode } });
     if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
+    
     let subjectTeachers = classItem.subjectTeachers || [];
+    
     for (const ass of assignments) {
-      const teacher = await Teacher.findByPk(ass.teacherId);
+      const teacher = await Teacher.findByPk(ass.teacherId, {
+        include: [{ model: User, attributes: ['name'] }]
+      });
       if (!teacher) continue;
+      
       const teacherName = teacher.User?.name || 'Unknown';
       // Remove existing assignment for this subject
       subjectTeachers = subjectTeachers.filter(st => st.subject !== ass.subject);
+      // Add new
       subjectTeachers.push({
-        id: Date.now().toString() + Math.random(),
+        id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
         teacherId: ass.teacherId,
         teacherName,
         subject: ass.subject,
@@ -406,9 +414,11 @@ exports.batchAssignSubjects = async (req, res) => {
         assignedBy: req.user.id
       });
     }
+    
     await classItem.update({ subjectTeachers });
     res.json({ success: true, message: 'Subjects assigned successfully' });
   } catch (error) {
+    console.error('Batch assign subjects error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
