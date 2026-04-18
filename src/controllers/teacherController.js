@@ -1318,3 +1318,30 @@ exports.getClassGradebook = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Get attendance for a specific date
+// @route   GET /api/teacher/attendance/:date
+exports.getAttendanceForDate = async (req, res) => {
+  try {
+    const { date } = req.params;
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
+    // Get students in teacher's class(es)
+    let classNames = [];
+    if (teacher.classTeacher) classNames.push(teacher.classTeacher);
+    const classes = await Class.findAll({ where: { schoolCode: req.user.schoolCode } });
+    classes.forEach(cls => {
+      if (cls.subjectTeachers?.some(st => st.teacherId === teacher.id)) classNames.push(cls.name);
+    });
+    const students = await Student.findAll({ where: { grade: { [Op.in]: [...new Set(classNames)] } } });
+    const studentIds = students.map(s => s.id);
+
+    const attendance = await Attendance.findAll({
+      where: { studentId: { [Op.in]: studentIds }, date }
+    });
+    res.json({ success: true, data: attendance });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
