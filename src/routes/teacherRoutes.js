@@ -59,4 +59,7 @@ router.post('/tasks', taskController.createTask);
 router.put('/tasks/:taskId', taskController.updateTask);
 router.delete('/tasks/:taskId', taskController.deleteTask);
 
+router.get('/attendance/:date', teacherController.getAttendanceForDate);
+
 module.exports = router;
+
