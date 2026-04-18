@@ -5,6 +5,8 @@ const { Op } = require('sequelize');
 exports.getTodayTasks = async (req, res) => {
   try {
     const { studentId } = req.query;
+    if (!studentId) return res.status(400).json({ success: false, message: 'Student ID required' });
+
     const student = await Student.findByPk(studentId);
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
 
@@ -27,28 +29,31 @@ exports.getTodayTasks = async (req, res) => {
       .filter(([_, data]) => (data.total / data.count) < 50)
       .map(([subject]) => subject);
 
-    // 3. Select tasks
-    const selectedTasks = [];
+    // 3. Get recently assigned tasks to exclude
     const assignedTasks = await HomeTaskAssignment.findAll({
       where: { studentId, assignedAt: { [Op.gte]: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } },
       attributes: ['taskId']
     });
     const excludedTaskIds = assignedTasks.map(a => a.taskId);
 
+    // Helper: get random tasks
+    const getRandomTasks = async (whereClause, limit) => {
+      const tasks = await HomeTask.findAll({ where: whereClause });
+      return tasks.sort(() => 0.5 - Math.random()).slice(0, limit);
+    };
+
+    const selectedTasks = [];
+
     // From weak competencies
     for (const compId of weakCompetencyIds.slice(0, 2)) {
-      const task = await HomeTask.findOne({
-        where: {
-          gradeLevel: student.grade,
-          competencyId: compId,
-          difficulty: { [Op.in]: ['Easy', 'Medium'] },
-          id: { [Op.notIn]: excludedTaskIds },
-          isActive: true
-        },
-        order: sequelize.random(),
-        limit: 1
-      });
-      if (task) selectedTasks.push(task);
+      const tasks = await getRandomTasks({
+        gradeLevel: student.grade,
+        competencyId: compId,
+        difficulty: { [Op.in]: ['Easy', 'Medium'] },
+        id: { [Op.notIn]: excludedTaskIds },
+        isActive: true
+      }, 1);
+      if (tasks.length) selectedTasks.push(tasks[0]);
     }
 
     // Fill up to 5 tasks with variety
@@ -56,22 +61,35 @@ exports.getTodayTasks = async (req, res) => {
       const types = ['Practice', 'Application', 'Reflection'];
       for (const type of types) {
         if (selectedTasks.length >= 5) break;
-        const task = await HomeTask.findOne({
-          where: {
-            gradeLevel: student.grade,
-            type,
-            id: { [Op.notIn]: excludedTaskIds },
-            isActive: true
-          },
-          order: sequelize.random(),
-          limit: 1
-        });
-        if (task && !selectedTasks.some(t => t.id === task.id)) selectedTasks.push(task);
+        const tasks = await getRandomTasks({
+          gradeLevel: student.grade,
+          type,
+          id: { [Op.notIn]: excludedTaskIds },
+          isActive: true
+        }, 1);
+        if (tasks.length && !selectedTasks.some(t => t.id === tasks[0].id)) {
+          selectedTasks.push(tasks[0]);
+        }
+      }
+    }
+
+    // If still less than 5, grab any active tasks
+    if (selectedTasks.length < 5) {
+      const remaining = await getRandomTasks({
+        gradeLevel: student.grade,
+        id: { [Op.notIn]: excludedTaskIds },
+        isActive: true
+      }, 5 - selectedTasks.length);
+      for (const task of remaining) {
+        if (!selectedTasks.some(t => t.id === task.id)) {
+          selectedTasks.push(task);
+        }
       }
     }
 
     res.json({ success: true, data: selectedTasks.slice(0, 5) });
   } catch (error) {
+    console.error('Get today tasks error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
