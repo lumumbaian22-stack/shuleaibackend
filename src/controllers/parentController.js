@@ -1,4 +1,4 @@
-const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message } = require('../models');
+const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, sequelize } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 
