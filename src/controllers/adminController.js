@@ -226,15 +226,21 @@ exports.getAllParents = async (req, res) => {
 // ============ SCHOOL SETTINGS ============
 exports.getSchoolSettings = async (req, res) => {
   try {
+    // Allow teacher, parent, admin, super_admin to read their school settings
+    const allowedRoles = ['admin', 'super_admin', 'teacher', 'parent'];
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
     
-    // Add curriculum alias for frontend compatibility
     const schoolData = school.toJSON();
     schoolData.curriculum = school.system;
     
     res.json({ success: true, data: schoolData });
   } catch (error) {
+    console.error('Get school settings error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
