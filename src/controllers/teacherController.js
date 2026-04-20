@@ -59,7 +59,7 @@ exports.getDashboard = async (req, res) => {
   }
 };
 
-// @desc    Get teacher's students
+// @desc    Get teacher's students with subject matrix
 // @route   GET /api/teacher/students
 // @access  Private/Teacher
 exports.getMyStudents = async (req, res) => {
@@ -69,6 +69,7 @@ exports.getMyStudents = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Teacher profile not found' });
     }
 
+    // Find class where teacher is class teacher
     const classItem = await Class.findOne({
       where: { teacherId: teacher.id, schoolCode: req.user.schoolCode, isActive: true }
     });
@@ -80,6 +81,7 @@ exports.getMyStudents = async (req, res) => {
       classNames.push(teacher.classTeacher);
     }
 
+    // Find subject teaching assignments
     const allClasses = await Class.findAll({
       where: { schoolCode: req.user.schoolCode, isActive: true }
     });
@@ -106,6 +108,7 @@ exports.getMyStudents = async (req, res) => {
       return res.json({ success: true, data: { students: [], isClassTeacher: false, subjects: [], classNames: [] } });
     }
 
+    // Get all students in these classes
     const students = await Student.findAll({
       where: { grade: { [Op.in]: classNames } },
       include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
@@ -113,13 +116,16 @@ exports.getMyStudents = async (req, res) => {
 
     const studentIds = students.map(s => s.id);
 
+    // Get ALL academic records for these students (not filtered by term/year)
     const academicRecords = await AcademicRecord.findAll({
       where: { studentId: { [Op.in]: studentIds } }
     });
+    
     const attendanceRecords = await Attendance.findAll({
       where: { studentId: { [Op.in]: studentIds } }
     });
 
+    // Determine subjects to display
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     const curriculum = school?.system || 'cbc';
     const curriculumHelper = require('../utils/curriculumHelper');
@@ -134,6 +140,7 @@ exports.getMyStudents = async (req, res) => {
 
     const displaySubjects = classItem ? Array.from(allSubjects) : subjectAssignments.map(a => a.subject);
 
+    // Build student data with subject scores
     const studentData = students.map(student => {
       const user = student.User;
       const studentRecords = academicRecords.filter(r => r.studentId === student.id);
