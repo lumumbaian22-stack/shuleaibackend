@@ -61,7 +61,7 @@ router.get('/duty/teacher-workload', dutyController.getTeacherWorkload);
 router.post('/duty/adjust', dutyController.manualAdjustDuty);
 
 // ============ SCHOOL SETTINGS ============
-router.get('/settings', adminController.getSchoolSettings);
+router.get('/settings', protect, adminController.getSchoolSettings);
 router.put('/settings', adminController.updateSchoolSettings);
 
 module.exports = router;
