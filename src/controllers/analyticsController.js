@@ -88,36 +88,54 @@ exports.getStudentAnalytics = async (req, res) => {
 // @access  Private/Teacher/Admin
 exports.getClassAnalytics = async (req, res) => {
   try {
-    const { classId } = req.params; // classId could be grade name
+    const { classId } = req.params;
     const { subject } = req.query;
 
-    // FIXED: Use schoolCode from user
+    // 1. Find the class to get its actual name (grade)
+    const classItem = await Class.findByPk(classId);
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    // 2. Find students by grade = classItem.name
     const students = await Student.findAll({
-      where: { grade: classId },
+      where: { grade: classItem.name },
       include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
     });
 
     const studentIds = students.map(s => s.id);
-    const records = await AcademicRecord.findAll({
-      where: { studentId: studentIds, ...(subject && { subject }) }
-    });
+    
+    // 3. Get academic records for these students
+    const whereClause = { studentId: { [Op.in]: studentIds } };
+    if (subject) whereClause.subject = subject;
+    
+    const records = await AcademicRecord.findAll({ where: whereClause });
 
-    // Aggregate by student
+    // 4. Aggregate by student
     const studentStats = students.map(s => {
       const studentRecords = records.filter(r => r.studentId === s.id);
-      const avg = studentRecords.length ? studentRecords.reduce((a,b) => a + b.score, 0) / studentRecords.length : 0;
-      return { name: s.User.name, average: avg };
-    });
+      const avg = studentRecords.length 
+        ? studentRecords.reduce((a, b) => a + b.score, 0) / studentRecords.length 
+        : 0;
+      return { 
+        name: s.User.name, 
+        average: Math.round(avg), 
+        recordsCount: studentRecords.length 
+      };
+    }).filter(s => s.recordsCount > 0); // Only include students with marks
 
-    const overallAvg = studentStats.length ? studentStats.reduce((a,b) => a + b.average, 0) / studentStats.length : 0;
+    const overallAvg = studentStats.length 
+      ? Math.round(studentStats.reduce((a, b) => a + b.average, 0) / studentStats.length) 
+      : 0;
 
     res.json({
       success: true,
       data: {
-        class: classId,
-        studentCount: students.length,
+        class: classItem.name,
+        classId: classItem.id,
+        studentCount: studentStats.length,
         overallAverage: overallAvg,
-        studentStats: studentStats.sort((a,b) => b.average - a.average)
+        studentStats: studentStats.sort((a, b) => b.average - a.average)
       }
     });
   } catch (error) {
