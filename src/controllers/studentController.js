@@ -340,3 +340,16 @@ function getGradeFromScoreLocal(score) {
     if (score >= 50) return 'D';
     return 'E';
 }
+
+// At the end of studentController.js, ensure it's in module.exports
+module.exports = {
+  getDashboard,
+  getMaterials,
+  getGrades,
+  getAttendance,
+  sendMessage,
+  getMessages,
+  sendGroupMessage,
+  getGroupMessages,
+  getStudentFullDetails  // <-- Make sure this is included
+};
