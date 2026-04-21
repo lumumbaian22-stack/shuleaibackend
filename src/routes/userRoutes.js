@@ -3,11 +3,9 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth');
 const userController = require('../controllers/userController');
+const studentController = require('../controllers/studentController'); // Add import
 const upload = require('../middleware/upload');
-const studentController = require('../controllers/studentController');
 
-
-// All user routes require authentication
 router.use(protect);
 router.get('/alerts', userController.getAlerts);
 router.get('/stats', userController.getUserStats);
@@ -16,12 +14,9 @@ router.get('/preferences', userController.getPreferences);
 router.put('/preferences', userController.updatePreferences);
 router.get('/export', userController.exportMyData);
 router.post('/deactivate', userController.deactivateAccount);
-router.post('/profile-picture', userController.uploadProfilePicture);
 router.post('/profile-picture', upload.single('picture'), userController.uploadProfilePicture);
-router.get('/students/:studentId/details', protect, studentController.getStudentFullDetails);
 
-// @desc    Get consent status for current user
-// @route   GET /api/consent/status
+// Consent status
 router.get('/consent/status', protect, async (req, res) => {
   try {
     const { UserConsent } = require('../models');
@@ -31,12 +26,15 @@ router.get('/consent/status', protect, async (req, res) => {
       data: { 
         termsAccepted: consent?.termsAccepted || false,
         privacyAccepted: consent?.privacyAccepted || false,
-        dpaAccepted: false // Add DPA check if needed
+        dpaAccepted: false
       } 
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
+// Student full details (NEW)
+router.get('/students/:studentId/details', studentController.getStudentFullDetails);
 
 module.exports = router;
