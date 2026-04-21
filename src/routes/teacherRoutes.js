@@ -5,12 +5,10 @@ const teacherController = require('../controllers/teacherController');
 const teacherMessageController = require('../controllers/teacherMessageController');
 const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
-const analyticsController = require('../controllers/analyticsController');
+const analyticsController = require('../controllers/analyticsController'); // Add import
 
 router.use(protect);
 router.use(authorize('teacher'));
-
-router.get('/analytics', analyticsController.getTeacherAnalytics);
 
 // Students
 router.get('/students', teacherController.getMyStudents);
@@ -47,7 +45,7 @@ router.get('/conversations', teacherMessageController.getConversations);
 router.get('/messages/:parentId', teacherMessageController.getMessages);
 router.put('/messages/read/:conversationId', teacherMessageController.markMessagesAsRead);
 router.post('/reply', teacherMessageController.replyToParent);
-router.delete('/messages/:messageId', teacherController.deleteMessage); // NEW
+router.delete('/messages/:messageId', teacherController.deleteMessage);
 
 // Staff Chat
 router.get('/staff-members', chatController.getStaffMembers);
@@ -64,5 +62,7 @@ router.delete('/tasks/:taskId', taskController.deleteTask);
 
 router.get('/attendance/:date', teacherController.getAttendanceForDate);
 
-module.exports = router;
+// Analytics (NEW)
+router.get('/analytics', analyticsController.getTeacherAnalytics);
 
+module.exports = router;
