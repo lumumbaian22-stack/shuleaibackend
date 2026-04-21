@@ -3,10 +3,13 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const studentController = require('../controllers/studentController');
 const authController = require('../controllers/authController');
+const analyticsController = require('../controllers/analyticsController');
 
 router.post('/set-first-password', authController.setFirstPassword);
 
 router.use(protect, authorize('student'));
+
+router.get('/analytics', analyticsController.getStudentAnalytics);
 
 router.get('/dashboard', studentController.getDashboard);
 router.get('/materials', studentController.getMaterials);
