@@ -2,13 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const superAdminController = require('../controllers/superAdminController');
-const analyticsController = require('../controllers/analyticsController');
+const analyticsController = require('../controllers/analyticsController'); // Add this import
 
 router.use(protect, authorize('super_admin'));
-// Add after existing routes
-router.get('/analytics', superAdminController.getSuperAdminAnalytics);
-
-router.get('/analytics', analyticsController.getAdminAnalytics);
 
 // Dashboard and overview
 router.get('/overview', superAdminController.getOverview);
@@ -33,8 +29,6 @@ router.post('/requests/:id/reject', superAdminController.rejectRequest);
 // Bank details
 router.put('/bank-details/:schoolId', superAdminController.updateBankDetails);
 
-// Add these routes to your superAdminRoutes.js
-
 // School-specific statistics
 router.get('/schools/:schoolId/teachers', superAdminController.getSchoolTeachers);
 router.get('/schools/:schoolId/students', superAdminController.getSchoolStudents);
@@ -55,7 +49,11 @@ router.post('/backup', superAdminController.runSystemBackup);
 router.post('/cache/clear', superAdminController.clearPlatformCache);
 router.get('/export', superAdminController.exportPlatformData);
 
+// Growth and distribution data
 router.get('/growth-data', superAdminController.getGrowthData);
 router.get('/school-distribution', superAdminController.getSchoolDistribution);
+
+// Analytics (NEW)
+router.get('/analytics', analyticsController.getSuperAdminAnalytics);
 
 module.exports = router;
