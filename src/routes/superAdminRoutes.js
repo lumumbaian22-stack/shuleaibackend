@@ -2,10 +2,13 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const superAdminController = require('../controllers/superAdminController');
+const analyticsController = require('../controllers/analyticsController');
 
 router.use(protect, authorize('super_admin'));
 // Add after existing routes
 router.get('/analytics', superAdminController.getSuperAdminAnalytics);
+
+router.get('/analytics', analyticsController.getAdminAnalytics);
 
 // Dashboard and overview
 router.get('/overview', superAdminController.getOverview);
