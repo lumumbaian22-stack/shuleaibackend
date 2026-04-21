@@ -1,4 +1,5 @@
-const { Student, AcademicRecord, Attendance, Message, User } = require('../models');
+// src/controllers/studentController.js
+const { Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent } = require('../models');
 const { Op } = require('sequelize');
 
 // @desc    Get student's own dashboard data
@@ -34,7 +35,6 @@ exports.getDashboard = async (req, res) => {
 // @access  Private/Student
 exports.getMaterials = async (req, res) => {
   try {
-    // Placeholder: return dummy materials
     const materials = [
       { id: 1, title: 'Mathematics Notes', type: 'pdf', url: '/uploads/math.pdf' },
       { id: 2, title: 'Science Video', type: 'video', url: '/uploads/science.mp4' }
@@ -83,7 +83,6 @@ exports.sendMessage = async (req, res) => {
       content
     });
 
-    // Emit via WebSocket if online
     if (global.io) {
       global.io.to(`user-${receiverId}`).emit('private-message', {
         from: req.user.id,
@@ -119,6 +118,9 @@ exports.getMessages = async (req, res) => {
   }
 };
 
+// @desc    Send group message to classmates
+// @route   POST /api/student/group-message
+// @access  Private/Student
 exports.sendGroupMessage = async (req, res) => {
   try {
     const { content, replyToId } = req.body;
@@ -145,6 +147,9 @@ exports.sendGroupMessage = async (req, res) => {
   }
 };
 
+// @desc    Get group messages for student's class
+// @route   GET /api/student/group-messages
+// @access  Private/Student
 exports.getGroupMessages = async (req, res) => {
   try {
     const student = await Student.findOne({ where: { userId: req.user.id } });
@@ -167,7 +172,16 @@ exports.getGroupMessages = async (req, res) => {
   }
 };
 
-// Add this method to src/controllers/studentController.js
+// ============ NEW: Comprehensive Student Details ============
+
+// Helper: get grade from score (simplified)
+function getGradeFromScoreLocal(score) {
+    if (score >= 80) return 'A';
+    if (score >= 70) return 'B';
+    if (score >= 60) return 'C';
+    if (score >= 50) return 'D';
+    return 'E';
+}
 
 // @desc    Get comprehensive student details (for unified modal)
 // @route   GET /api/students/:studentId/details
@@ -281,10 +295,10 @@ exports.getStudentFullDetails = async (req, res) => {
             date: r.date
         }));
 
-        // Address (mock for now; can be added to Student model later)
+        // Address (placeholder; can be added to Student model later)
         const address = student.address || 'Not provided';
 
-        // Prefect status (mock; add isPrefect field to Student model if desired)
+        // Prefect status
         const isPrefect = student.isPrefect || false;
 
         res.json({
@@ -331,25 +345,4 @@ exports.getStudentFullDetails = async (req, res) => {
         console.error('Get student full details error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
-};
-
-function getGradeFromScoreLocal(score) {
-    if (score >= 80) return 'A';
-    if (score >= 70) return 'B';
-    if (score >= 60) return 'C';
-    if (score >= 50) return 'D';
-    return 'E';
-}
-
-// At the end of studentController.js, ensure it's in module.exports
-module.exports = {
-  getDashboard,
-  getMaterials,
-  getGrades,
-  getAttendance,
-  sendMessage,
-  getMessages,
-  sendGroupMessage,
-  getGroupMessages,
-  getStudentFullDetails  // <-- Make sure this is included
 };
