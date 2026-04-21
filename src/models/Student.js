@@ -45,6 +45,10 @@ module.exports = (sequelize, DataTypes) => {
         plan: 'basic', 
         paid: 0, 
         status: 'inactive' 
+      },
+      isPrefect: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
       }
     },
     // New subscription fields
