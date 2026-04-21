@@ -6,9 +6,9 @@ const teacherSignupController = require('../controllers/teacherSignupController'
 const dutyController = require('../controllers/dutyController');
 const adminController = require('../controllers/adminController');
 const classController = require('../controllers/classController');
+const analyticsController = require('../controllers/analyticsController'); // Add import
 
 // ============ PUBLIC / SHARED ROUTES (any authenticated user) ============
-// School settings – readable by teacher, parent, admin, super_admin
 router.get('/settings', protect, adminController.getSchoolSettings);
 
 // ============ ADMIN / SUPER ADMIN ONLY ROUTES ============
@@ -29,7 +29,6 @@ router.delete('/students/:studentId', adminController.deleteStudent);
 router.get('/teachers', adminController.getAllTeachers);
 router.put('/teachers/:teacherId', adminController.updateTeacher);
 router.delete('/teachers/:teacherId', adminController.deleteTeacher);
-
 router.post('/classes/subject-assign-batch', adminController.batchAssignSubjects);
 
 // Parent Management
@@ -67,5 +66,8 @@ router.post('/duty/adjust', dutyController.manualAdjustDuty);
 
 // School Settings (write – admin only)
 router.put('/settings', adminController.updateSchoolSettings);
+
+// Analytics (NEW)
+router.get('/analytics', analyticsController.getAdminAnalytics);
 
 module.exports = router;
