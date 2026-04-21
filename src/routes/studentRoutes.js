@@ -3,13 +3,11 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const studentController = require('../controllers/studentController');
 const authController = require('../controllers/authController');
-const analyticsController = require('../controllers/analyticsController');
+const analyticsController = require('../controllers/analyticsController'); // Add import
 
 router.post('/set-first-password', authController.setFirstPassword);
 
 router.use(protect, authorize('student'));
-
-router.get('/analytics', analyticsController.getStudentAnalytics);
 
 router.get('/dashboard', studentController.getDashboard);
 router.get('/materials', studentController.getMaterials);
@@ -20,5 +18,8 @@ router.get('/messages/:otherUserId', studentController.getMessages);
 
 router.post('/group-message', studentController.sendGroupMessage);
 router.get('/group-messages', studentController.getGroupMessages);
+
+// Analytics (NEW)
+router.get('/analytics', analyticsController.getStudentAnalytics);
 
 module.exports = router;
