@@ -2,11 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const parentController = require('../controllers/parentController');
-const analyticsController = require('../controllers/analyticsController');
+const analyticsController = require('../controllers/analyticsController'); // Add import
 
 router.use(protect, authorize('parent'));
-
-router.get('/analytics', analyticsController.getParentAnalytics);
 
 // Basic routes – no subscription required
 router.get('/children', parentController.getChildren);
@@ -26,5 +24,8 @@ router.post('/upgrade-plan', parentController.upgradePlan);
 router.post('/pay', parentController.makePayment);
 router.get('/payments', parentController.getPayments);
 router.post('/payment-confirm', parentController.confirmPayment);
+
+// Analytics (NEW)
+router.get('/analytics', analyticsController.getParentAnalytics);
 
 module.exports = router;
