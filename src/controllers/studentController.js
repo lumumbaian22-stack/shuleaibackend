@@ -166,3 +166,177 @@ exports.getGroupMessages = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// Add this method to src/controllers/studentController.js
+
+// @desc    Get comprehensive student details (for unified modal)
+// @route   GET /api/students/:studentId/details
+// @access  Private (with ownership check)
+exports.getStudentFullDetails = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const student = await Student.findByPk(studentId, {
+            include: [
+                { model: User, attributes: ['id', 'name', 'email', 'phone', 'profileImage', 'isActive'] }
+            ]
+        });
+
+        if (!student) {
+            return res.status(404).json({ success: false, message: 'Student not found' });
+        }
+
+        // Authorization: only allow if user is admin, teacher of the class, parent of student, or the student themselves
+        const user = req.user;
+        let authorized = false;
+        if (['admin', 'super_admin'].includes(user.role)) {
+            authorized = true;
+        } else if (user.role === 'teacher') {
+            const teacher = await Teacher.findOne({ where: { userId: user.id } });
+            if (teacher) {
+                const classes = await Class.findAll({ where: { schoolCode: user.schoolCode } });
+                const teachesClass = classes.some(cls => 
+                    cls.teacherId === teacher.id || 
+                    (cls.subjectTeachers && cls.subjectTeachers.some(st => st.teacherId === teacher.id))
+                );
+                if (teachesClass && classes.some(cls => cls.name === student.grade)) {
+                    authorized = true;
+                }
+            }
+        } else if (user.role === 'parent') {
+            const parent = await Parent.findOne({ where: { userId: user.id } });
+            if (parent && await parent.hasStudent(student)) {
+                authorized = true;
+            }
+        } else if (user.role === 'student') {
+            if (student.userId === user.id) {
+                authorized = true;
+            }
+        }
+
+        if (!authorized) {
+            return res.status(403).json({ success: false, message: 'Forbidden' });
+        }
+
+        // Fetch parents
+        const parents = await student.getParents({
+            include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+        });
+        const parentList = parents.map(p => ({
+            id: p.id,
+            name: p.User.name,
+            phone: p.User.phone,
+            email: p.User.email,
+            relationship: p.relationship
+        }));
+
+        // Fetch class teacher
+        const classTeacher = await Teacher.findOne({
+            where: { classTeacher: student.grade },
+            include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+        });
+
+        // Academic summary
+        const records = await AcademicRecord.findAll({ where: { studentId }, order: [['date', 'DESC']] });
+        const overallAverage = records.length ? Math.round(records.reduce((s, r) => s + r.score, 0) / records.length) : 0;
+
+        // Subject averages
+        const subjectMap = {};
+        records.forEach(r => {
+            if (!subjectMap[r.subject]) subjectMap[r.subject] = { total: 0, count: 0 };
+            subjectMap[r.subject].total += r.score;
+            subjectMap[r.subject].count++;
+        });
+        const subjects = Object.entries(subjectMap).map(([subject, data]) => ({
+            subject,
+            average: Math.round(data.total / data.count),
+            grade: getGradeFromScoreLocal(Math.round(data.total / data.count))
+        }));
+
+        // Term averages (last 3 terms)
+        const termAverages = [];
+        const terms = ['Term 1', 'Term 2', 'Term 3'];
+        const currentYear = new Date().getFullYear();
+        for (let year = currentYear - 1; year <= currentYear; year++) {
+            for (const term of terms) {
+                const termRecords = records.filter(r => r.term === term && r.year === year);
+                if (termRecords.length) {
+                    const avg = Math.round(termRecords.reduce((s, r) => s + r.score, 0) / termRecords.length);
+                    termAverages.push({ term: `${term} ${year}`, average: avg });
+                }
+            }
+        }
+
+        // Attendance summary
+        const attendance = await Attendance.findAll({ where: { studentId } });
+        const present = attendance.filter(a => a.status === 'present').length;
+        const absent = attendance.filter(a => a.status === 'absent').length;
+        const late = attendance.filter(a => a.status === 'late').length;
+        const attendanceRate = attendance.length ? Math.round((present / attendance.length) * 100) : 0;
+
+        // Recent assessments (last 5)
+        const recentAssessments = records.slice(0, 5).map(r => ({
+            subject: r.subject,
+            assessment: r.assessmentName,
+            score: r.score,
+            date: r.date
+        }));
+
+        // Address (mock for now; can be added to Student model later)
+        const address = student.address || 'Not provided';
+
+        // Prefect status (mock; add isPrefect field to Student model if desired)
+        const isPrefect = student.isPrefect || false;
+
+        res.json({
+            success: true,
+            data: {
+                student: {
+                    id: student.id,
+                    elimuid: student.elimuid,
+                    grade: student.grade,
+                    status: student.status,
+                    enrollmentDate: student.enrollmentDate,
+                    dateOfBirth: student.dateOfBirth,
+                    gender: student.gender,
+                    isPrefect,
+                    photo: student.User.profileImage
+                },
+                user: {
+                    name: student.User.name,
+                    email: student.User.email,
+                    phone: student.User.phone
+                },
+                parents: parentList,
+                classTeacher: classTeacher ? {
+                    name: classTeacher.User.name,
+                    email: classTeacher.User.email,
+                    phone: classTeacher.User.phone
+                } : null,
+                academicSummary: {
+                    overallAverage,
+                    termAverages,
+                    subjects
+                },
+                attendanceSummary: {
+                    rate: attendanceRate,
+                    present,
+                    absent,
+                    late
+                },
+                recentAssessments,
+                address
+            }
+        });
+    } catch (error) {
+        console.error('Get student full details error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+function getGradeFromScoreLocal(score) {
+    if (score >= 80) return 'A';
+    if (score >= 70) return 'B';
+    if (score >= 60) return 'C';
+    if (score >= 50) return 'D';
+    return 'E';
+}
