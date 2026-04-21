@@ -5,9 +5,12 @@ const teacherController = require('../controllers/teacherController');
 const teacherMessageController = require('../controllers/teacherMessageController');
 const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
+const analyticsController = require('../controllers/analyticsController');
 
 router.use(protect);
 router.use(authorize('teacher'));
+
+router.get('/analytics', analyticsController.getTeacherAnalytics);
 
 // Students
 router.get('/students', teacherController.getMyStudents);
