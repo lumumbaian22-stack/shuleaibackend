@@ -1,5 +1,6 @@
 const { School, User, Admin, SchoolNameRequest, Student, Teacher, Parent, ApprovalRequest } = require('../models');
 const { createAlert } = require('../services/notificationService');
+const superAdminController = require('../controllers/superAdminController');
 const { Op } = require('sequelize');
 const { sequelize } = require('../models');
 
