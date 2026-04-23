@@ -125,18 +125,42 @@ exports.getStudentDetails = async (req, res) => {
 exports.updateStudent = async (req, res) => {
   try {
     const { studentId } = req.params;
-    const { name, email, phone, grade, status } = req.body;
-    
+    const { name, email, phone, grade, status, isPrefect } = req.body;
+
     const student = await Student.findByPk(studentId, { include: [{ model: User }] });
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
-    
-    if (name || email || phone) await student.User.update({ name, email, phone });
-    await student.update({ grade, status });
-    
+
+    // Update User fields – send null if email is empty string to avoid isEmail validation error
+    const userFields = {};
+    if (name !== undefined) userFields.name = name;
+    if (email !== undefined) userFields.email = email?.trim() || null;
+    if (phone !== undefined) userFields.phone = phone?.trim() || null;
+
+    if (Object.keys(userFields).length > 0) {
+      await student.User.update(userFields);
+    }
+
+    // Update Student fields
+    const studentFields = {};
+    if (grade !== undefined) studentFields.grade = grade;
+    if (status !== undefined) studentFields.status = status;
+    if (isPrefect !== undefined) studentFields.isPrefect = isPrefect;
+
+    if (Object.keys(studentFields).length > 0) {
+      await student.update(studentFields);
+    }
+
+    // Reload to get fresh data
+    await student.reload({ include: [{ model: User }] });
+
     res.json({ success: true, message: 'Student updated successfully', data: student });
   } catch (error) {
     console.error('Update student error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    const statusCode = error.name === 'SequelizeValidationError' ? 400 : 500;
+    const message = error.name === 'SequelizeValidationError'
+      ? error.errors?.map(e => e.message).join(', ') || 'Validation failed'
+      : error.message;
+    res.status(statusCode).json({ success: false, message });
   }
 };
 
