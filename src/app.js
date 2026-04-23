@@ -29,7 +29,8 @@ const taskRoutes = require('./routes/taskRoutes');
 const alertRoutes = require('./routes/alertRoutes');
 const competencyRoutes = require('./routes/competencyRoutes');
 const homeTaskRoutes = require('./routes/homeTaskRoutes');
-const consentRoutes = require('./routes/consentRoutes');   // <-- ADDED
+const consentRoutes = require('./routes/consentRoutes'); // <-- ADDED
+const searchRoutes = require('./routes/searchRoutes');
 
 const app = express();
 
@@ -109,6 +110,7 @@ app.use('/api/alerts', alertRoutes);
 app.use('/api/cbe', competencyRoutes);
 app.use('/api/home-tasks', homeTaskRoutes);
 app.use('/api/consent', consentRoutes);   // <-- ADDED
+app.use('/api/search', searchRoutes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {
