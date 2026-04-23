@@ -216,20 +216,29 @@ exports.getAlerts = async (req, res) => {
 exports.uploadSignature = async (req, res) => {
     try {
         if (!req.files || !req.files.signature) {
-            return res.status(400).json({ success: false, message: 'No signature uploaded' });
+            return res.status(400).json({ success: false, message: 'No signature file uploaded' });
         }
         const file = req.files.signature;
         const fileName = `sig_${req.user.id}_${Date.now()}.png`;
-        const uploadPath = path.join(__dirname, '../uploads/signatures/', fileName);
+        const uploadDir = path.join(__dirname, '../../uploads/signatures/');
+        
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        
+        const uploadPath = path.join(uploadDir, fileName);
         await file.mv(uploadPath);
+        
         const signatureUrl = `/uploads/signatures/${fileName}`;
         
-        // Update teacher record
+        // For teachers, store signature in Teacher model
         if (req.user.role === 'teacher') {
-            await Teacher.update({ signature: signatureUrl }, { where: { userId: req.user.id } });
+            const Teacher = require('../models').Teacher;
+            await Teacher.update(
+                { signature: signatureUrl },
+                { where: { userId: req.user.id } }
+            );
         }
-        // Also store in User model if desired
-        await req.user.update({ signature: signatureUrl });
         
         res.json({ success: true, data: { signatureUrl } });
     } catch (error) {
