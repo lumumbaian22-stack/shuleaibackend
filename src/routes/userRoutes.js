@@ -15,6 +15,7 @@ router.put('/preferences', userController.updatePreferences);
 router.get('/export', userController.exportMyData);
 router.post('/deactivate', userController.deactivateAccount);
 router.post('/profile-picture', upload.single('picture'), userController.uploadProfilePicture);
+router.post('/signature', protect, userController.uploadSignature);
 
 // Consent status
 router.get('/consent/status', protect, async (req, res) => {
