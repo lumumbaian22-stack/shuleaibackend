@@ -1,0 +1,12 @@
+const express = require('express');
+const router = express.Router();
+const { protect, authorize } = require('../middleware/auth');
+const timetableCtrl = require('../controllers/timetableController');
+
+router.post('/generate', protect, authorize('admin'), timetableCtrl.generate);
+router.put('/:id', protect, authorize('admin'), timetableCtrl.manualUpdate);
+router.post('/:id/publish', protect, authorize('admin'), timetableCtrl.publish);
+router.get('/class/:classId', protect, timetableCtrl.getForClass);
+router.get('/teacher/:teacherId', protect, timetableCtrl.getForTeacher);
+
+module.exports = router;
