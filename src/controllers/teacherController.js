@@ -310,8 +310,8 @@ exports.enterMarks = async (req, res) => {
       score,
       teacherId: teacher.id,
       date: date || new Date(),
-      isPublished: true,
-      grade: grade
+      isPublished: req.body.isPublished !== undefined ? req.body.isPublished : true,
+      gradingScale: req.body.gradingScale || null 
     });
 
     if (score < 50) {
