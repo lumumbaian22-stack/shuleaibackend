@@ -31,6 +31,8 @@ const LearningOutcome = require('./LearningOutcome')(sequelize, DataTypes);
 const StudentCompetencyProgress = require('./StudentCompetencyProgress')(sequelize, DataTypes);
 const HomeTaskAssignment = require('./HomeTaskAssignment')(sequelize, DataTypes);
 const HomeTask = require('./HomeTask')(sequelize, DataTypes);
+const SchoolCalendar = require('./SchoolCalendar')(sequelize, DataTypes);
+// Add to associations: School.hasMany(SchoolCalendar)
 
 // --- Associations ---
 Competency.hasMany(LearningOutcome, { foreignKey: 'competencyId' });
