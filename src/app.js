@@ -31,6 +31,7 @@ const competencyRoutes = require('./routes/competencyRoutes');
 const homeTaskRoutes = require('./routes/homeTaskRoutes');
 const consentRoutes = require('./routes/consentRoutes'); // <-- ADDED
 const searchRoutes = require('./routes/searchRoutes');
+const calendarRoutes = require('./routes/calendarRoutes');
 
 const app = express();
 
@@ -111,6 +112,7 @@ app.use('/api/cbe', competencyRoutes);
 app.use('/api/home-tasks', homeTaskRoutes);
 app.use('/api/consent', consentRoutes);   // <-- ADDED
 app.use('/api/search', searchRoutes);
+app.use('/api/calendar', calendarRoutes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {
