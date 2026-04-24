@@ -31,6 +31,10 @@ const LearningOutcome = require('./LearningOutcome')(sequelize, DataTypes);
 const StudentCompetencyProgress = require('./StudentCompetencyProgress')(sequelize, DataTypes);
 const HomeTaskAssignment = require('./HomeTaskAssignment')(sequelize, DataTypes);
 const HomeTask = require('./HomeTask')(sequelize, DataTypes);
+const Badge = require('./Badge')(sequelize, DataTypes);
+const StudentBadge = require('./StudentBadge')(sequelize, DataTypes);
+const Reward = require('./Reward')(sequelize, DataTypes);
+const StudentReward = require('./StudentReward')(sequelize, DataTypes);
 const SchoolCalendar = require('./SchoolCalendar')(sequelize, DataTypes);
 // Add to associations: School.hasMany(SchoolCalendar)
 
@@ -128,6 +132,18 @@ StudentParent.belongsTo(Student, { foreignKey: 'studentId' });
 
 Parent.hasMany(StudentParent, { foreignKey: 'parentId' });
 StudentParent.belongsTo(Parent, { foreignKey: 'parentId' });
+
+// Associations
+Badge.hasMany(StudentBadge, { foreignKey: 'badgeId' });
+StudentBadge.belongsTo(Badge, { foreignKey: 'badgeId' });
+Student.hasMany(StudentBadge, { foreignKey: 'studentId' });
+StudentBadge.belongsTo(Student, { foreignKey: 'studentId' });
+
+Reward.hasMany(StudentReward, { foreignKey: 'rewardId' });
+StudentReward.belongsTo(Reward, { foreignKey: 'rewardId' });
+Student.hasMany(StudentReward, { foreignKey: 'studentId' });
+StudentReward.belongsTo(Student, { foreignKey: 'studentId' });
+
 
 // AcademicRecord
 AcademicRecord.belongsTo(Student, { foreignKey: 'studentId' });
@@ -246,5 +262,11 @@ module.exports = {
     SchoolDPA,
     ParentChildConsent,
     UserConsent,
-    StudentCompetencyProgress
+    StudentCompetencyProgress,
+    SchoolCalendar,
+    Badge,
+    StudentBadge,
+    Reward,
+    StudentReward
+    
 };
