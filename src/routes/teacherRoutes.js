@@ -26,6 +26,8 @@ router.post('/marks', teacherController.enterMarks);
 router.post('/marks/bulk', teacherController.saveBulkMarks);
 router.post('/upload/marks', teacherController.uploadMarksCSV);
 
+router.post('/marks/publish', teacherController.publishMarks);
+
 // Attendance & Comments
 router.post('/attendance', teacherController.takeAttendance);
 router.post('/comment', teacherController.addComment);
