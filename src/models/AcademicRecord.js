@@ -37,6 +37,10 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       references: { model: 'Teachers', key: 'id' }
     },
+    gradingScale: {
+      type: DataTypes.JSONB,
+      defaultValue: null
+    },
     date: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     isPublished: { type: DataTypes.BOOLEAN, defaultValue: false }
   }, {
