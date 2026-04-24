@@ -1352,3 +1352,37 @@ exports.getAttendanceForDate = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// Add this method to teacherController.js
+exports.publishMarks = async (req, res) => {
+  try {
+    const { classId, subject, term, year } = req.body;
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
+    // Find all AcademicRecords for this class (by grade) that are draft and match subject/term/year
+    const classItem = await Class.findByPk(classId);
+    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
+
+    const students = await Student.findAll({ where: { grade: classItem.name } });
+    const studentIds = students.map(s => s.id);
+
+    await AcademicRecord.update(
+      { isPublished: true },
+      {
+        where: {
+          studentId: studentIds,
+          subject,
+          term,
+          year,
+          isPublished: false
+        }
+      }
+    );
+
+    res.json({ success: true, message: 'All marks published for this class/subject.' });
+  } catch (error) {
+    console.error('Publish marks error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
