@@ -12,6 +12,7 @@ exports.getDashboard = async (req, res) => {
 
     const records = await AcademicRecord.findAll({ where: { studentId: student.id }, order: [['date', 'DESC']], limit: 10 });
     const attendance = await Attendance.findAll({ where: { studentId: student.id }, order: [['date', 'DESC']], limit: 20 });
+    const classItem = await Class.findOne({ where: { name: student.grade, schoolCode: req.user.schoolCode } });
 
     const avg = records.length ? records.reduce((a,b) => a + b.score, 0) / records.length : 0;
 
@@ -22,7 +23,8 @@ exports.getDashboard = async (req, res) => {
         averageScore: avg,
         recentRecords: records,
         recentAttendance: attendance,
-        paymentStatus: student.paymentStatus
+        paymentStatus: student.paymentStatus,
+        classId: classItem?.id || null
       }
     });
   } catch (error) {
