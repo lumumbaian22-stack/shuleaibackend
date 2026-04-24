@@ -1081,7 +1081,8 @@ exports.saveBulkMarks = async (req, res) => {
             score: mark.score,
             teacherId: teacher.id,
             date,
-            isPublished: true
+            isPublished: true,
+            gradingScale: req.body.gradingScale || null
           }
         });
         if (!created) await record.update({ score: mark.score, teacherId: teacher.id });
