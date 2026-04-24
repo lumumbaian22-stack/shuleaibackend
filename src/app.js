@@ -33,6 +33,7 @@ const consentRoutes = require('./routes/consentRoutes'); // <-- ADDED
 const searchRoutes = require('./routes/searchRoutes');
 const calendarRoutes = require('./routes/calendarRoutes');
 const timetableRoutes = require('./routes/timetableRoutes');
+const homeworkRoutes = require('./routes/homeworkRoutes');
 
 const app = express();
 
@@ -115,6 +116,7 @@ app.use('/api/consent', consentRoutes);   // <-- ADDED
 app.use('/api/search', searchRoutes);
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/timetable', timetableRoutes);
+app.use('/api/homework', homeworkRoutes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {
