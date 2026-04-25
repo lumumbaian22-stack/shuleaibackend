@@ -392,7 +392,15 @@ const authController = {
     try {
       const { email, password, role } = req.body;
 
-      const user = await User.findOne({ where: { email, role } });
+      const user = await User.findOne({
+        where: {
+          [Op.or]: [
+            { email: emailOrPhone },
+            { phone: emailOrPhone }
+          ],
+          role
+         }
+       });
 
       if (!user || !(await user.comparePassword(password))) {
         return res.status(401).json({ success: false, message: 'Invalid credentials' });
