@@ -395,8 +395,8 @@ const authController = {
       const user = await User.findOne({
         where: {
           [Op.or]: [
-            { email: emailOrPhone },
-            { phone: emailOrPhone }
+            { email: email },
+            { phone: email }
           ],
           role
          }
