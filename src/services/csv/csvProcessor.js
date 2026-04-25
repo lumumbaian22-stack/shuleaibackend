@@ -108,6 +108,9 @@ class CSVProcessor {
                 if (parent) {
                   await parent.addStudent(student);
                 }
+                if (parentPhone) {
+                  await parentUser.update({ phone: parentPhone });
+                }
               }
             } catch (err) {
               errors.push({ row, error: err.message });
