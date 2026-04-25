@@ -168,7 +168,36 @@ exports.getAdminAnalytics = async (req, res) => {
             classAverages.push({ class: cls.name, average: Math.round(avg) });
         }
 
-        res.json({ success: true, data: { overview: { totalStudents, totalTeachers, totalClasses, attendanceRate, feeCollectionRate }, enrollmentTrend, gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) }, attendanceByGrade, feeStatus, classAverages } });
+        const allSubjectsSet = new Set();
+        const classSubjectMap = {}; // className -> { subject: avgScore }
+
+        for (const cls of classes) {
+          const classStudents = await Student.findAll({ where: { grade: cls.name } });
+          const studentIds = classStudents.map(s => s.id);
+          const records = await AcademicRecord.findAll({ where: { studentId: { [Op.in]: studentIds } } });
+          const subjectTotals = {};
+          records.forEach(r => {
+            if (!subjectTotals[r.subject]) subjectTotals[r.subject] = { total: 0, count: 0 };
+            subjectTotals[r.subject].total += r.score;
+            subjectTotals[r.subject].count++;
+          });
+          const subjectAvgs = {};
+          for (const [subj, val] of Object.entries(subjectTotals)) {
+            allSubjectsSet.add(subj);
+            subjectAvgs[subj] = Math.round(val.total / val.count);
+          }
+          classSubjectMap[cls.name] = subjectAvgs;
+        }
+
+        const subjectList = Array.from(allSubjectsSet).sort();
+        const classList = Object.keys(classSubjectMap).sort();
+        const matrix = classList.map(clsName => {
+          return subjectList.map(subj => classSubjectMap[clsName][subj] || null);
+        });
+
+        const subjectHeatmap = { classList, subjectList, matrix };
+
+        res.json({ success: true, data: { overview: { totalStudents, totalTeachers, totalClasses, attendanceRate, feeCollectionRate }, enrollmentTrend, gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) }, attendanceByGrade, feeStatus, classAverages,subjectHeatmap } });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: error.message });
