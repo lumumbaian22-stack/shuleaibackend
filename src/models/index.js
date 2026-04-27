@@ -36,6 +36,7 @@ const StudentBadge = require('./StudentBadge')(sequelize, DataTypes);
 const Reward = require('./Reward')(sequelize, DataTypes);
 const StudentReward = require('./StudentReward')(sequelize, DataTypes);
 const SchoolCalendar = require('./SchoolCalendar')(sequelize, DataTypes);
+const Timetable = require('./Timetable')(sequelize, DataTypes);
 // Add to associations: School.hasMany(SchoolCalendar)
 
 // --- Associations ---
@@ -267,6 +268,7 @@ module.exports = {
     Badge,
     StudentBadge,
     Reward,
-    StudentReward
+    StudentReward,
+    Timetable
     
 };
