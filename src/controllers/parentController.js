@@ -50,7 +50,7 @@ exports.getChildSummary = async (req, res) => {
     });
 
     const records = await AcademicRecord.findAll({ 
-      where: { studentId }, 
+      where: { studentId, isPublished: true }, 
       order: [['date', 'DESC']], 
       limit: 10 
     });
@@ -572,7 +572,7 @@ exports.getChildAnalytics = async (req, res) => {
     if (!student || !(await parent.hasStudent(student))) return res.status(403).json({ success: false });
 
     // Performance distribution
-    const records = await AcademicRecord.findAll({ where: { studentId } });
+    const records = await AcademicRecord.findAll({ where: { studentId, isPublished: true } });
     const gradeCount = { A:0, B:0, C:0, D:0, E:0 };
     records.forEach(r => {
       const grade = r.grade?.[0] || 'C';
