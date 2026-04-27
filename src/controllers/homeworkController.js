@@ -31,20 +31,6 @@ exports.createAssignment = async (req, res) => {
     }
 };
 
-exports.getStudentAssignments = async (req, res) => {
-    try {
-        const student = await Student.findOne({ where: { userId: req.user.id } });
-        const assignments = await HomeTaskAssignment.findAll({
-            where: { studentId: student.id },
-            include: [{ model: HomeTask }],
-            order: [['assignedAt', 'DESC']]
-        });
-        res.json({ success: true, data: assignments });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-
 exports.submitAssignment = async (req, res) => {
     try {
         const { assignmentId } = req.params;
@@ -57,37 +43,4 @@ exports.submitAssignment = async (req, res) => {
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
-};
-
-exports.getTeacherAssignments = async (req, res) => {
-  try {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) return res.status(403).json({ success: false, message: 'Not a teacher' });
-
-    // Find HomeTasks created by this teacher
-    const tasks = await HomeTask.findAll({
-      where: { createdBy: teacher.id },
-      include: [{ model: HomeTaskAssignment, as: 'assignments' }], // if you have associations
-      order: [['createdAt', 'DESC']]
-    });
-
-    // Format response to include class name etc.
-    const result = [];
-    for (const task of tasks) {
-      const classIds = task.assignments?.map(a => a.student?.grade) || [];
-      const uniqueClasses = [...new Set(classIds)];
-      result.push({
-        id: task.id,
-        title: task.title,
-        instructions: task.instructions,
-        subject: task.subject,
-        dueDate: task.dueDate,
-        className: uniqueClasses.join(', '),
-        assignedCount: task.assignments?.length || 0
-      });
-    }
-    res.json({ success: true, data: result });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
 };
