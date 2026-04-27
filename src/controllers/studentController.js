@@ -156,13 +156,14 @@ exports.getGroupMessages = async (req, res) => {
   try {
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(404).json({ success: false });
-    const classmates = await Student.findAll({ where: { grade: student.grade } });
-    const classmateIds = classmates.map(s => s.userId);
+    const allStudents = await Student.findAll({ include: [{ model: User, where: { schoolCode: req.user.schoolCode } }] });
+    const classmates = allStudents.filter(s => s.grade === student.grade && s.id !== student.id);
+    const classmateUserIds = classmates.map(s => s.User.id);
     const messages = await Message.findAll({
       where: {
         [Op.or]: [
-          { senderId: req.user.id, receiverId: { [Op.in]: classmateIds } },
-          { senderId: { [Op.in]: classmateIds }, receiverId: req.user.id }
+          { senderId: req.user.id, receiverId: { [Op.in]: classmateUserIds } },
+          { senderId: { [Op.in]: classmateUserIds }, receiverId: req.user.id }
         ]
       },
       include: [{ model: User, as: 'Sender', attributes: ['id', 'name'] }],
