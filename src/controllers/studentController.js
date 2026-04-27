@@ -10,7 +10,7 @@ exports.getDashboard = async (req, res) => {
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
 
-    const records = await AcademicRecord.findAll({ where: { studentId: student.id }, order: [['date', 'DESC']], limit: 10 });
+    const records = await AcademicRecord.findAll({ where: { studentId: student.id, isPublished: true }, order: [['date', 'DESC']], limit: 10 });
     const attendance = await Attendance.findAll({ where: { studentId: student.id }, order: [['date', 'DESC']], limit: 20 });
     const classItem = await Class.findOne({ where: { name: student.grade, schoolCode: req.user.schoolCode } });
 
@@ -53,7 +53,7 @@ exports.getMaterials = async (req, res) => {
 exports.getGrades = async (req, res) => {
   try {
     const student = await Student.findOne({ where: { userId: req.user.id } });
-    const records = await AcademicRecord.findAll({ where: { studentId: student.id }, order: [['date', 'DESC']] });
+    const records = await AcademicRecord.findAll({ where: { studentId: student.id, isPublished: true }, order: [['date', 'DESC']] });
     res.json({ success: true, data: records });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
