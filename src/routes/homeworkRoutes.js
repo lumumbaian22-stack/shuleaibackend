@@ -8,5 +8,8 @@ router.post('/assign', protect, authorize('teacher'), createAssignment);
 router.get('/student', protect, authorize('student'), getStudentAssignments);
 router.post('/submit/:assignmentId', protect, authorize('student'), submitAssignment);
 router.get('/teacher', protect, authorize('teacher'), homeworkCtrl.getTeacherAssignments);
+router.post('/assign', protect, authorize('teacher'), homeworkCtrl.createAssignment);
+router.get('/student', protect, authorize('student'), homeworkCtrl.getStudentAssignments);
+router.post('/submit/:assignmentId', protect, authorize('student'), homeworkCtrl.submitAssignment);
 
 module.exports = router;
