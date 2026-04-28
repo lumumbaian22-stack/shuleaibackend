@@ -119,3 +119,19 @@ exports.getForTeacher = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.getByWeek = async (req, res) => {
+  try {
+    const { weekStartDate } = req.query;
+    const timetable = await Timetable.findOne({
+      where: { schoolId: req.user.schoolCode, weekStartDate: weekStartDate || moment().startOf('isoWeek').format('YYYY-MM-DD') }
+    });
+    if (!timetable) {
+      return res.json({ success: true, data: null });   // no timetable yet
+    }
+    res.json({ success: true, data: timetable });
+  } catch (error) {
+    console.error('Get timetable error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
