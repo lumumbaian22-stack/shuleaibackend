@@ -4,7 +4,7 @@ module.exports = (sequelize, DataTypes) => {
     instructions: { type: DataTypes.TEXT, allowNull: false },
     type: { type: DataTypes.STRING(20), allowNull: false }, // Practice, Application, Project, Reflection
     subject: { type: DataTypes.STRING, allowNull: false },
-    competencyId: { type: DataTypes.INTEGER, allowNull: false },
+    competencyId: { type: DataTypes.INTEGER, allowNull: true },
     learningOutcomeId: { type: DataTypes.INTEGER, allowNull: true },
     gradeLevel: { type: DataTypes.STRING, allowNull: false },
     difficulty: { type: DataTypes.STRING(10), allowNull: false },
