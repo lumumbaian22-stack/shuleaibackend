@@ -4,9 +4,9 @@ exports.createAssignment = async (req, res) => {
     try {
         const { title, instructions, subject, dueDate, classId, studentIds } = req.body;
         const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-        if (!teacher) return res.status(403).json({ success: false, message: 'Not a teacher' });
+        if (!teacher) return res.status(403).json({ success: false });
 
-        // Create HomeTask – competencyId can be null now
+        // Create HomeTask without competencyId (or with null)
         const task = await HomeTask.create({
             title,
             instructions,
@@ -16,37 +16,32 @@ exports.createAssignment = async (req, res) => {
             difficulty: 'medium',
             estimatedMinutes: 30,
             points: 10,
-            competencyId: null,          // now allowed after ALTER COLUMN
-            dueDate: dueDate || null,    // now column exists
-            materials: '',
-            isActive: true
+            competencyId: null,   // <-- explicitly null
+            createdBy: teacher.id,
+            dueDate,
+            materials: ''
         });
 
         // Determine target students
         let targetStudentIds = studentIds || [];
-        if (classId && !targetStudentIds.length) {
+        if (classId && (!studentIds || studentIds.length === 0)) {
             const classItem = await Class.findByPk(classId);
-            if (!classItem) {
-                return res.status(404).json({ success: false, message: 'Class not found' });
+            if (classItem) {
+                const students = await Student.findAll({ where: { grade: classItem.name } });
+                targetStudentIds = students.map(s => s.id);
             }
-            const students = await Student.findAll({ where: { grade: classItem.name } });
-            targetStudentIds = students.map(s => s.id);
-        }
-
-        if (!targetStudentIds.length) {
-            return res.status(400).json({ success: false, message: 'No students to assign' });
         }
 
         // Create assignments
-        const assignments = targetStudentIds.map(studentId => ({
-            studentId,
+        const assignments = targetStudentIds.map(sid => ({
+            studentId: sid,
             taskId: task.id,
             assignedAt: new Date(),
             status: 'pending'
         }));
         await HomeTaskAssignment.bulkCreate(assignments);
 
-        res.json({ success: true, message: 'Homework assigned', taskId: task.id });
+        res.json({ success: true, message: 'Homework assigned' });
     } catch (error) {
         console.error('Create homework error:', error);
         res.status(500).json({ success: false, message: error.message });
