@@ -1,12 +1,13 @@
-// src/controllers/analyticsController.js
-const { Op, Sequelize } = require('sequelize');
+const { Op, Sequelize, sequelize } = require('sequelize');
 const {
     Student, AcademicRecord, Attendance, School, Teacher, User,
-    Class, Payment, Fee, Parent, sequelize
+    Class, Payment, Fee, Parent, Competency, LearningOutcome,
+    StudentCompetencyProgress, DutyRoster, HomeTaskAssignment, HomeTask,
+    ConductLog, ResourceViews, MoodCheckin, Message
 } = require('../models');
 const moment = require('moment');
 
-// Super Admin Analytics
+// ---------- SUPER ADMIN ANALYTICS ----------
 exports.getSuperAdminAnalytics = async (req, res) => {
     try {
         const totalSchools = await School.count();
@@ -22,18 +23,11 @@ exports.getSuperAdminAnalytics = async (req, res) => {
 
         const sixMonthsAgo = moment().subtract(6, 'months').startOf('month').toDate();
         const schoolsByMonth = await School.findAll({
-            attributes: [
-                [sequelize.fn('DATE_TRUNC', 'month', sequelize.col('createdAt')), 'month'],
-                [sequelize.fn('COUNT', '*'), 'count']
-            ],
+            attributes: [[sequelize.fn('DATE_TRUNC', 'month', sequelize.col('createdAt')), 'month'], [sequelize.fn('COUNT', '*'), 'count']],
             where: { createdAt: { [Op.gte]: sixMonthsAgo } },
-            group: ['month'],
-            order: [['month', 'ASC']],
-            raw: true
+            group: ['month'], order: [['month', 'ASC']], raw: true
         });
-
-        const growthLabels = [];
-        const growthValues = [];
+        const growthLabels = [], growthValues = [];
         for (let i = 5; i >= 0; i--) {
             const month = moment().subtract(i, 'months').format('MMM');
             growthLabels.push(month);
@@ -42,18 +36,11 @@ exports.getSuperAdminAnalytics = async (req, res) => {
         }
 
         const revenueByMonth = await Payment.findAll({
-            attributes: [
-                [sequelize.fn('DATE_TRUNC', 'month', sequelize.col('createdAt')), 'month'],
-                [sequelize.fn('SUM', sequelize.col('amount')), 'total']
-            ],
+            attributes: [[sequelize.fn('DATE_TRUNC', 'month', sequelize.col('createdAt')), 'month'], [sequelize.fn('SUM', sequelize.col('amount')), 'total']],
             where: { status: 'completed', createdAt: { [Op.gte]: sixMonthsAgo } },
-            group: ['month'],
-            order: [['month', 'ASC']],
-            raw: true
+            group: ['month'], order: [['month', 'ASC']], raw: true
         });
-
-        const revenueLabels = [];
-        const revenueValues = [];
+        const revenueLabels = [], revenueValues = [];
         for (let i = 5; i >= 0; i--) {
             const month = moment().subtract(i, 'months').format('MMM');
             revenueLabels.push(month);
@@ -70,46 +57,28 @@ exports.getSuperAdminAnalytics = async (req, res) => {
 
         const curriculumCounts = await School.findAll({
             attributes: ['system', [sequelize.fn('COUNT', '*'), 'count']],
-            group: ['system'],
-            raw: true
+            group: ['system'], raw: true
         });
         const curriculumMap = { cbc: 0, '844': 0, british: 0, american: 0 };
         curriculumCounts.forEach(c => { curriculumMap[c.system] = parseInt(c.count); });
 
-        const topSchools = await School.findAll({
-            attributes: ['id', 'name', 'schoolId'],
-            limit: 5
-        });
-        for (let s of topSchools) {
-            s.studentCount = await User.count({ where: { schoolCode: s.schoolId, role: 'student' } });
-        }
-
-        res.json({ success: true, data: { overview: { totalSchools, activeSchools, pendingSchools, totalStudents, totalTeachers, revenueMTD }, growth: { labels: growthLabels, values: growthValues }, revenueTrend: { labels: revenueLabels, values: revenueValues }, distributionByLevel: levelCounts, distributionByCurriculum: curriculumMap, topSchools } });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: error.message });
-    }
+        res.json({ success: true, data: { overview: { totalSchools, activeSchools, pendingSchools, totalStudents, totalTeachers, revenueMTD }, growth: { labels: growthLabels, values: growthValues }, revenueTrend: { labels: revenueLabels, values: revenueValues }, distributionByLevel: levelCounts, distributionByCurriculum: curriculumMap } });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// Admin Analytics
+// ---------- ADMIN ANALYTICS (extended) ----------
 exports.getAdminAnalytics = async (req, res) => {
     try {
         const schoolCode = req.user.schoolCode;
         const school = await School.findOne({ where: { schoolId: schoolCode } });
         if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
-        const totalStudents = await Student.count({
-            include: [{ model: User, where: { schoolCode } }]
-        });
-        const totalTeachers = await Teacher.count({
-            include: [{ model: User, where: { schoolCode, role: 'teacher' } }]
-        });
+        const totalStudents = await Student.count({ include: [{ model: User, where: { schoolCode } }] });
+        const totalTeachers = await Teacher.count({ include: [{ model: User, where: { schoolCode, role: 'teacher' } }] });
         const totalClasses = await Class.count({ where: { schoolCode, isActive: true } });
 
         const thirtyDaysAgo = moment().subtract(30, 'days').format('YYYY-MM-DD');
-        const attendanceRecords = await Attendance.findAll({
-            where: { schoolCode, date: { [Op.gte]: thirtyDaysAgo } }
-        });
+        const attendanceRecords = await Attendance.findAll({ where: { schoolCode, date: { [Op.gte]: thirtyDaysAgo } } });
         const presentCount = attendanceRecords.filter(a => a.status === 'present').length;
         const attendanceRate = attendanceRecords.length ? Math.round((presentCount / attendanceRecords.length) * 100) : 0;
 
@@ -118,6 +87,7 @@ exports.getAdminAnalytics = async (req, res) => {
         const paidFees = fees.reduce((sum, f) => sum + f.paidAmount, 0);
         const feeCollectionRate = totalFees ? Math.round((paidFees / totalFees) * 100) : 0;
 
+        // Enrollment trend
         const enrollmentTrend = { labels: [], values: [] };
         const currentYear = new Date().getFullYear();
         const terms = ['Term 1', 'Term 2', 'Term 3'];
@@ -129,6 +99,7 @@ exports.getAdminAnalytics = async (req, res) => {
             }
         }
 
+        // Grade distribution
         const records = await AcademicRecord.findAll({ where: { schoolCode } });
         const gradeCounts = { A: 0, B: 0, C: 0, D: 0, E: 0 };
         records.forEach(r => {
@@ -136,6 +107,7 @@ exports.getAdminAnalytics = async (req, res) => {
             if (gradeCounts.hasOwnProperty(g)) gradeCounts[g]++;
         });
 
+        // Attendance by grade
         const students = await Student.findAll({ include: [{ model: User, where: { schoolCode } }] });
         const gradeAttendance = {};
         for (const student of students) {
@@ -151,6 +123,7 @@ exports.getAdminAnalytics = async (req, res) => {
             values: Object.values(gradeAttendance).map(g => Math.round(g.total / g.count))
         };
 
+        // Fee status
         const feeStatus = { paid: 0, partial: 0, unpaid: 0 };
         fees.forEach(f => {
             if (f.status === 'paid') feeStatus.paid++;
@@ -158,53 +131,53 @@ exports.getAdminAnalytics = async (req, res) => {
             else feeStatus.unpaid++;
         });
 
-        const classes = await Class.findAll({ where: { schoolCode, isActive: true } });
-        const classAverages = [];
-        for (const cls of classes) {
-            const classStudents = await Student.findAll({ where: { grade: cls.name } });
-            const studentIds = classStudents.map(s => s.id);
-            const classRecords = await AcademicRecord.findAll({ where: { studentId: { [Op.in]: studentIds } } });
-            const avg = classRecords.length ? classRecords.reduce((s, r) => s + r.score, 0) / classRecords.length : 0;
-            classAverages.push({ class: cls.name, average: Math.round(avg) });
-        }
-
-        const allSubjectsSet = new Set();
-        const classSubjectMap = {}; // className -> { subject: avgScore }
-
-        for (const cls of classes) {
-          const classStudents = await Student.findAll({ where: { grade: cls.name } });
-          const studentIds = classStudents.map(s => s.id);
-          const records = await AcademicRecord.findAll({ where: { studentId: { [Op.in]: studentIds } } });
-          const subjectTotals = {};
-          records.forEach(r => {
-            if (!subjectTotals[r.subject]) subjectTotals[r.subject] = { total: 0, count: 0 };
-            subjectTotals[r.subject].total += r.score;
-            subjectTotals[r.subject].count++;
-          });
-          const subjectAvgs = {};
-          for (const [subj, val] of Object.entries(subjectTotals)) {
-            allSubjectsSet.add(subj);
-            subjectAvgs[subj] = Math.round(val.total / val.count);
-          }
-          classSubjectMap[cls.name] = subjectAvgs;
-        }
-
-        const subjectList = Array.from(allSubjectsSet).sort();
-        const classList = Object.keys(classSubjectMap).sort();
-        const matrix = classList.map(clsName => {
-          return subjectList.map(subj => classSubjectMap[clsName][subj] || null);
+        // Teacher workload (duty)
+        const teacherWorkload = await Teacher.findAll({
+            include: [{ model: User, where: { schoolCode, role: 'teacher' }, attributes: ['name'] }]
         });
+        const workloadData = teacherWorkload.map(t => ({
+            name: t.User.name,
+            monthlyDutyCount: t.statistics?.monthlyDutyCount || 0,
+            reliabilityScore: t.statistics?.reliabilityScore || 100
+        }));
 
-        const subjectHeatmap = { classList, subjectList, matrix };
+        // Parental engagement: count logins of parents
+        const parentLogins = await User.findAll({
+            where: { schoolCode, role: 'parent' },
+            attributes: ['loginCount', 'name']
+        });
+        const engagementData = parentLogins.map(p => ({ name: p.name, logins: p.loginCount || 0 }));
 
-        res.json({ success: true, data: { overview: { totalStudents, totalTeachers, totalClasses, attendanceRate, feeCollectionRate }, enrollmentTrend, gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) }, attendanceByGrade, feeStatus, classAverages,subjectHeatmap } });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: error.message });
-    }
+        // Tardiness trends: count late by day of week
+        const lateRecords = await Attendance.findAll({
+            where: { schoolCode, status: 'late', date: { [Op.gte]: thirtyDaysAgo } }
+        });
+        const dayCounts = { Monday: 0, Tuesday: 0, Wednesday: 0, Thursday: 0, Friday: 0 };
+        lateRecords.forEach(a => {
+            const day = moment(a.date).format('dddd');
+            if (dayCounts.hasOwnProperty(day)) dayCounts[day]++;
+        });
+        const tardinessTrend = { labels: Object.keys(dayCounts), values: Object.values(dayCounts) };
+
+        // Submit pattern: count homework submitted on time vs late
+        const assignments = await HomeTaskAssignment.findAll({
+            include: [{ model: HomeTask, attributes: ['dueDate'] }],
+            where: { status: 'submitted' }
+        });
+        let onTime = 0, late = 0;
+        assignments.forEach(a => {
+            if (a.completedAt && a.HomeTask?.dueDate) {
+                if (new Date(a.completedAt) <= new Date(a.HomeTask.dueDate)) onTime++;
+                else late++;
+            }
+        });
+        const submitPattern = { onTime, late };
+
+        res.json({ success: true, data: { overview: { totalStudents, totalTeachers, totalClasses, attendanceRate, feeCollectionRate }, enrollmentTrend, gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) }, attendanceByGrade, feeStatus, teacherWorkload: workloadData, parentEngagement: engagementData, tardinessTrend, submitPattern } });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// Teacher Analytics
+// ---------- TEACHER ANALYTICS (extended) ----------
 exports.getTeacherAnalytics = async (req, res) => {
     try {
         const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
@@ -220,7 +193,6 @@ exports.getTeacherAnalytics = async (req, res) => {
             }
         });
         classNames = [...new Set(classNames)];
-
         const students = await Student.findAll({
             where: { grade: { [Op.in]: classNames } },
             include: [{ model: User, attributes: ['name'] }]
@@ -231,21 +203,16 @@ exports.getTeacherAnalytics = async (req, res) => {
         const records = await AcademicRecord.findAll({ where: { studentId: { [Op.in]: studentIds } } });
         const classAverage = records.length ? Math.round(records.reduce((s, r) => s + r.score, 0) / records.length) : 0;
 
-        const today = moment().format('YYYY-MM-DD');
-        const todayAttendance = await Attendance.findAll({ where: { studentId: { [Op.in]: studentIds }, date: today } });
-        const presentToday = todayAttendance.filter(a => a.status === 'present').length;
-        const attendanceToday = `${presentToday}/${studentCount}`;
-
+        // Subject averages
         const subjectMap = {};
         records.forEach(r => {
             if (!subjectMap[r.subject]) subjectMap[r.subject] = { total: 0, count: 0 };
             subjectMap[r.subject].total += r.score;
             subjectMap[r.subject].count++;
         });
-        const subjectAverages = Object.entries(subjectMap).map(([subject, data]) => ({
-            subject, average: Math.round(data.total / data.count)
-        }));
+        const subjectAverages = Object.entries(subjectMap).map(([sub, d]) => ({ subject: sub, average: Math.round(d.total / d.count) }));
 
+        // Attendance trend (last 7 days)
         const last7Days = [];
         for (let i = 6; i >= 0; i--) last7Days.push(moment().subtract(i, 'days').format('YYYY-MM-DD'));
         const attendanceTrend = { labels: [], values: [] };
@@ -257,26 +224,70 @@ exports.getTeacherAnalytics = async (req, res) => {
             attendanceTrend.values.push(rate);
         }
 
+        // Grade distribution
         const gradeCounts = { A: 0, B: 0, C: 0, D: 0, E: 0 };
         records.forEach(r => {
             const g = r.grade?.[0]?.toUpperCase() || 'E';
             if (gradeCounts.hasOwnProperty(g)) gradeCounts[g]++;
         });
 
+        // Student performance list
         const studentPerformance = students.map(s => {
             const studentRecords = records.filter(r => r.studentId === s.id);
             const avg = studentRecords.length ? Math.round(studentRecords.reduce((sum, r) => sum + r.score, 0) / studentRecords.length) : 0;
             return { name: s.User.name, average: avg };
-        }).sort((a, b) => b.average - a.average).slice(0, 10);
+        }).sort((a, b) => b.average - a.average);
 
-        res.json({ success: true, data: { overview: { studentCount, classAverage, attendanceToday, pendingTasks: 0 }, subjectAverages, attendanceTrend, gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) }, studentPerformance } });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: error.message });
-    }
+        // Risk indicators: students whose latest 3 scores average dropped by >15% from previous 3
+        const riskStudents = [];
+        for (const student of students) {
+            const studentRecs = records.filter(r => r.studentId === student.id).sort((a, b) => new Date(b.date) - new Date(a.date));
+            if (studentRecs.length >= 6) {
+                const recent3 = studentRecs.slice(0, 3);
+                const previous3 = studentRecs.slice(3, 6);
+                const recentAvg = recent3.reduce((s, r) => s + r.score, 0) / 3;
+                const prevAvg = previous3.reduce((s, r) => s + r.score, 0) / 3;
+                if (prevAvg > 0 && (prevAvg - recentAvg) / prevAvg > 0.15) {
+                    riskStudents.push({ name: student.User.name, recentAvg: Math.round(recentAvg), prevAvg: Math.round(prevAvg), drop: Math.round((prevAvg - recentAvg) / prevAvg * 100) });
+                }
+            }
+        }
+
+        // Submission patterns: on-time vs late homework for this class
+        const classAssignments = await HomeTaskAssignment.findAll({
+            where: { studentId: { [Op.in]: studentIds }, status: 'submitted' },
+            include: [{ model: HomeTask, attributes: ['dueDate'] }]
+        });
+        let onTime = 0, lateSub = 0;
+        classAssignments.forEach(a => {
+            if (a.completedAt && a.HomeTask?.dueDate) {
+                if (new Date(a.completedAt) <= new Date(a.HomeTask.dueDate)) onTime++;
+                else lateSub++;
+            }
+        });
+        const submitPattern = { onTime, late: lateSub };
+
+        // Conduct summary (positive/negative counts)
+        const conductCounts = await ConductLog.findAll({
+            where: { studentId: { [Op.in]: studentIds } },
+            attributes: ['type', [sequelize.fn('COUNT', '*'), 'count']],
+            group: ['type'], raw: true
+        });
+        const conductData = { positive: 0, negative: 0 };
+        conductCounts.forEach(c => { conductData[c.type] = parseInt(c.count); });
+
+        // Parent engagement: average logins of parents of these students
+        const parentUsers = await User.findAll({
+            where: { schoolCode: req.user.schoolCode, role: 'parent' },
+            attributes: ['loginCount']
+        });
+        const avgParentLogins = parentUsers.length ? Math.round(parentUsers.reduce((s, u) => s + (u.loginCount || 0), 0) / parentUsers.length) : 0;
+
+        res.json({ success: true, data: { overview: { studentCount, classAverage, attendanceToday: `${await Attendance.count({ where: { studentId: { [Op.in]: studentIds }, date: moment().format('YYYY-MM-DD'), status: 'present' } })}/${studentCount}` }, subjectAverages, attendanceTrend, gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) }, studentPerformance, riskStudents, submitPattern, conductData, parentEngagement: avgParentLogins } });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// Parent Analytics
+// ---------- PARENT ANALYTICS (extended) ----------
 exports.getParentAnalytics = async (req, res) => {
     try {
         const { childId } = req.query;
@@ -293,29 +304,52 @@ exports.getParentAnalytics = async (req, res) => {
         const fee = await Fee.findOne({ where: { studentId: childId, status: { [Op.ne]: 'paid' } } });
         const feeBalance = fee?.balance || 0;
 
+        // Grade trend
         const recentRecords = records.slice(0, 5).reverse();
         const gradeTrend = { labels: recentRecords.map(r => r.assessmentName?.substring(0, 10) || 'Test'), values: recentRecords.map(r => r.score) };
 
+        // Subject performance
         const subjectMap = {};
         records.forEach(r => {
             if (!subjectMap[r.subject]) subjectMap[r.subject] = { total: 0, count: 0 };
             subjectMap[r.subject].total += r.score;
             subjectMap[r.subject].count++;
         });
-        const subjectPerformance = Object.entries(subjectMap).map(([subject, data]) => ({
-            subject,
-            score: Math.round(data.total / data.count),
-            grade: getGradeFromScoreLocal(Math.round(data.total / data.count))
+        const subjectPerformance = Object.entries(subjectMap).map(([sub, d]) => ({
+            subject: sub, score: Math.round(d.total / d.count), grade: getGradeFromScore(Math.round(d.total / d.count))
         }));
 
-        res.json({ success: true, data: { student: { name: student.User.name, grade: student.grade, elimuid: student.elimuid, photo: student.User.profileImage }, overallAverage, attendanceRate, feeBalance, gradeTrend, subjectPerformance } });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: error.message });
-    }
+        // Growth tracking: compare current term average vs previous term
+        const termAverages = student.termAverages || [];
+        const currentTermAvg = overallAverage;
+        const previousTermAvg = termAverages.length > 0 ? termAverages[termAverages.length - 1].average : null;
+        const growth = previousTermAvg ? currentTermAvg - previousTermAvg : null;
+
+        // Attendance correlation: show attendance rate vs grade
+        const attendanceCorrelation = { attendanceRate, average: overallAverage };
+
+        // Parental engagement: own login count
+        const parentLoginCount = req.user.loginCount || 0;
+
+        // Competency levels (if CBC)
+        let competencyLevels = [];
+        if (req.user.school?.system === 'cbc') {
+            const progress = await StudentCompetencyProgress.findAll({
+                where: { studentId: childId },
+                include: [{ model: LearningOutcome, include: [Competency] }]
+            });
+            competencyLevels = progress.map(p => ({ competency: p.LearningOutcome.Competency.name, level: p.level }));
+        }
+
+        // Mood check-ins
+        const moods = await MoodCheckin.findAll({ where: { userId: student.userId }, order: [['createdAt', 'DESC']], limit: 7 });
+        const moodData = moods.map(m => ({ mood: m.mood, date: m.createdAt }));
+
+        res.json({ success: true, data: { student: { name: student.User.name, grade: student.grade, elimuid: student.elimuid, photo: student.User.profileImage }, overallAverage, attendanceRate, feeBalance, gradeTrend, subjectPerformance, growth, attendanceCorrelation, parentLoginCount, competencyLevels, moodData } });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// Student Analytics
+// ---------- STUDENT ANALYTICS (extended) ----------
 exports.getStudentAnalytics = async (req, res) => {
     try {
         const student = await Student.findOne({ where: { userId: req.user.id }, include: [{ model: User }] });
@@ -328,29 +362,54 @@ exports.getStudentAnalytics = async (req, res) => {
         const attendanceRate = attendance.length ? Math.round((present / attendance.length) * 100) : 0;
         const points = student.points || 0;
 
+        // Grade trend
         const recentRecords = records.slice(0, 5).reverse();
         const gradeTrend = { labels: recentRecords.map(r => r.assessmentName?.substring(0, 10) || 'Test'), values: recentRecords.map(r => r.score) };
 
+        // Subject performance
         const subjectMap = {};
         records.forEach(r => {
             if (!subjectMap[r.subject]) subjectMap[r.subject] = { total: 0, count: 0 };
             subjectMap[r.subject].total += r.score;
             subjectMap[r.subject].count++;
         });
-        const subjectPerformance = Object.entries(subjectMap).map(([subject, data]) => ({
-            subject, score: Math.round(data.total / data.count)
-        }));
+        const subjectPerformance = Object.entries(subjectMap).map(([sub, d]) => ({ subject: sub, score: Math.round(d.total / d.count) }));
 
-        const leaderboardRank = 5; // placeholder
+        // Growth: personal best records
+        const personalBest = Math.max(...records.map(r => r.score), 0);
 
-        res.json({ success: true, data: { student: { name: student.User.name, elimuid: student.elimuid, grade: student.grade, photo: student.User.profileImage }, overallAverage, attendanceRate, points, gradeTrend, subjectPerformance, leaderboardRank } });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: error.message });
-    }
+        // Peer comparison (percentile rank within class)
+        const classmates = await Student.findAll({ where: { grade: student.grade }, include: [{ model: AcademicRecord }] });
+        let rank = 1, total = classmates.length;
+        for (const other of classmates) {
+            const otherAvg = other.AcademicRecords.length ? other.AcademicRecords.reduce((s, r) => s + r.score, 0) / other.AcademicRecords.length : 0;
+            if (otherAvg > overallAverage) rank++;
+        }
+        const percentile = total > 1 ? Math.round((rank / total) * 100) : 100;
+
+        // Submission patterns
+        const assignments = await HomeTaskAssignment.findAll({ where: { studentId: student.id, status: 'submitted' }, include: [{ model: HomeTask, attributes: ['dueDate'] }] });
+        let onTime = 0, lateSub = 0, totalSubs = assignments.length;
+        assignments.forEach(a => {
+            if (a.completedAt && a.HomeTask?.dueDate) {
+                if (new Date(a.completedAt) <= new Date(a.HomeTask.dueDate)) onTime++;
+                else lateSub++;
+            }
+        });
+        const streak = onTime; // simplified streak
+
+        // Mood tracker
+        const moods = await MoodCheckin.findAll({ where: { userId: req.user.id }, order: [['createdAt', 'DESC']], limit: 10 });
+        const moodData = moods.map(m => ({ mood: m.mood, date: m.createdAt }));
+
+        // Leaderboard rank (class)
+        const leaderboardRank = rank; // within class
+
+        res.json({ success: true, data: { student: { name: student.User.name, elimuid: student.elimuid, grade: student.grade, photo: student.User.profileImage }, overallAverage, attendanceRate, points, gradeTrend, subjectPerformance, personalBest, percentile, streak, onTime, lateSub, moodData, leaderboardRank } });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-function getGradeFromScoreLocal(score) {
+function getGradeFromScore(score) {
     if (score >= 80) return 'A';
     if (score >= 70) return 'B';
     if (score >= 60) return 'C';
