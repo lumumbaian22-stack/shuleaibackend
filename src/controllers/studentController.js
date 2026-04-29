@@ -1,6 +1,121 @@
 // src/controllers/studentController.js
-const { Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent } = require('../models');
+const { Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School } = require('../models');
 const { Op } = require('sequelize');
+
+// Helper: get grade from score using the school's curriculum (simplified)
+function getGradeFromScore(score, curriculum, level) {
+    // If custom grading scale is provided, this would use it. Fallback to default.
+    if (!curriculum) return 'N/A';
+    const CURRICULUMS = {
+        'cbc': {
+            primary: [
+                { range: '80-100', grade: 'EE' },
+                { range: '60-79', grade: 'ME' },
+                { range: '40-59', grade: 'AE' },
+                { range: '0-39', grade: 'BE' }
+            ],
+            secondary: [
+                { range: '80-100', grade: 'A' },
+                { range: '75-79', grade: 'A-' },
+                { range: '70-74', grade: 'B+' },
+                { range: '65-69', grade: 'B' },
+                { range: '60-64', grade: 'B-' },
+                { range: '55-59', grade: 'C+' },
+                { range: '50-54', grade: 'C' },
+                { range: '45-49', grade: 'C-' },
+                { range: '40-44', grade: 'D+' },
+                { range: '35-39', grade: 'D' },
+                { range: '30-34', grade: 'D-' },
+                { range: '0-29', grade: 'E' }
+            ]
+        },
+        '844': {
+            primary: [
+                { range: '80-100', grade: 'A' },
+                { range: '75-79', grade: 'A-' },
+                { range: '70-74', grade: 'B+' },
+                { range: '65-69', grade: 'B' },
+                { range: '60-64', grade: 'B-' },
+                { range: '55-59', grade: 'C+' },
+                { range: '50-54', grade: 'C' },
+                { range: '45-49', grade: 'C-' },
+                { range: '40-44', grade: 'D+' },
+                { range: '35-39', grade: 'D' },
+                { range: '30-34', grade: 'D-' },
+                { range: '0-29', grade: 'E' }
+            ],
+            secondary: [
+                { range: '80-100', grade: 'A' },
+                { range: '75-79', grade: 'A-' },
+                { range: '70-74', grade: 'B+' },
+                { range: '65-69', grade: 'B' },
+                { range: '60-64', grade: 'B-' },
+                { range: '55-59', grade: 'C+' },
+                { range: '50-54', grade: 'C' },
+                { range: '45-49', grade: 'C-' },
+                { range: '40-44', grade: 'D+' },
+                { range: '35-39', grade: 'D' },
+                { range: '30-34', grade: 'D-' },
+                { range: '0-29', grade: 'E' }
+            ]
+        },
+        'british': {
+            primary: [
+                { range: '90-100', grade: 'A*' },
+                { range: '80-89', grade: 'A' },
+                { range: '70-79', grade: 'B' },
+                { range: '60-69', grade: 'C' },
+                { range: '50-59', grade: 'D' },
+                { range: '40-49', grade: 'E' },
+                { range: '30-39', grade: 'F' },
+                { range: '20-29', grade: 'G' },
+                { range: '0-19', grade: 'U' }
+            ],
+            secondary: [
+                { range: '90-100', grade: 'A*' },
+                { range: '80-89', grade: 'A' },
+                { range: '70-79', grade: 'B' },
+                { range: '60-69', grade: 'C' },
+                { range: '50-59', grade: 'D' },
+                { range: '40-49', grade: 'E' },
+                { range: '30-39', grade: 'F' },
+                { range: '20-29', grade: 'G' },
+                { range: '0-19', grade: 'U' }
+            ]
+        },
+        'american': {
+            primary: [
+                { range: '90-100', grade: 'A' },
+                { range: '80-89', grade: 'B' },
+                { range: '70-79', grade: 'C' },
+                { range: '60-69', grade: 'D' },
+                { range: '0-59', grade: 'F' }
+            ],
+            secondary: [
+                { range: '90-100', grade: 'A' },
+                { range: '80-89', grade: 'B' },
+                { range: '70-79', grade: 'C' },
+                { range: '60-69', grade: 'D' },
+                { range: '0-59', grade: 'F' }
+            ]
+        }
+    };
+    const curriculumData = CURRICULUMS[curriculum];
+    if (!curriculumData) return 'N/A';
+    let normalizedLevel = level;
+    if (level === 'both') normalizedLevel = 'secondary';
+    const scale = curriculumData[normalizedLevel] || curriculumData.primary;
+    if (!scale) return 'N/A';
+    const scoreNum = Number(score);
+    if (isNaN(scoreNum)) return 'N/A';
+    for (const entry of scale) {
+        const [min, max] = entry.range.split('-').map(Number);
+        if (scoreNum >= min && scoreNum <= max) {
+            return entry.grade;
+        }
+    }
+    return 'N/A';
+}
 
 // @desc    Get student's own dashboard data
 // @route   GET /api/student/dashboard
@@ -10,24 +125,49 @@ exports.getDashboard = async (req, res) => {
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
 
-    const records = await AcademicRecord.findAll({ where: { studentId: student.id, isPublished: true }, order: [['date', 'DESC']], limit: 10 });
-    const attendance = await Attendance.findAll({ where: { studentId: student.id }, order: [['date', 'DESC']], limit: 20 });
-    const classItem = await Class.findOne({ where: { name: student.grade, schoolCode: req.user.schoolCode } });
+    // Only show published marks
+    const records = await AcademicRecord.findAll({
+        where: { studentId: student.id, isPublished: true },
+        order: [['date', 'DESC']],
+        limit: 10
+    });
+    const attendance = await Attendance.findAll({
+        where: { studentId: student.id },
+        order: [['date', 'DESC']],
+        limit: 20
+    });
 
-    const avg = records.length ? records.reduce((a,b) => a + b.score, 0) / records.length : 0;
+    const classItem = await Class.findOne({
+        where: { name: student.grade, schoolCode: req.user.schoolCode }
+    });
+
+    // Fetch school settings for curriculum / grading
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    const curriculum = school ? school.system : 'cbc';
+    const schoolLevel = school?.settings?.schoolLevel || 'secondary';
+
+    const avg = records.length ? (records.reduce((a, b) => a + b.score, 0) / records.length).toFixed(1) : 0;
 
     res.json({
       success: true,
       data: {
         student: req.user.getPublicProfile(),
-        averageScore: avg,
-        recentRecords: records,
+        averageScore: parseFloat(avg),
+        recentRecords: records.map(r => ({
+            ...r.toJSON(),
+            grade: getGradeFromScore(r.score, curriculum, schoolLevel)
+        })),
         recentAttendance: attendance,
         paymentStatus: student.paymentStatus,
-        classId: classItem?.id || null
+        classId: classItem?.id || null,
+        school: {
+            curriculum,
+            schoolLevel
+        }
       }
     });
   } catch (error) {
+    console.error('Student dashboard error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -47,14 +187,29 @@ exports.getMaterials = async (req, res) => {
   }
 };
 
-// @desc    Get own grades
+// @desc    Get own grades (only published)
 // @route   GET /api/student/grades
 // @access  Private/Student
 exports.getGrades = async (req, res) => {
   try {
     const student = await Student.findOne({ where: { userId: req.user.id } });
-    const records = await AcademicRecord.findAll({ where: { studentId: student.id, isPublished: true }, order: [['date', 'DESC']] });
-    res.json({ success: true, data: records });
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    const curriculum = school ? school.system : 'cbc';
+    const schoolLevel = school?.settings?.schoolLevel || 'secondary';
+
+    const records = await AcademicRecord.findAll({
+        where: { studentId: student.id, isPublished: true },
+        order: [['date', 'DESC']]
+    });
+
+    const enriched = records.map(r => ({
+        ...r.toJSON(),
+        grade: getGradeFromScore(r.score, curriculum, schoolLevel)
+    }));
+
+    res.json({ success: true, data: enriched });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -156,7 +311,9 @@ exports.getGroupMessages = async (req, res) => {
   try {
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(404).json({ success: false });
-    const allStudents = await Student.findAll({ include: [{ model: User, where: { schoolCode: req.user.schoolCode } }] });
+    const allStudents = await Student.findAll({
+        include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
+    });
     const classmates = allStudents.filter(s => s.grade === student.grade && s.id !== student.id);
     const classmateUserIds = classmates.map(s => s.User.id);
     const messages = await Message.findAll({
@@ -177,15 +334,6 @@ exports.getGroupMessages = async (req, res) => {
 
 // ============ NEW: Comprehensive Student Details ============
 
-// Helper: get grade from score (simplified)
-function getGradeFromScoreLocal(score) {
-    if (score >= 80) return 'A';
-    if (score >= 70) return 'B';
-    if (score >= 60) return 'C';
-    if (score >= 50) return 'D';
-    return 'E';
-}
-
 // @desc    Get comprehensive student details (for unified modal)
 // @route   GET /api/students/:studentId/details
 // @access  Private (with ownership check)
@@ -202,7 +350,7 @@ exports.getStudentFullDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Student not found' });
         }
 
-        // Authorization: only allow if user is admin, teacher of the class, parent of student, or the student themselves
+        // Authorization
         const user = req.user;
         let authorized = false;
         if (['admin', 'super_admin'].includes(user.role)) {
@@ -211,8 +359,8 @@ exports.getStudentFullDetails = async (req, res) => {
             const teacher = await Teacher.findOne({ where: { userId: user.id } });
             if (teacher) {
                 const classes = await Class.findAll({ where: { schoolCode: user.schoolCode } });
-                const teachesClass = classes.some(cls => 
-                    cls.teacherId === teacher.id || 
+                const teachesClass = classes.some(cls =>
+                    cls.teacherId === teacher.id ||
                     (cls.subjectTeachers && cls.subjectTeachers.some(st => st.teacherId === teacher.id))
                 );
                 if (teachesClass && classes.some(cls => cls.name === student.grade)) {
@@ -234,7 +382,12 @@ exports.getStudentFullDetails = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
 
-        // Fetch parents
+        // School curriculum
+        const school = await School.findOne({ where: { schoolId: student.User?.schoolCode || user.schoolCode } });
+        const curriculum = school ? school.system : 'cbc';
+        const schoolLevel = school?.settings?.schoolLevel || 'secondary';
+
+        // Parents
         const parents = await student.getParents({
             include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
         });
@@ -246,17 +399,22 @@ exports.getStudentFullDetails = async (req, res) => {
             relationship: p.relationship
         }));
 
-        // Fetch class teacher
+        // Class teacher
         const classTeacher = await Teacher.findOne({
             where: { classTeacher: student.grade },
             include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
         });
 
-        // Academic summary
-        const records = await AcademicRecord.findAll({ where: { studentId }, order: [['date', 'DESC']] });
-        const overallAverage = records.length ? Math.round(records.reduce((s, r) => s + r.score, 0) / records.length) : 0;
+        // Academic records (only published)
+        const records = await AcademicRecord.findAll({
+            where: { studentId, isPublished: true },
+            order: [['date', 'DESC']]
+        });
+        const overallAverage = records.length
+            ? Math.round(records.reduce((s, r) => s + r.score, 0) / records.length)
+            : 0;
 
-        // Subject averages
+        // Subject averages with curriculum grading
         const subjectMap = {};
         records.forEach(r => {
             if (!subjectMap[r.subject]) subjectMap[r.subject] = { total: 0, count: 0 };
@@ -266,10 +424,10 @@ exports.getStudentFullDetails = async (req, res) => {
         const subjects = Object.entries(subjectMap).map(([subject, data]) => ({
             subject,
             average: Math.round(data.total / data.count),
-            grade: getGradeFromScoreLocal(Math.round(data.total / data.count))
+            grade: getGradeFromScore(Math.round(data.total / data.count), curriculum, schoolLevel)
         }));
 
-        // Term averages (last 3 terms)
+        // Term averages
         const termAverages = [];
         const terms = ['Term 1', 'Term 2', 'Term 3'];
         const currentYear = new Date().getFullYear();
@@ -288,9 +446,11 @@ exports.getStudentFullDetails = async (req, res) => {
         const present = attendance.filter(a => a.status === 'present').length;
         const absent = attendance.filter(a => a.status === 'absent').length;
         const late = attendance.filter(a => a.status === 'late').length;
-        const attendanceRate = attendance.length ? Math.round((present / attendance.length) * 100) : 0;
+        const attendanceRate = attendance.length
+            ? Math.round((present / attendance.length) * 100)
+            : 0;
 
-        // Recent assessments (last 5)
+        // Recent assessments
         const recentAssessments = records.slice(0, 5).map(r => ({
             subject: r.subject,
             assessment: r.assessmentName,
@@ -298,10 +458,7 @@ exports.getStudentFullDetails = async (req, res) => {
             date: r.date
         }));
 
-        // Address (placeholder; can be added to Student model later)
         const address = student.address || 'Not provided';
-
-        // Prefect status
         const isPrefect = student.isPrefect || false;
 
         res.json({
@@ -341,7 +498,11 @@ exports.getStudentFullDetails = async (req, res) => {
                     late
                 },
                 recentAssessments,
-                address
+                address,
+                school: {
+                    curriculum,
+                    schoolLevel
+                }
             }
         });
     } catch (error) {
