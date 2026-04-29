@@ -66,6 +66,7 @@ const authController = {
         return res.status(403).json({ success: false, message: 'Account is deactivated' });
       }
 
+      user.loginCount = (user.loginCount || 0) + 1;
       user.lastLogin = new Date();
       await user.save();
 
@@ -372,6 +373,7 @@ const authController = {
         return res.status(403).json({ success: false, message: 'School is not active' });
       }
 
+      user.loginCount = (user.loginCount || 0) + 1;
       user.lastLogin = new Date();
       await user.save();
 
@@ -418,6 +420,7 @@ const authController = {
         }
       }
 
+      user.loginCount = (user.loginCount || 0) + 1;
       user.lastLogin = new Date();
       await user.save();
 
