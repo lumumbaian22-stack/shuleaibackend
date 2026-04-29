@@ -1,4 +1,4 @@
-const { Badge, StudentBadge, Reward, StudentReward, Student, User, AcademicRecord, Attendance } = require('../models');
+const { Badge, StudentBadge, Reward, StudentReward, Student, User, AcademicRecord, Attendance, Class } = require('../models');
 const { Op } = require('sequelize');
 
 // Leaderboard for a class (points)

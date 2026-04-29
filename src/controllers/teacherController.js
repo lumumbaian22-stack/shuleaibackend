@@ -1387,3 +1387,50 @@ exports.publishMarks = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ============ V3 OVERRIDES: role-correct students, CSV upload, draft/publish marks ============
+async function v3Teacher(userId) { return Teacher.findOne({ where:{ userId }, include:[{ model:User, attributes:['id','name','email','phone','schoolCode'] }] }); }
+function v3Access(teacher, cls, subject) { const isClassTeacher = Number(cls.teacherId) === Number(teacher.id); const isSubjectTeacher = (cls.subjectTeachers || []).some(a => Number(a.teacherId) === Number(teacher.id) && (!subject || String(a.subject).toLowerCase() === String(subject).toLowerCase())); return { isClassTeacher, isSubjectTeacher, allowed:isClassTeacher || isSubjectTeacher }; }
+exports.uploadStudentsCSV = async (req,res) => {
+  try {
+    if (!req.files || !req.files.file) return res.status(400).json({ success:false, message:'No file uploaded' });
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const classItem = await Class.findOne({ where:{ teacherId: teacher.id, schoolCode:req.user.schoolCode, isActive:true } });
+    if (!classItem) return res.status(403).json({ success:false, message:'Only the assigned class teacher can upload students for that class' });
+    const filePath = path.join('/tmp', `${Date.now()}-${req.files.file.name}`); await req.files.file.mv(filePath);
+    const rows=[], errors=[], elimuids=[];
+    fs.createReadStream(filePath).pipe(csv()).on('data', r => rows.push(r)).on('end', async () => {
+      let successCount=0;
+      for (const row of rows) { try {
+        const name = row.name || row.fullName || row.studentName; if (!name) { errors.push({ row, error:'Missing name' }); continue; }
+        const user = await User.create({ name, email: row.email || null, phone: row.phone || null, password:'Student123!', role:'student', schoolCode:req.user.schoolCode, isActive:true, firstLogin:true });
+        const student = await Student.create({ userId:user.id, grade:classItem.name, dateOfBirth: row.dob || row.dateOfBirth || null, gender: row.gender || null, assessmentNumber: row.assessmentNumber || row.assessment_number || null, nemisNumber: row.nemisNumber || row.nemis_number || null, location: row.location || null, parentName: row.parentName || row.parent_name || null, parentEmail: row.parentEmail || row.parent_email || null, parentPhone: row.parentPhone || row.parent_phone || null, parentRelationship: row.parentRelationship || row.relationship || 'guardian', isPrefect: String(row.isPrefect || '').toLowerCase() === 'true' });
+        elimuids.push({ name, elimuid:student.elimuid, assessmentNumber:student.assessmentNumber }); successCount++;
+      } catch(err) { errors.push({ row, error:err.message }); } }
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      res.json({ success:true, message:`Class ${classItem.name}: success ${successCount}, failed ${errors.length}`, data:{ classId:classItem.id, className:classItem.name, successCount, failedCount:errors.length, elimuids, errors:errors.slice(0,20) } });
+    }).on('error', err => { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); res.status(500).json({ success:false, message:err.message }); });
+  } catch(error) { console.error('V3 CSV upload error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+exports.saveBulkMarks = async (req,res) => {
+  try {
+    const { classId, subject, assessmentType, assessmentName, date, marks=[], term='Term 1', year=new Date().getFullYear() } = req.body;
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = v3Access(teacher, cls, subject); if (!access.allowed) return res.status(403).json({ success:false, message:'You can only enter marks for assigned subjects/classes' });
+    let saved=0, failed=0; const results=[];
+    for (const m of marks) { try { const score=Number(m.score); if (!Number.isFinite(score)||score<0||score>100) throw new Error('Score must be 0-100'); const [record,created]=await AcademicRecord.findOrCreate({ where:{ studentId:m.studentId, subject, assessmentType, assessmentName, term, year:Number(year) }, defaults:{ studentId:m.studentId, schoolCode:req.user.schoolCode, term, year:Number(year), subject, assessmentType, assessmentName, score, grade:getGradeFromScore(score), teacherId:teacher.id, date:date||new Date(), isPublished:false } }); if (!created) { if (record.isPublished) throw new Error('Published marks cannot be edited'); await record.update({ score, grade:getGradeFromScore(score), teacherId:teacher.id, date:date||record.date }); } saved++; results.push({ studentId:m.studentId, success:true, recordId:record.id }); } catch(err){ failed++; results.push({ studentId:m.studentId, success:false, error:err.message }); } }
+    res.json({ success:true, message:`Saved ${saved} draft mark(s). Class teacher publishes final report card marks.`, data:{ saved, failed, results } });
+  } catch(error) { console.error('V3 save marks error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+exports.publishMarks = async (req,res) => {
+  try {
+    const { classId, term='Term 1', year=new Date().getFullYear() } = req.body;
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    if (Number(cls.teacherId) !== Number(teacher.id)) return res.status(403).json({ success:false, message:'Only the class teacher can publish final marks for this class' });
+    const students = await Student.findAll({ where:{ grade:cls.name }, attributes:['id'] }); const ids=students.map(s=>s.id);
+    const [count] = await AcademicRecord.update({ isPublished:true }, { where:{ schoolCode:req.user.schoolCode, studentId:{ [Op.in]:ids }, term, year:Number(year) } });
+    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}`, data:{ count, classId:cls.id, term, year:Number(year) } });
+  } catch(error) { console.error('V3 publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
+};

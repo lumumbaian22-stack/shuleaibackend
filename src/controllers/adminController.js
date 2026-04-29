@@ -631,3 +631,67 @@ exports.batchAssignSubjects = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ============ V3 OVERRIDES: class teacher, subject teacher, extended student fields ============
+async function v3SchoolTeacher(teacherId, schoolCode) {
+  return Teacher.findOne({ where: { id: parseInt(teacherId,10) }, include: [{ model: User, where: { schoolCode }, attributes: ['id','name','email','phone'] }] });
+}
+async function v3Class(classId, schoolCode) { return Class.findOne({ where: { id: parseInt(classId,10), schoolCode, isActive: true } }); }
+async function v3SaveSubjectAssignment({ classItem, teacher, subject, isClassTeacher, adminId }) {
+  let list = Array.isArray(classItem.subjectTeachers) ? classItem.subjectTeachers : [];
+  list = list.filter(a => String(a.subject).toLowerCase() !== String(subject).toLowerCase());
+  const row = { id: `${classItem.id}-${teacher.id}-${String(subject).toLowerCase().replace(/\s+/g,'-')}`, teacherId: teacher.id, teacherName: teacher.User?.name || 'Unknown', subject, isClassTeacher: !!isClassTeacher, assignedAt: new Date().toISOString(), assignedBy: adminId };
+  list.push(row);
+  await classItem.update({ subjectTeachers: list });
+  if (typeof TeacherSubjectAssignment !== 'undefined') {
+    await TeacherSubjectAssignment.destroy({ where: { classId: classItem.id, subject } }).catch(() => null);
+    await TeacherSubjectAssignment.create({ teacherId: teacher.id, classId: classItem.id, subject, isClassTeacher: !!isClassTeacher, academicYear: classItem.academicYear || String(new Date().getFullYear()) }).catch(() => null);
+  }
+  await teacher.update({ subjects: Array.from(new Set([...(teacher.subjects || []), subject])) });
+  return row;
+}
+exports.assignTeacherToClass = async (req, res) => {
+  try {
+    const classItem = await v3Class(req.params.id, req.user.schoolCode); if (!classItem) return res.status(404).json({ success:false, message:'Class not found' });
+    const teacher = await v3SchoolTeacher(req.body.teacherId, req.user.schoolCode); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found in this school' });
+    if (classItem.teacherId && Number(classItem.teacherId) !== Number(teacher.id)) { const old = await Teacher.findByPk(classItem.teacherId); if (old) await old.update({ classId:null, classTeacher:null }); }
+    const previous = await Class.findOne({ where: { teacherId: teacher.id, schoolCode: req.user.schoolCode, isActive: true } });
+    if (previous && previous.id !== classItem.id) await previous.update({ teacherId: null });
+    await classItem.update({ teacherId: teacher.id });
+    await teacher.update({ classId: classItem.id, classTeacher: classItem.name });
+    res.json({ success:true, message:`${teacher.User.name} is now class teacher for ${classItem.name}`, data:{ class:classItem, teacher } });
+  } catch(error) { console.error('V3 assign class teacher error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+exports.assignTeacherToSubject = async (req, res) => {
+  try {
+    const { classId, teacherId, subject, isClassTeacher=false } = req.body;
+    if (!classId || !teacherId || !subject) return res.status(400).json({ success:false, message:'classId, teacherId and subject are required' });
+    const classItem = await v3Class(classId, req.user.schoolCode); if (!classItem) return res.status(404).json({ success:false, message:'Class not found' });
+    const teacher = await v3SchoolTeacher(teacherId, req.user.schoolCode); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found in this school' });
+    const row = await v3SaveSubjectAssignment({ classItem, teacher, subject, isClassTeacher, adminId:req.user.id });
+    if (isClassTeacher) { await classItem.update({ teacherId: teacher.id }); await teacher.update({ classId: classItem.id, classTeacher: classItem.name }); }
+    res.json({ success:true, message:`${teacher.User.name} assigned to ${subject} in ${classItem.name}`, data:row });
+  } catch(error) { console.error('V3 assign subject error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+exports.batchAssignSubjects = async (req, res) => {
+  try {
+    const classItem = await v3Class(req.body.classId, req.user.schoolCode); if (!classItem) return res.status(404).json({ success:false, message:'Class not found' });
+    const saved=[];
+    for (const item of (req.body.assignments || [])) { if (!item.teacherId || !item.subject) continue; const teacher = await v3SchoolTeacher(item.teacherId, req.user.schoolCode); if (!teacher) continue; saved.push(await v3SaveSubjectAssignment({ classItem, teacher, subject:item.subject, isClassTeacher:item.isClassTeacher, adminId:req.user.id })); if (item.isClassTeacher) { await classItem.update({ teacherId: teacher.id }); await teacher.update({ classId: classItem.id, classTeacher: classItem.name }); } }
+    res.json({ success:true, message:`${saved.length} assignment(s) saved`, data:saved });
+  } catch(error) { console.error('V3 batch subject error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+exports.updateStudent = async (req, res) => {
+  try {
+    const student = await Student.findByPk(req.params.studentId, { include: [{ model: User }] });
+    if (!student) return res.status(404).json({ success:false, message:'Student not found' });
+    if (student.User.schoolCode !== req.user.schoolCode) return res.status(403).json({ success:false, message:'Forbidden' });
+    const userFields={}; ['name','email','phone'].forEach(k => { if (req.body[k] !== undefined) userFields[k] = req.body[k] || null; });
+    if (Object.keys(userFields).length) await student.User.update(userFields);
+    const allowed=['grade','status','isPrefect','assessmentNumber','nemisNumber','location','parentName','parentEmail','parentPhone','parentRelationship','dateOfBirth','gender'];
+    const studentFields={}; allowed.forEach(k => { if (req.body[k] !== undefined) studentFields[k] = typeof req.body[k] === 'string' ? req.body[k].trim() : req.body[k]; });
+    if (Object.keys(studentFields).length) await student.update(studentFields);
+    await student.reload({ include: [{ model: User }] });
+    res.json({ success:true, message:'Student updated successfully', data:student });
+  } catch(error) { console.error('V3 update student error:', error); res.status(500).json({ success:false, message:error.message }); }
+};

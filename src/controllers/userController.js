@@ -174,7 +174,7 @@ exports.deactivateAccount = async (req, res) => {
 exports.uploadProfilePicture = async (req, res) => {
   try {
     // Accept either 'picture' or 'image' field
-    const file = req.files?.picture || req.files?.image;
+    const file = req.file || req.files?.picture || req.files?.image;
     if (!file) {
       return res.status(400).json({ success: false, message: 'No image uploaded' });
     }
@@ -187,7 +187,7 @@ exports.uploadProfilePicture = async (req, res) => {
     }
     
     const uploadPath = path.join(uploadDir, fileName);
-    await file.mv(uploadPath);
+    if (file.mv) { await file.mv(uploadPath); } else if (file.buffer) { await fs.promises.writeFile(uploadPath, file.buffer); } else if (file.path) { await fs.promises.copyFile(file.path, uploadPath); } else { return res.status(400).json({ success: false, message: "Unsupported upload object" }); }
     
     const profileImageUrl = `/uploads/profiles/${fileName}`;
     await req.user.update({ profileImage: profileImageUrl });
