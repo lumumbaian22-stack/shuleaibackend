@@ -1,3 +1,4 @@
+const { Sequelize } = require('sequelize');
 const { sequelize } = require('./src/models');
 const { Umzug, SequelizeStorage } = require('umzug');
 
