@@ -23,7 +23,7 @@ exports.getChildren = async (req, res) => {
   }
 };
 
-// @desc    Get a child's academic summary
+// @desc    Get a child's academic summary (published marks only + school curriculum info)
 // @route   GET /api/parent/child/:studentId/summary
 // @access  Private/Parent
 exports.getChildSummary = async (req, res) => {
@@ -49,6 +49,7 @@ exports.getChildSummary = async (req, res) => {
       include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
     });
 
+    // Fetch only PUBLISHED academic records
     const records = await AcademicRecord.findAll({ 
       where: { studentId, isPublished: true }, 
       order: [['date', 'DESC']], 
@@ -67,10 +68,10 @@ exports.getChildSummary = async (req, res) => {
 
     const avg = records.length ? records.reduce((a,b) => a + b.score, 0) / records.length : 0;
 
-    // Get school info for payments
+    // Get school info – include curriculum and level so frontend can compute correct grades
     const school = await School.findOne({ 
       where: { schoolId: req.user.schoolCode },
-      attributes: ['name', 'bankDetails', 'contact', 'schoolId']
+      attributes: ['name', 'bankDetails', 'contact', 'schoolId', 'system', 'settings']
     });
 
     res.json({
@@ -87,7 +88,10 @@ exports.getChildSummary = async (req, res) => {
         recentRecords: records,
         recentAttendance: attendance,
         outstandingFees: outstandingFees,
-        school: school
+        school: school,
+        // Explicitly pass curriculum info for the frontend
+        curriculum: school ? school.system : 'cbc',
+        schoolLevel: school?.settings?.schoolLevel || 'secondary'
       }
     });
   } catch (error) {
@@ -103,7 +107,6 @@ exports.reportAbsence = async (req, res) => {
   try {
     const { studentId, date, reason, startDate, endDate } = req.body;
     
-    // Handle single date or date range
     const dates = [];
     if (startDate && endDate) {
       const start = new Date(startDate);
@@ -126,7 +129,6 @@ exports.reportAbsence = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
-    // Get child's class teacher
     const classTeacher = await Teacher.findOne({
       where: { classTeacher: student.grade },
       include: [{ model: User, attributes: ['id', 'name', 'email'] }]
@@ -158,7 +160,6 @@ exports.reportAbsence = async (req, res) => {
       createdRecords.push(attendance);
     }
 
-    // Send notification to class teacher
     if (classTeacher) {
       const dateRangeText = dates.length > 1 
         ? `${dates[0]} to ${dates[dates.length-1]} (${dates.length} days)` 
@@ -180,7 +181,6 @@ exports.reportAbsence = async (req, res) => {
         }
       });
 
-      // Notify school admin as well
       const admins = await User.findAll({ 
         where: { role: 'admin', schoolCode: req.user.schoolCode } 
       });
@@ -243,13 +243,11 @@ exports.makePayment = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
-    // Get school payment details
     const school = await School.findOne({ 
       where: { schoolId: req.user.schoolCode },
       attributes: ['name', 'bankDetails', 'contact', 'schoolId']
     });
 
-    // Create payment record
     const payment = await Payment.create({
       studentId,
       parentId: parent.id,
@@ -305,14 +303,12 @@ exports.confirmPayment = async (req, res) => {
     payment.completedAt = new Date();
     await payment.save();
 
-    // Update student's subscription plan
     const student = payment.Student;
     student.subscriptionPlan = payment.plan;
     student.subscriptionStatus = 'active';
-    student.subscriptionExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+    student.subscriptionExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     await student.save();
 
-    // Notify parent
     await createAlert({
       userId: req.user.id,
       role: 'parent',
@@ -352,7 +348,6 @@ exports.getPayments = async (req, res) => {
       order: [['createdAt', 'DESC']]
     });
 
-    // Get school details for each payment
     const school = await School.findOne({ 
       where: { schoolId: req.user.schoolCode },
       attributes: ['name', 'bankDetails']
@@ -390,17 +385,14 @@ exports.upgradePlan = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
-    // Get pricing
     const prices = { basic: 3, premium: 10, ultimate: 20 };
     const amount = prices[newPlan];
 
-    // Get school payment details
     const school = await School.findOne({ 
       where: { schoolId: req.user.schoolCode },
       attributes: ['name', 'bankDetails', 'contact']
     });
 
-    // Create payment for upgrade
     const payment = await Payment.create({
       studentId,
       parentId: parent.id,
@@ -561,7 +553,7 @@ exports.getMessages = async (req, res) => {
   }
 };
 
-// @desc    Get child analytics
+// @desc    Get child analytics (published marks only + curriculum info)
 // @route   GET /api/parent/child/:studentId/analytics
 // @access  Private/Parent
 exports.getChildAnalytics = async (req, res) => {
@@ -571,7 +563,7 @@ exports.getChildAnalytics = async (req, res) => {
     const student = await Student.findByPk(studentId);
     if (!student || !(await parent.hasStudent(student))) return res.status(403).json({ success: false });
 
-    // Performance distribution
+    // Only published marks
     const records = await AcademicRecord.findAll({ where: { studentId, isPublished: true } });
     const gradeCount = { A:0, B:0, C:0, D:0, E:0 };
     records.forEach(r => {
@@ -580,7 +572,6 @@ exports.getChildAnalytics = async (req, res) => {
       else gradeCount['C']++;
     });
 
-    // Attendance over last 6 months
     const sixMonthsAgo = new Date(); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth()-6);
     const attendance = await Attendance.findAll({
       where: { studentId, date: { [Op.gte]: sixMonthsAgo } },
@@ -598,14 +589,25 @@ exports.getChildAnalytics = async (req, res) => {
       rate: (data.present/data.total)*100
     }));
 
-    // Progress over time (scores per subject)
     const subjectProgress = {};
     records.forEach(r => {
       if (!subjectProgress[r.subject]) subjectProgress[r.subject] = [];
       subjectProgress[r.subject].push({ date: r.date, score: r.score });
     });
 
-    res.json({ success: true, data: { gradeDistribution: gradeCount, attendanceTrend, subjectProgress } });
+    // Include school info for grade calculations
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+
+    res.json({ 
+      success: true, 
+      data: { 
+        gradeDistribution: gradeCount, 
+        attendanceTrend, 
+        subjectProgress,
+        curriculum: school?.system || 'cbc',
+        schoolLevel: school?.settings?.schoolLevel || 'secondary'
+      } 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -720,7 +722,6 @@ exports.getConversations = async (req, res) => {
       ],
       order: [['createdAt', 'DESC']]
     });
-    // Group by conversation...
     const conversations = {};
     messages.forEach(msg => {
       const otherId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
