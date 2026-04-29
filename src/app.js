@@ -39,7 +39,7 @@ const gamificationRoutes = require('./routes/gamificationRoutes');
 const app = express();
 
 // ============ MIDDLEWARE ============
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
@@ -87,7 +87,11 @@ const uploadDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
-app.use('/uploads', express.static(uploadDir));
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  next();
+}, express.static(uploadDir));
 
 // ============ TEST ENDPOINT ============
 app.get('/health', (req, res) => {

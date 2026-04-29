@@ -4,6 +4,8 @@ const { sequelize } = require('./src/models');
 
 function createSafeQueryInterface(queryInterface) {
   const safe = Object.create(queryInterface);
+  safe.sequelize = queryInterface.sequelize;
+  safe.queryGenerator = queryInterface.queryGenerator;
 
   safe.addColumn = async function(tableName, columnName, attributes, options) {
     try {

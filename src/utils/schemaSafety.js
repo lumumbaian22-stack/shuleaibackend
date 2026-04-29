@@ -62,6 +62,18 @@ async function ensureRuntimeSchema() {
   await addColumnIfMissing('Timetables', 'classes', "JSONB DEFAULT '[]'::jsonb");
   await addColumnIfMissing('Timetables', 'warnings', "JSONB DEFAULT '[]'::jsonb");
 
+  
+  const timestampTables = [
+    'HomeTasks', 'HomeTaskAssignments', 'MoodCheckins',
+    'Badges', 'Rewards', 'StudentBadges', 'StudentRewards',
+    'SchoolCalendars', 'Timetables', 'StudentCompetencyProgresses',
+    'Competencies', 'LearningOutcomes'
+  ];
+  for (const table of timestampTables) {
+    await addColumnIfMissing(table, 'createdAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
+    await addColumnIfMissing(table, 'updatedAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
+  }
+
   console.log('[schemaSafety] Runtime schema check complete');
 }
 

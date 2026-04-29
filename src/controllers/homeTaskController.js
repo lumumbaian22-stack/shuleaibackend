@@ -10,6 +10,32 @@ exports.getTodayTasks = async (req, res) => {
     const student = await Student.findByPk(studentId);
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
 
+    // First return teacher-assigned pending homework if available.
+    try {
+      const assignments = await HomeTaskAssignment.findAll({
+        where: { studentId, status: { [Op.in]: ['pending', 'assigned'] } },
+        include: [{ model: HomeTask }],
+        order: [['assignedAt', 'DESC']],
+        limit: 10
+      });
+
+      const assignedTasks = assignments
+        .filter(a => a.HomeTask)
+        .map(a => ({
+          ...a.HomeTask.toJSON(),
+          assignmentId: a.id,
+          status: a.status,
+          assignedAt: a.assignedAt,
+          source: 'teacher-assigned'
+        }));
+
+      if (assignedTasks.length > 0) {
+        return res.json({ success: true, data: assignedTasks });
+      }
+    } catch (assignmentError) {
+      console.warn('Could not load assigned home tasks; falling back to recommendations:', assignmentError.message);
+    }
+
     // 1. Get weak competencies (AE/BE)
     const progress = await StudentCompetencyProgress.findAll({
       where: { studentId, level: { [Op.in]: ['AE', 'BE'] } },

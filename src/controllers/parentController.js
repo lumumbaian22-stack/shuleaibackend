@@ -561,7 +561,7 @@ exports.getChildAnalytics = async (req, res) => {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId);
-    if (!student || !(await parent.hasStudent(student))) return res.status(403).json({ success: false });
+    if (!parent || !student || !(await parent.hasStudent(student))) return res.status(403).json({ success: false, message: 'Child not linked to this parent' });
 
     // Only published marks
     const records = await AcademicRecord.findAll({ where: { studentId, isPublished: true } });
@@ -579,7 +579,7 @@ exports.getChildAnalytics = async (req, res) => {
     });
     const attendanceByMonth = {};
     attendance.forEach(a => {
-      const month = a.date.toISOString().slice(0,7);
+      const month = new Date(a.date).toISOString().slice(0,7);
       if (!attendanceByMonth[month]) attendanceByMonth[month] = { present:0, total:0 };
       attendanceByMonth[month].total++;
       if (a.status === 'present') attendanceByMonth[month].present++;

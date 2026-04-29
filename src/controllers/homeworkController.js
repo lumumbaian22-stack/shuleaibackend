@@ -27,7 +27,14 @@ exports.createAssignment = async (req, res) => {
         if (classId && (!studentIds || studentIds.length === 0)) {
             const classItem = await Class.findByPk(classId);
             if (classItem) {
-                const students = await Student.findAll({ where: { grade: classItem.name } });
+                const students = await Student.findAll({
+                    where: {
+                        [require('sequelize').Op.or]: [
+                            { classId: classItem.id },
+                            { grade: classItem.name }
+                        ]
+                    }
+                });
                 targetStudentIds = students.map(s => s.id);
             }
         }
@@ -41,7 +48,7 @@ exports.createAssignment = async (req, res) => {
         }));
         await HomeTaskAssignment.bulkCreate(assignments);
 
-        res.json({ success: true, message: 'Homework assigned' });
+        res.json({ success: true, message: 'Homework assigned', data: { assignedCount: assignments.length, taskId: task.id } });
     } catch (error) {
         console.error('Create homework error:', error);
         res.status(500).json({ success: false, message: error.message });

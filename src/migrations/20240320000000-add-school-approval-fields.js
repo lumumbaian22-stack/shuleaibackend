@@ -1,70 +1,43 @@
 'use strict';
 
 module.exports = {
-  up: async (queryInterface, Sequelize) => {
+  async up(queryInterface, Sequelize) {
+    const tableExists = async (table) => {
+      try { await queryInterface.describeTable(table); return true; }
+      catch (_) { return false; }
+    };
 
-    // Fix NULL school codes
-    await queryInterface.sequelize.query(`
-      UPDATE "Users"
-      SET "schoolCode" = 'SUPER-ADMIN'
-      WHERE "schoolCode" IS NULL AND "role" = 'super_admin';
-    `);
+    const add = async (table, column, def) => {
+      if (!(await tableExists(table))) return;
+      const desc = await queryInterface.describeTable(table);
+      if (!desc[column]) await queryInterface.addColumn(table, column, def);
+    };
 
-    await queryInterface.sequelize.query(`
-      UPDATE "Users"
-      SET "schoolCode" = 'TEMP-' || id
-      WHERE "schoolCode" IS NULL;
-    `);
+    // Correct architecture:
+    // super_admin is platform-level and does NOT require a schoolCode.
+    if (await tableExists('Users')) {
+      try {
+        await queryInterface.changeColumn('Users', 'schoolCode', {
+          type: Sequelize.STRING,
+          allowNull: true
+        });
+      } catch (e) {
+        console.warn('[migration] Could not alter Users.schoolCode nullable:', e.message);
+      }
 
-    // Add new columns
-    await queryInterface.addColumn('Schools', 'shortCode', {
-      type: Sequelize.STRING,
-      unique: true
-    });
+      await queryInterface.sequelize.query(`
+        UPDATE "Users"
+        SET "schoolCode" = NULL
+        WHERE "role" = 'super_admin' AND "schoolCode" = 'SUPER-ADMIN';
+      `);
+    }
 
-    await queryInterface.addColumn('Schools', 'status', {
-      type: Sequelize.ENUM('pending','active','suspended','rejected'),
-      defaultValue: 'pending'
-    });
-
-    await queryInterface.addColumn('Schools', 'approvedBy', {
-      type: Sequelize.INTEGER,
-      references: { model: 'Users', key: 'id' },
-      onDelete: 'SET NULL'
-    });
-
-    await queryInterface.addColumn('Schools', 'approvedAt', {
-      type: Sequelize.DATE
-    });
-
-    await queryInterface.addColumn('Schools', 'rejectionReason', {
-      type: Sequelize.TEXT
-    });
-
-    // Generate unique short codes
-    await queryInterface.sequelize.query(`
-      UPDATE "Schools"
-      SET "shortCode" = 'SHL-' || id || '-' || UPPER(SUBSTRING(MD5(RANDOM()::TEXT),1,3))
-      WHERE "shortCode" IS NULL;
-    `);
-
-    await queryInterface.addIndex('Schools', ['shortCode']);
-    await queryInterface.addIndex('Schools', ['status']);
+    await add('Schools', 'isApproved', { type: Sequelize.BOOLEAN, defaultValue: false });
+    await add('Schools', 'approvedAt', { type: Sequelize.DATE, allowNull: true });
+    await add('Schools', 'approvedBy', { type: Sequelize.INTEGER, allowNull: true });
+    await add('Schools', 'rejectionReason', { type: Sequelize.TEXT, allowNull: true });
+    await add('Schools', 'status', { type: Sequelize.STRING, defaultValue: 'pending' });
   },
 
-  down: async (queryInterface, Sequelize) => {
-
-    await queryInterface.removeIndex('Schools', ['shortCode']);
-    await queryInterface.removeIndex('Schools', ['status']);
-
-    await queryInterface.removeColumn('Schools', 'shortCode');
-    await queryInterface.removeColumn('Schools', 'status');
-    await queryInterface.removeColumn('Schools', 'approvedBy');
-    await queryInterface.removeColumn('Schools', 'approvedAt');
-    await queryInterface.removeColumn('Schools', 'rejectionReason');
-
-    await queryInterface.sequelize.query(
-      'DROP TYPE IF EXISTS "enum_Schools_status";'
-    );
-  }
+  async down() {}
 };

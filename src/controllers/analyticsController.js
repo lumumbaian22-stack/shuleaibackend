@@ -386,22 +386,35 @@ exports.getStudentAnalytics = async (req, res) => {
             const otherAvg = other.AcademicRecords.length ? other.AcademicRecords.reduce((s, r) => s + r.score, 0) / other.AcademicRecords.length : 0;
             if (otherAvg > overallAverage) rank++;
         }
-        const percentile = total > 1 ? Math.round((rank / total) * 100) : 100;
+        const percentile = total > 1 ? Math.round(((total - rank + 1) / total) * 100) : 100;
 
         // Submission patterns
-        const assignments = await HomeTaskAssignment.findAll({ where: { studentId: student.id, status: 'submitted' }, include: [{ model: HomeTask, attributes: ['dueDate'] }] });
-        let onTime = 0, lateSub = 0, totalSubs = assignments.length;
-        assignments.forEach(a => {
-            if (a.completedAt && a.HomeTask?.dueDate) {
-                if (new Date(a.completedAt) <= new Date(a.HomeTask.dueDate)) onTime++;
-                else lateSub++;
-            }
-        });
+        let onTime = 0, lateSub = 0, totalSubs = 0;
+        try {
+            const assignments = await HomeTaskAssignment.findAll({
+                where: { studentId: student.id, status: 'submitted' },
+                include: [{ model: HomeTask, attributes: ['dueDate'] }]
+            });
+            totalSubs = assignments.length;
+            assignments.forEach(a => {
+                if (a.completedAt && a.HomeTask?.dueDate) {
+                    if (new Date(a.completedAt) <= new Date(a.HomeTask.dueDate)) onTime++;
+                    else lateSub++;
+                }
+            });
+        } catch (assignmentError) {
+            console.warn('Student analytics assignment stats skipped:', assignmentError.message);
+        }
         const streak = onTime; // simplified streak
 
         // Mood tracker
-        const moods = await MoodCheckin.findAll({ where: { userId: req.user.id }, order: [['createdAt', 'DESC']], limit: 10 });
-        const moodData = moods.map(m => ({ mood: m.mood, date: m.createdAt }));
+        let moodData = [];
+        try {
+            const moods = await MoodCheckin.findAll({ where: { userId: req.user.id }, order: [['createdAt', 'DESC']], limit: 10 });
+            moodData = moods.map(m => ({ mood: m.mood, date: m.createdAt }));
+        } catch (moodError) {
+            console.warn('Student analytics mood stats skipped:', moodError.message);
+        }
 
         // Leaderboard rank (class)
         const leaderboardRank = rank; // within class
