@@ -1,4 +1,5 @@
-const { Op, Sequelize, sequelize } = require('sequelize');
+const { Op, Sequelize } = require('sequelize');
+const { sequelize } = require('../models');
 const {
     Student, AcademicRecord, Attendance, School, Teacher, User,
     Class, Payment, Fee, Parent, Competency, LearningOutcome,
