@@ -22,4 +22,12 @@ router.get('/group-messages', studentController.getGroupMessages);
 // Analytics (NEW)
 router.get('/analytics', analyticsController.getStudentAnalytics);
 
+router.post('/mood', protect, authorize('student'), async (req, res) => {
+    try {
+        const { mood, note } = req.body;
+        const checkin = await MoodCheckin.create({ userId: req.user.id, mood, note });
+        res.json({ success: true, data: checkin });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
 module.exports = router;
