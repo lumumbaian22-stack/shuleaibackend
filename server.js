@@ -6,6 +6,7 @@ const socketio = require('socket.io');
 const { sequelize } = require('./src/models');
 const jwt = require('jsonwebtoken');
 const { User } = require('./src/models');
+const { ensureRuntimeSchema } = require('./src/utils/schemaSafety');
 
 const PORT = process.env.PORT || 5000;
 
@@ -76,6 +77,9 @@ io.on('connection', (socket) => {
 sequelize.authenticate()
   .then(() => {
     console.log('✅ Database connection test SUCCESSFUL');
+    return ensureRuntimeSchema();
+  })
+  .then(() => {
     if (process.env.NODE_ENV === 'development') {
       return sequelize.sync({ alter: true });
     }

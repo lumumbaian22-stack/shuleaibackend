@@ -173,25 +173,37 @@ exports.deactivateAccount = async (req, res) => {
 // @desc    Upload profile picture (FIXED)
 exports.uploadProfilePicture = async (req, res) => {
   try {
-    // Accept either 'picture' or 'image' field
-    const file = req.file || req.files?.picture || req.files?.image;
+    const file = req.files?.picture || req.files?.image || req.file;
     if (!file) {
-      return res.status(400).json({ success: false, message: 'No image uploaded' });
+      return res.status(400).json({ success: false, message: 'No image uploaded. Expected form field: picture' });
     }
 
-    const fileName = `profile_${req.user.id}_${Date.now()}.jpg`;
-    const uploadDir = path.join(__dirname, '../uploads/profiles/');
-    
+    const originalName = file.name || file.originalname || 'profile.jpg';
+    const ext = path.extname(originalName) || '.jpg';
+    const fileName = `profile_${req.user.id}_${Date.now()}${ext}`;
+    const uploadDir = path.join(__dirname, '../../uploads/profiles');
+
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
-    
+
     const uploadPath = path.join(uploadDir, fileName);
-    if (file.mv) { await file.mv(uploadPath); } else if (file.buffer) { await fs.promises.writeFile(uploadPath, file.buffer); } else if (file.path) { await fs.promises.copyFile(file.path, uploadPath); } else { return res.status(400).json({ success: false, message: "Unsupported upload object" }); }
-    
+
+    if (file.mv) {
+      await file.mv(uploadPath);
+    } else if (file.tempFilePath) {
+      await fs.promises.copyFile(file.tempFilePath, uploadPath);
+    } else if (file.path) {
+      await fs.promises.copyFile(file.path, uploadPath);
+    } else if (file.buffer) {
+      await fs.promises.writeFile(uploadPath, file.buffer);
+    } else {
+      return res.status(400).json({ success: false, message: 'Unsupported upload object from server middleware' });
+    }
+
     const profileImageUrl = `/uploads/profiles/${fileName}`;
     await req.user.update({ profileImage: profileImageUrl });
-    
+
     res.json({ success: true, data: { profileImage: profileImageUrl } });
   } catch (error) {
     console.error('Profile upload error:', error);

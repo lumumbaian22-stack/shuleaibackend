@@ -304,6 +304,27 @@ exports.getClasses = async (req, res) => {
   }
 };
 
+
+exports.getClassDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const classItem = await Class.findOne({
+      where: { id, schoolCode: req.user.schoolCode, isActive: true },
+      include: [{ model: Teacher, include: [{ model: User, attributes: ['id', 'name', 'email'] }] }]
+    });
+
+    if (!classItem) {
+      return res.status(404).json({ success: false, message: 'Class not found' });
+    }
+
+    res.json({ success: true, data: classItem });
+  } catch (error) {
+    console.error('Get class details error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
 exports.createClass = async (req, res) => {
   try {
     const { name, grade, stream, teacherId } = req.body;

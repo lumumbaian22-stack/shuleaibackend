@@ -2,7 +2,7 @@ const { sequelize } = require('./src/models');
 const { Umzug, SequelizeStorage } = require('umzug');
 
 const umzug = new Umzug({
-  migrations: { glob: 'migrations/*.js' },
+  migrations: { glob: 'src/migrations/*.js' },
   context: sequelize.getQueryInterface(),
   storage: new SequelizeStorage({ sequelize }),
   logger: console,

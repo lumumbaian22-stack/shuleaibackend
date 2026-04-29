@@ -40,6 +40,7 @@ router.post('/teachers/:teacherId/approve', validationRules.approveTeacher, vali
 
 // Class Management
 router.get('/classes', adminController.getClasses);
+router.get('/classes/:id', adminController.getClassDetails);
 router.post('/classes', adminController.createClass);
 router.put('/classes/:id', adminController.updateClass);
 router.delete('/classes/:id', adminController.deleteClass);
