@@ -9,6 +9,7 @@ router.get('/classes', protect, authorize('admin'), timetableCtrl.getClasses);
 
 // existing routes
 router.post('/generate', protect, authorize('admin'), timetableCtrl.generate);
+router.put('/:id/slot', protect, authorize('admin'), timetableCtrl.updateSlot);
 router.put('/:id', protect, authorize('admin'), timetableCtrl.manualUpdate);
 router.post('/:id/publish', protect, authorize('admin'), timetableCtrl.publish);
 router.get('/class/:classId', protect, timetableCtrl.getForClass);

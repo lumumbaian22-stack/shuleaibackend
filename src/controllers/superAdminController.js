@@ -1,6 +1,5 @@
 const { School, User, Admin, SchoolNameRequest, Student, Teacher, Parent, ApprovalRequest } = require('../models');
 const { createAlert } = require('../services/notificationService');
-const superAdminController = require('../controllers/superAdminController');
 const { Op } = require('sequelize');
 const { sequelize } = require('../models');
 
@@ -40,7 +39,12 @@ exports.getSchools = async (req, res) => {
                 required: false
             }]
         });
-        res.json({ success: true, data: schools });
+        res.json({ success: true, data: schools.map(s => {
+            const row = s.toJSON ? s.toJSON() : s;
+            row.displayName = row.approvedName || row.platformDisplayName || 'ShuleAI School';
+            row.publicName = row.displayName;
+            return row;
+        }) });
     } catch (error) {
         console.error('Get schools error:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -211,11 +215,15 @@ exports.createSchool = async (req, res) => {
         const { name, system, address, contact, adminEmail, adminName, adminPassword } = req.body;
         
         const school = await School.create({
-            name,
+            name: name || 'ShuleAI School',
+            platformDisplayName: 'ShuleAI School',
+            requestedName: name || null,
+            approvedName: null,
+            nameApprovalStatus: name ? 'pending' : 'platform',
             system: system || 'cbc',
             address,
             contact,
-            status: 'active', // Auto-active when created by super admin
+            status: 'active',
             isActive: true,
             createdBy: req.user.id
         });
@@ -318,6 +326,10 @@ exports.approveRequest = async (req, res) => {
 
         const school = await School.findOne({ where: { schoolId: request.schoolCode } });
         if (school) {
+            school.requestedName = request.newName;
+            school.approvedName = request.newName;
+            school.nameApprovalStatus = 'approved';
+            // Keep name synchronized for old code, but public UI still uses displayName.
             school.name = request.newName;
             await school.save();
         }
@@ -338,7 +350,7 @@ exports.approveRequest = async (req, res) => {
 
         if (global.io) {
           global.io.to(`school-${school.schoolId}`).emit('school-name-changed', {
-            newName: school.name,
+            newName: school.approvedName || school.platformDisplayName || 'ShuleAI School',
             schoolId: school.schoolId
           });
         }
@@ -365,6 +377,14 @@ exports.rejectRequest = async (req, res) => {
         request.reviewedBy = req.user.id;
         request.reviewedAt = new Date();
         await request.save();
+
+        const school = await School.findOne({ where: { schoolId: request.schoolCode } });
+        if (school) {
+            school.nameApprovalStatus = 'rejected';
+            school.requestedName = null;
+            if (!school.approvedName) school.name = school.platformDisplayName || 'ShuleAI School';
+            await school.save();
+        }
 
         await createAlert({
             userId: request.requestedBy,
@@ -1373,4 +1393,76 @@ exports.updateSubscriptionPlan = async (req, res) => {
   if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });
   await plan.update({ price_kes: price, features });
   res.json({ success: true, data: plan });
+};
+
+
+// ============ V8 PLATFORM REAL-TIME STATS ============
+exports.getSchoolStats = async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const school = await School.findOne({ where: { schoolId } });
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+
+    const schoolCode = school.schoolId;
+    const [students, teachers, parents, admins, classes, pendingApprovals] = await Promise.all([
+      Student.count({ include:[{ model: User, where:{ schoolCode }, attributes:[] }] }).catch(()=>0),
+      Teacher.count({ include:[{ model: User, where:{ schoolCode }, attributes:[] }] }).catch(()=>0),
+      Parent.count({ include:[{ model: User, where:{ schoolCode }, attributes:[] }] }).catch(()=>0),
+      User.count({ where:{ schoolCode, role:'admin' } }).catch(()=>0),
+      require('../models').Class.count({ where:{ schoolCode, isActive:true } }).catch(()=>0),
+      ApprovalRequest.count({ where:{ schoolCode, status:'pending' } }).catch(()=>0)
+    ]);
+
+    res.json({ success:true, data:{
+      schoolId,
+      displayName: school.approvedName || school.platformDisplayName || 'ShuleAI School',
+      status: school.status,
+      curriculum: school.system,
+      students, teachers, parents, admins, classes, pendingApprovals,
+      updatedAt: new Date()
+    }});
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getLivePlatformStats = async (req, res) => {
+  try {
+    const schools = await School.findAll({ order:[['updatedAt','DESC']] });
+    const Class = require('../models').Class;
+    const data = [];
+    for (const s of schools) {
+      const schoolCode = s.schoolId;
+      const [students, teachers, parents, classes, users] = await Promise.all([
+        Student.count({ include:[{ model: User, where:{ schoolCode }, attributes:[] }] }).catch(()=>0),
+        Teacher.count({ include:[{ model: User, where:{ schoolCode }, attributes:[] }] }).catch(()=>0),
+        Parent.count({ include:[{ model: User, where:{ schoolCode }, attributes:[] }] }).catch(()=>0),
+        Class.count({ where:{ schoolCode, isActive:true } }).catch(()=>0),
+        User.count({ where:{ schoolCode } }).catch(()=>0)
+      ]);
+      data.push({
+        id:s.id,
+        schoolId:s.schoolId,
+        displayName:s.approvedName || s.platformDisplayName || 'ShuleAI School',
+        requestedName:s.requestedName,
+        nameApprovalStatus:s.nameApprovalStatus,
+        status:s.status,
+        curriculum:s.system,
+        students, teachers, parents, classes, users,
+        updatedAt:s.updatedAt
+      });
+    }
+    res.json({ success:true, data:{
+      overview:{
+        schools:data.length,
+        activeSchools:data.filter(s=>s.status==='active').length,
+        pendingNameRequests:data.filter(s=>s.nameApprovalStatus==='pending').length,
+        students:data.reduce((a,b)=>a+b.students,0),
+        teachers:data.reduce((a,b)=>a+b.teachers,0),
+        parents:data.reduce((a,b)=>a+b.parents,0),
+        classes:data.reduce((a,b)=>a+b.classes,0),
+        users:data.reduce((a,b)=>a+b.users,0)
+      },
+      schools:data,
+      updatedAt:new Date()
+    }});
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };

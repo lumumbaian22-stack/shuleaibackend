@@ -8,6 +8,7 @@ router.use(protect, authorize('super_admin'));
 
 // Dashboard and overview
 router.get('/overview', superAdminController.getOverview);
+router.get('/live-stats', superAdminController.getLivePlatformStats);
 
 // School management
 router.get('/schools', superAdminController.getSchools);
@@ -33,6 +34,7 @@ router.put('/bank-details/:schoolId', superAdminController.updateBankDetails);
 router.get('/schools/:schoolId/teachers', superAdminController.getSchoolTeachers);
 router.get('/schools/:schoolId/students', superAdminController.getSchoolStudents);
 router.get('/schools/:schoolId/parents', superAdminController.getSchoolParents);
+router.get('/schools/:schoolId/stats', superAdminController.getSchoolStats);
 
 // System health
 router.get('/system/status', superAdminController.getSystemStatus);

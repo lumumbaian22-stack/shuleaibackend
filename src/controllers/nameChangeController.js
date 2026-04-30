@@ -36,12 +36,16 @@ exports.createNameChangeRequest = async (req, res) => {
     // Create the request
     const request = await SchoolNameRequest.create({
       schoolCode: school.schoolId,
-      currentName: school.name,
+      currentName: school.approvedName || school.platformDisplayName || 'ShuleAI School',
       newName: newName,
       reason: reason || 'School name change request',
       requestedBy: req.user.id,
       status: 'pending'
     });
+
+    school.requestedName = newName;
+    school.nameApprovalStatus = 'pending';
+    await school.save();
 
     // Notify all super admins
     const superAdmins = await User.findAll({ where: { role: 'super_admin' } });
@@ -53,7 +57,7 @@ exports.createNameChangeRequest = async (req, res) => {
         type: 'approval',
         severity: 'info',
         title: 'New School Name Change Request',
-        message: `${school.name} requests to change name to "${newName}"`,
+        message: `${school.platformDisplayName || 'A school'} requests to change name to "${newName}"`,
         data: { requestId: request.id, schoolId: school.id }
       });
     }

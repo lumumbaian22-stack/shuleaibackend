@@ -43,6 +43,11 @@ async function ensureRuntimeSchema() {
     return;
   }
 
+  await addColumnIfMissing('Schools', 'platformDisplayName', "VARCHAR(255) DEFAULT 'ShuleAI School'");
+  await addColumnIfMissing('Schools', 'requestedName', 'VARCHAR(255)');
+  await addColumnIfMissing('Schools', 'approvedName', 'VARCHAR(255)');
+  await addColumnIfMissing('Schools', 'nameApprovalStatus', "VARCHAR(255) DEFAULT 'platform'");
+
   await addColumnIfMissing('Students', 'assessmentNumber', 'VARCHAR(255)');
   await addColumnIfMissing('Students', 'nemisNumber', 'VARCHAR(255)');
   await addColumnIfMissing('Students', 'location', 'VARCHAR(255)');

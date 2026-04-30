@@ -329,7 +329,7 @@ exports.getPrivateMessages = async (req, res) => {
 exports.getParentConversations = async (req, res) => {
   try {
     const parents = await Parent.findAll({
-      include: [{ model: User, where: { schoolCode: req.user.schoolCode, isActive: true }, attributes: ['id', 'name'] }]
+      include: [{ model: User, where: { schoolCode: req.user.schoolCode, role: 'parent', isActive: true }, attributes: ['id', 'name', 'role'] }]
     });
     const parentUserIds = parents.map(p => p.userId);
     // Also fetch student for each parent
@@ -367,8 +367,7 @@ exports.getParentConversations = async (req, res) => {
           unreadCount: msg.receiverId === req.user.id && !msg.isRead ? 1 : 0,
           studentName: studentsByParent[parentUserId] || null
         };
-      }
-      if (msg.receiverId === req.user.id && !msg.isRead) {
+      } else if (msg.receiverId === req.user.id && !msg.isRead) {
         conversations[parentUserId].unreadCount++;
       }
     });
