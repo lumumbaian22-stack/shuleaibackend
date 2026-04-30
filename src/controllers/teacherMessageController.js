@@ -16,8 +16,8 @@ exports.getConversations = async (req, res) => {
                 ]
             },
             include: [
-                { model: User, as: 'Sender', attributes: ['id', 'name', 'role', 'profileImage'] },
-                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role', 'profileImage'] }
+                { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
+                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
             ],
             order: [['createdAt', 'DESC']]
         });
@@ -93,8 +93,8 @@ exports.getMessages = async (req, res) => {
                 ]
             },
             include: [
-                { model: User, as: 'Sender', attributes: ['id', 'name', 'role', 'profileImage'] },
-                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role', 'profileImage'] }
+                { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
+                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
             ],
             order: [['createdAt', 'ASC']]
         });

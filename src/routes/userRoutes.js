@@ -37,6 +37,4 @@ router.get('/consent/status', protect, async (req, res) => {
 // Student full details (NEW)
 router.get('/students/:studentId/details', studentController.getStudentFullDetails);
 
-router.get('/public/:id', userController.getPublicUserProfile);
-
 module.exports = router;

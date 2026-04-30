@@ -74,17 +74,6 @@ async function ensureRuntimeSchema() {
     await addColumnIfMissing(table, 'updatedAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
   }
 
-  
-  await addColumnIfMissing('Messages', 'groupId', 'VARCHAR(255)');
-  await addColumnIfMissing('Messages', 'classId', 'INTEGER');
-  await addColumnIfMissing('Messages', 'type', "VARCHAR(255) DEFAULT 'private'");
-  await addColumnIfMissing('Messages', 'content', 'TEXT');
-  await addColumnIfMissing('Messages', 'message', 'TEXT');
-  await addColumnIfMissing('Messages', 'schoolCode', 'VARCHAR(255)');
-  await addColumnIfMissing('Messages', 'createdAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
-  await addColumnIfMissing('Messages', 'updatedAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
-  await addColumnIfMissing('Users', 'profileImage', 'TEXT');
-
   console.log('[schemaSafety] Runtime schema check complete');
 }
 
