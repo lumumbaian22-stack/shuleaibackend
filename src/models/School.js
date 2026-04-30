@@ -31,27 +31,9 @@ module.exports = (sequelize, DataTypes) => {
         return `${prefix}-${randomPart}`;
       }
     },
-    // Internal/original school name. Public UI should use displayName returned by API.
     name: {
       type: DataTypes.STRING,
       allowNull: false
-    },
-    platformDisplayName: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      defaultValue: 'ShuleAI School'
-    },
-    requestedName: {
-      type: DataTypes.STRING,
-      allowNull: true
-    },
-    approvedName: {
-      type: DataTypes.STRING,
-      allowNull: true
-    },
-    nameApprovalStatus: {
-      type: DataTypes.ENUM('platform', 'pending', 'approved', 'rejected'),
-      defaultValue: 'platform'
     },
     lookupCodes: {
       type: DataTypes.ARRAY(DataTypes.STRING),

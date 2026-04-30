@@ -252,3 +252,28 @@ exports.uploadSignature = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+// @desc    Get safe public profile for another user
+// @route   GET /api/user/public/:id
+// @access  Private
+exports.getPublicUserProfile = async (req, res) => {
+  try {
+    const target = await User.findByPk(req.params.id, {
+      attributes: ['id', 'name', 'email', 'role', 'profileImage', 'schoolCode']
+    });
+
+    if (!target) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (req.user.role !== 'super_admin' && target.schoolCode && req.user.schoolCode && target.schoolCode !== req.user.schoolCode) {
+      return res.status(403).json({ success: false, message: 'You cannot view users outside your school' });
+    }
+
+    res.json({ success: true, data: target });
+  } catch (error) {
+    console.error('Get public user profile error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

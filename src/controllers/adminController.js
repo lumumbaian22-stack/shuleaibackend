@@ -294,7 +294,7 @@ exports.getClasses = async (req, res) => {
   try {
     const classes = await Class.findAll({
       where: { schoolCode: req.user.schoolCode, isActive: true },
-      include: [{ model: Teacher, include: [{ model: User, attributes: ['id', 'name', 'email'] }] }],
+      include: [{ model: Teacher, include: [{ model: User, attributes: ['id', 'name', 'email', 'profileImage'] }] }],
       order: [['grade', 'ASC'], ['name', 'ASC']]
     });
     res.json({ success: true, data: classes });
@@ -310,7 +310,7 @@ exports.getClassDetails = async (req, res) => {
     const { id } = req.params;
     const classItem = await Class.findOne({
       where: { id, schoolCode: req.user.schoolCode, isActive: true },
-      include: [{ model: Teacher, include: [{ model: User, attributes: ['id', 'name', 'email'] }] }]
+      include: [{ model: Teacher, include: [{ model: User, attributes: ['id', 'name', 'email', 'profileImage'] }] }]
     });
 
     if (!classItem) {
@@ -375,7 +375,7 @@ exports.getAvailableTeachers = async (req, res) => {
     const teachers = await Teacher.findAll({
       where: { approvalStatus: 'approved' },
       include: [
-        { model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id', 'name', 'email'] },
+        { model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id', 'name', 'email', 'profileImage'] },
         { model: Class, attributes: ['id', 'name'] } // include assigned class
       ]
     });

@@ -5,7 +5,6 @@ const teacherController = require('../controllers/teacherController');
 const teacherMessageController = require('../controllers/teacherMessageController');
 const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
-const curriculumProgressController = require('../controllers/curriculumProgressController');
 const analyticsController = require('../controllers/analyticsController'); // Add import
 
 router.use(protect);
@@ -20,10 +19,6 @@ router.get('/class-students', teacherController.getClassStudentsForSubject);
 router.get('/my-assignments', teacherController.getMyAssignments);
 
 // Marks
-router.get('/marks/context', teacherController.getMarksEntryContext);
-router.get('/marks/students', teacherController.getStudentsForMarksEntry);
-router.post('/marks/analyze', teacherController.analyzeMarksBatch);
-router.get('/report-card', teacherController.getReportCard);
 router.put('/marks/:recordId', teacherController.updateMark);
 router.delete('/marks/:recordId', teacherController.deleteMark);
 router.get('/marks-template', teacherController.downloadMarksTemplate);
@@ -68,9 +63,6 @@ router.put('/tasks/:taskId', taskController.updateTask);
 router.delete('/tasks/:taskId', taskController.deleteTask);
 
 router.get('/attendance/:date', teacherController.getAttendanceForDate);
-
-router.get('/curriculum-progress', curriculumProgressController.getTeacherCurriculumProgress);
-router.put('/curriculum-progress', curriculumProgressController.updateTeacherCurriculumProgress);
 
 // Analytics (NEW)
 router.get('/analytics', analyticsController.getTeacherAnalytics);

@@ -30,4 +30,12 @@ router.post('/mood', protect, authorize('student'), async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
 
+
+// V6 chat-safe student endpoints
+router.get('/chat/class-members', studentController.getClassMembers);
+router.post('/chat/class-group-message', studentController.sendClassGroupMessage);
+router.get('/chat/class-group-messages', studentController.getClassGroupMessages);
+router.post('/chat/private-message', studentController.sendClassPrivateMessage);
+router.get('/chat/private-messages/:otherUserId', studentController.getClassPrivateMessages);
+
 module.exports = router;

@@ -43,11 +43,6 @@ async function ensureRuntimeSchema() {
     return;
   }
 
-  await addColumnIfMissing('Schools', 'platformDisplayName', "VARCHAR(255) DEFAULT 'ShuleAI School'");
-  await addColumnIfMissing('Schools', 'requestedName', 'VARCHAR(255)');
-  await addColumnIfMissing('Schools', 'approvedName', 'VARCHAR(255)');
-  await addColumnIfMissing('Schools', 'nameApprovalStatus', "VARCHAR(255) DEFAULT 'platform'");
-
   await addColumnIfMissing('Students', 'assessmentNumber', 'VARCHAR(255)');
   await addColumnIfMissing('Students', 'nemisNumber', 'VARCHAR(255)');
   await addColumnIfMissing('Students', 'location', 'VARCHAR(255)');
@@ -78,6 +73,17 @@ async function ensureRuntimeSchema() {
     await addColumnIfMissing(table, 'createdAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
     await addColumnIfMissing(table, 'updatedAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
   }
+
+  
+  await addColumnIfMissing('Messages', 'groupId', 'VARCHAR(255)');
+  await addColumnIfMissing('Messages', 'classId', 'INTEGER');
+  await addColumnIfMissing('Messages', 'type', "VARCHAR(255) DEFAULT 'private'");
+  await addColumnIfMissing('Messages', 'content', 'TEXT');
+  await addColumnIfMissing('Messages', 'message', 'TEXT');
+  await addColumnIfMissing('Messages', 'schoolCode', 'VARCHAR(255)');
+  await addColumnIfMissing('Messages', 'createdAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
+  await addColumnIfMissing('Messages', 'updatedAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
+  await addColumnIfMissing('Users', 'profileImage', 'TEXT');
 
   console.log('[schemaSafety] Runtime schema check complete');
 }

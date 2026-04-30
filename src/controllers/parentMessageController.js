@@ -17,7 +17,7 @@ exports.sendMessage = async (req, res) => {
         
         // Find student
         const student = await Student.findByPk(studentId, {
-            include: [{ model: User, attributes: ['id', 'name'] }]
+            include: [{ model: User, attributes: ['id', 'name', 'profileImage'] }]
         });
         
         if (!student) {
@@ -45,7 +45,7 @@ exports.sendMessage = async (req, res) => {
                 },
                 include: [{
                     model: Teacher,
-                    include: [{ model: User, attributes: ['id', 'name', 'email'] }]
+                    include: [{ model: User, attributes: ['id', 'name', 'email', 'profileImage'] }]
                 }]
             });
             
@@ -57,7 +57,7 @@ exports.sendMessage = async (req, res) => {
                 // Fallback to old classTeacher field
                 const classTeacher = await Teacher.findOne({
                     where: { classTeacher: student.grade },
-                    include: [{ model: User, attributes: ['id', 'name', 'email'] }]
+                    include: [{ model: User, attributes: ['id', 'name', 'email', 'profileImage'] }]
                 });
                 
                 if (classTeacher) {
@@ -207,8 +207,8 @@ exports.getConversations = async (req, res) => {
                 ]
             },
             include: [
-                { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
-                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+                { model: User, as: 'Sender', attributes: ['id', 'name', 'role', 'profileImage'] },
+                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role', 'profileImage'] }
             ],
             order: [['createdAt', 'DESC']]
         });
@@ -264,8 +264,8 @@ exports.getMessages = async (req, res) => {
                 ]
             },
             include: [
-                { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
-                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+                { model: User, as: 'Sender', attributes: ['id', 'name', 'role', 'profileImage'] },
+                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role', 'profileImage'] }
             ],
             order: [['createdAt', 'ASC']]
         });
