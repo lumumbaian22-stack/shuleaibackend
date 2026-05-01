@@ -40,6 +40,15 @@ const Timetable = require('./Timetable')(sequelize, DataTypes);
 const ConductLog = require('./ConductLog')(sequelize, DataTypes);
 const ResourceViews = require('./ResourceViews')(sequelize, DataTypes);
 const MoodCheckin = require('./MoodCheckin')(sequelize, DataTypes);
+const Department = require('./Department')(sequelize, DataTypes);
+const DepartmentMember = require('./DepartmentMember')(sequelize, DataTypes);
+const ChatGroup = require('./ChatGroup')(sequelize, DataTypes);
+const ChatGroupMember = require('./ChatGroupMember')(sequelize, DataTypes);
+const ChatMessage = require('./ChatMessage')(sequelize, DataTypes);
+const ClassroomThread = require('./ClassroomThread')(sequelize, DataTypes);
+const ThreadReply = require('./ThreadReply')(sequelize, DataTypes);
+const AchievementEvent = require('./AchievementEvent')(sequelize, DataTypes);
+
 // Add to associations: School.hasMany(SchoolCalendar)
 
 // --- Associations ---
@@ -227,6 +236,45 @@ HomeTaskAssignment.belongsTo(HomeTask, { foreignKey: 'taskId' });
 Student.hasMany(HomeTaskAssignment, { foreignKey: 'studentId' });
 HomeTask.hasMany(HomeTaskAssignment, { foreignKey: 'taskId' });
 
+
+// V9 Chat, Department, Thread, Achievement associations
+Department.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
+School.hasMany(Department, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
+DepartmentMember.belongsTo(Department, { foreignKey: 'departmentId' });
+Department.hasMany(DepartmentMember, { foreignKey: 'departmentId' });
+DepartmentMember.belongsTo(Teacher, { foreignKey: 'teacherId' });
+Teacher.hasMany(DepartmentMember, { foreignKey: 'teacherId' });
+
+ChatGroup.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
+School.hasMany(ChatGroup, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
+ChatGroup.belongsTo(Department, { foreignKey: 'departmentId' });
+Department.hasMany(ChatGroup, { foreignKey: 'departmentId' });
+ChatGroup.belongsTo(Class, { foreignKey: 'classId' });
+Class.hasMany(ChatGroup, { foreignKey: 'classId' });
+ChatGroupMember.belongsTo(ChatGroup, { foreignKey: 'groupId' });
+ChatGroup.hasMany(ChatGroupMember, { foreignKey: 'groupId' });
+ChatGroupMember.belongsTo(User, { foreignKey: 'userId' });
+User.hasMany(ChatGroupMember, { foreignKey: 'userId' });
+
+ChatMessage.belongsTo(User, { as: 'Sender', foreignKey: 'senderId' });
+ChatMessage.belongsTo(User, { as: 'Receiver', foreignKey: 'receiverId' });
+ChatMessage.belongsTo(ChatGroup, { foreignKey: 'groupId' });
+User.hasMany(ChatMessage, { as: 'V9SentChatMessages', foreignKey: 'senderId' });
+ChatGroup.hasMany(ChatMessage, { foreignKey: 'groupId' });
+
+ClassroomThread.belongsTo(User, { as: 'Creator', foreignKey: 'createdBy' });
+ClassroomThread.belongsTo(Teacher, { foreignKey: 'teacherId' });
+ClassroomThread.belongsTo(Class, { foreignKey: 'classId' });
+ClassroomThread.hasMany(ThreadReply, { foreignKey: 'threadId' });
+ThreadReply.belongsTo(ClassroomThread, { foreignKey: 'threadId' });
+ThreadReply.belongsTo(User, { as: 'Author', foreignKey: 'userId' });
+ThreadReply.belongsTo(ThreadReply, { as: 'ParentReply', foreignKey: 'parentReplyId' });
+
+AchievementEvent.belongsTo(User, { as: 'AwardedByUser', foreignKey: 'awardedBy' });
+AchievementEvent.belongsTo(User, { as: 'RecipientUser', foreignKey: 'userId' });
+AchievementEvent.belongsTo(Student, { foreignKey: 'studentId' });
+Student.hasMany(AchievementEvent, { foreignKey: 'studentId' });
+
 // Consent models associations
 UserConsent.belongsTo(User, { foreignKey: 'userId' });
 User.hasOne(UserConsent, { foreignKey: 'userId' });
@@ -275,6 +323,14 @@ module.exports = {
     ConductLog,
     ResourceViews,
     MoodCheckin,
-    Timetable
+    Timetable,
+    Department,
+    DepartmentMember,
+    ChatGroup,
+    ChatGroupMember,
+    ChatMessage,
+    ClassroomThread,
+    ThreadReply,
+    AchievementEvent
     
 };

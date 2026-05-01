@@ -35,6 +35,7 @@ const calendarRoutes = require('./routes/calendarRoutes');
 const timetableRoutes = require('./routes/timetableRoutes');
 const homeworkRoutes = require('./routes/homeworkRoutes');
 const gamificationRoutes = require('./routes/gamificationRoutes');
+const chatV9Routes = require('./routes/chatV9Routes');
 
 const app = express();
 
@@ -123,6 +124,7 @@ app.use('/api/calendar', calendarRoutes);
 app.use('/api/timetable', timetableRoutes);
 app.use('/api/homework', homeworkRoutes);
 app.use('/api/gamification', gamificationRoutes);
+app.use('/api/chat-v9', chatV9Routes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {
