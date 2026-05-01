@@ -377,3 +377,62 @@ exports.myAchievements = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+
+exports.updateDepartment = async (req, res) => {
+  try {
+    if (!canManageSchool(req)) return res.status(403).json({ success: false, message: 'Only admin can update departments' });
+    const departmentId = Number(req.params.departmentId);
+    const { name, description, headTeacherId = null, teacherIds = [] } = req.body;
+
+    const department = await Department.findOne({ where: { id: departmentId, schoolCode: schoolCodeOf(req) } });
+    if (!department) return res.status(404).json({ success: false, message: 'Department not found' });
+
+    if (name) department.name = name;
+    if (description !== undefined) department.description = description;
+    department.headTeacherId = headTeacherId || null;
+    await department.save();
+
+    if (Array.isArray(teacherIds)) {
+      await DepartmentMember.destroy({ where: { departmentId } });
+      const group = await ChatGroup.findOne({ where: { departmentId: department.id, type: 'department' } });
+
+      if (group) {
+        group.name = `${department.name} Department`;
+        group.description = department.description || `${department.name} department group`;
+        await group.save();
+        await ChatGroupMember.destroy({ where: { groupId: group.id } });
+      }
+
+      for (const teacherId of teacherIds) {
+        const teacher = await Teacher.findByPk(teacherId);
+        if (!teacher) continue;
+        const isHead = Number(teacherId) === Number(headTeacherId);
+        await DepartmentMember.create({ departmentId, teacherId, role: isHead ? 'head' : 'member' });
+        if (group) await ChatGroupMember.create({ groupId: group.id, userId: teacher.userId, role: isHead ? 'admin' : 'member' });
+      }
+    }
+
+    res.json({ success: true, data: department });
+  } catch (error) {
+    console.error('updateDepartment error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteDepartment = async (req, res) => {
+  try {
+    if (!canManageSchool(req)) return res.status(403).json({ success: false, message: 'Only admin can delete departments' });
+    const departmentId = Number(req.params.departmentId);
+    const department = await Department.findOne({ where: { id: departmentId, schoolCode: schoolCodeOf(req) } });
+    if (!department) return res.status(404).json({ success: false, message: 'Department not found' });
+    department.isActive = false;
+    await department.save();
+
+    await ChatGroup.update({ isActive: false }, { where: { departmentId: department.id, type: 'department' } });
+    res.json({ success: true, message: 'Department archived' });
+  } catch (error) {
+    console.error('deleteDepartment error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

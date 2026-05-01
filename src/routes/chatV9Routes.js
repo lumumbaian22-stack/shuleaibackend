@@ -7,6 +7,8 @@ router.use(protect);
 
 router.get('/departments', chat.listDepartments);
 router.post('/departments', chat.createDepartment);
+router.put('/departments/:departmentId', chat.updateDepartment);
+router.delete('/departments/:departmentId', chat.deleteDepartment);
 
 router.get('/teachers', chat.listTeacherDirectory);
 
