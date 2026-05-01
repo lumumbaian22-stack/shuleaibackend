@@ -113,7 +113,19 @@ exports.listTeacherGroups = async (req, res) => {
       order: [[ChatGroup, 'updatedAt', 'DESC']]
     });
 
-    const groups = memberships.map(m => ({ ...m.ChatGroup.toJSON(), membershipRole: m.role, muted: m.muted }));
+    const groups = [];
+    for (const m of memberships) {
+      const group = { ...m.ChatGroup.toJSON(), membershipRole: m.role, muted: m.muted };
+      if (group.departmentId) {
+        const dept = await Department.findByPk(group.departmentId, {
+          include: [{ model: DepartmentMember, where: { role: 'head' }, required: false, include: [{ model: Teacher, include: [{ model: User, attributes: ['id','name','email','profileImage'] }] }] }]
+        });
+        group.departmentName = dept?.name || group.name;
+        group.headName = dept?.DepartmentMembers?.[0]?.Teacher?.User?.name || 'Not assigned';
+        group.headUserId = dept?.DepartmentMembers?.[0]?.Teacher?.User?.id || null;
+      }
+      groups.push(group);
+    }
     res.json({ success: true, data: groups });
   } catch (error) {
     console.error('listTeacherGroups error:', error);
@@ -433,6 +445,41 @@ exports.deleteDepartment = async (req, res) => {
     res.json({ success: true, message: 'Department archived' });
   } catch (error) {
     console.error('deleteDepartment error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+exports.getDepartmentGroup = async (req, res) => {
+  try {
+    if (!canManageSchool(req)) return res.status(403).json({ success: false, message: 'Only admin can view department groups' });
+    const departmentId = Number(req.params.departmentId);
+    const department = await Department.findOne({ where: { id: departmentId, schoolCode: schoolCodeOf(req), isActive: true } });
+    if (!department) return res.status(404).json({ success: false, message: 'Department not found' });
+
+    const group = await ChatGroup.findOne({ where: { departmentId, schoolCode: schoolCodeOf(req), type: 'department', isActive: true } });
+    if (!group) return res.status(404).json({ success: false, message: 'Department group chat not found' });
+
+    const messages = await ChatMessage.findAll({
+      where: { schoolCode: schoolCodeOf(req), groupId: group.id },
+      include: [{ model: User, as: 'Sender', attributes: ['id','name','role','profileImage'] }],
+      order: [['createdAt', 'ASC']],
+      limit: 150
+    });
+
+    const members = await ChatGroupMember.findAll({
+      where: { groupId: group.id },
+      include: [{ model: User, attributes: ['id','name','role','profileImage','email'] }]
+    });
+
+    const head = await DepartmentMember.findOne({
+      where: { departmentId, role: 'head' },
+      include: [{ model: Teacher, include: [{ model: User, attributes: ['id','name','email','profileImage'] }] }]
+    });
+
+    res.json({ success: true, data: { department, group: { ...group.toJSON(), headName: head?.Teacher?.User?.name || 'Not assigned' }, members, messages } });
+  } catch (error) {
+    console.error('getDepartmentGroup error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

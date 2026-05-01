@@ -87,7 +87,7 @@ const authController = {
     try {
       const { 
         name, email, password, phone, 
-        schoolName, schoolLevel, curriculum, 
+        schoolName, schoolLevel, curriculum, schoolType,
         address, contact 
       } = req.body;
 
@@ -123,6 +123,8 @@ const authController = {
           autoApproveDomains: [],
           schoolLevel: schoolLevel || 'secondary',
           curriculum: curriculum || 'cbc',
+          schoolType: schoolType || 'day',
+          boarding: { type: schoolType || 'day', hasBoarding: ['boarding','day_boarding'].includes(schoolType || 'day') },
           dutyManagement: {
             enabled: true,
             reminderHours: 24,
@@ -168,7 +170,7 @@ const authController = {
           severity: 'info',
           title: 'New School Registration',
           message: `${schoolName} (${school.shortCode}) pending approval`,
-          data: { schoolId: school.id, adminId: user.id }
+          data: { schoolId: school.id, adminId: user.id, schoolType: schoolType || 'day' }
         });
       }
 

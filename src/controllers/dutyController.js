@@ -49,6 +49,89 @@ function generateRecommendations(teacherStats, departmentStats) {
   return recommendations;
 }
 
+
+// ============ V9.3 SMART DUTY VERIFICATION HELPERS ============
+function toRad(value) {
+  return (Number(value) * Math.PI) / 180;
+}
+
+function distanceMeters(aLat, aLng, bLat, bLng) {
+  if ([aLat, aLng, bLat, bLng].some(v => v === undefined || v === null || Number.isNaN(Number(v)))) return null;
+  const R = 6371000;
+  const dLat = toRad(Number(bLat) - Number(aLat));
+  const dLng = toRad(Number(bLng) - Number(aLng));
+  const lat1 = toRad(Number(aLat));
+  const lat2 = toRad(Number(bLat));
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(h)));
+}
+
+function getDutyVerificationSettings(school) {
+  const duty = school?.settings?.dutyManagement || {};
+  const geo = duty.geoFence || {};
+  const location = geo.center || duty.schoolLocation || school.address?.location || {};
+  return {
+    enabled: geo.enabled !== false,
+    requireGps: geo.requireGps !== false,
+    requireQr: geo.requireQr === true,
+    radiusMeters: Number(geo.radiusMeters || duty.allowedRadiusMeters || 150),
+    schoolLat: Number(location.lat || location.latitude || process.env.SCHOOL_LATITUDE || 0) || null,
+    schoolLng: Number(location.lng || location.longitude || process.env.SCHOOL_LONGITUDE || 0) || null,
+    reportingTime: duty.reportingTime || '07:00',
+    dutyGraceMinutes: Number(duty.dutyGraceMinutes || duty.checkInWindow || 15),
+    studentReportingTime: duty.studentReportingTime || '07:30',
+    studentGraceMinutes: Number(duty.studentGraceMinutes || 10)
+  };
+}
+
+function expectedDutyStart(duty, date) {
+  const raw = duty.startTime || duty.timeStart || duty.time || duty.slotStart || null;
+  const time = raw && String(raw).match(/\d{1,2}:\d{2}/) ? String(raw).match(/\d{1,2}:\d{2}/)[0] : null;
+  return moment(`${date} ${time || '07:00'}`, 'YYYY-MM-DD HH:mm');
+}
+
+function checkLateStatus(expectedMoment, actualMoment, graceMinutes) {
+  const lateAfter = expectedMoment.clone().add(Number(graceMinutes || 0), 'minutes');
+  const lateMinutes = Math.max(0, actualMoment.diff(lateAfter, 'minutes'));
+  return {
+    expectedAt: expectedMoment.toISOString(),
+    graceUntil: lateAfter.toISOString(),
+    isLate: lateMinutes > 0,
+    lateMinutes
+  };
+}
+
+function buildDutyQrToken(schoolCode, date, dutyIdOrType) {
+  return `SHULEAI-DUTY:${schoolCode}:${date}:${dutyIdOrType || 'ALL'}`;
+}
+
+function verifyQrToken(token, schoolCode, date, dutyIdOrType) {
+  if (!token) return false;
+  const accepted = [
+    buildDutyQrToken(schoolCode, date, dutyIdOrType),
+    buildDutyQrToken(schoolCode, date, 'ALL')
+  ];
+  return accepted.includes(String(token).trim());
+}
+
+function verifyGeo(settings, gps) {
+  if (!settings.requireGps) return { accepted: true, distanceMeters: null, reason: 'GPS not required' };
+  if (!gps || gps.latitude === undefined || gps.longitude === undefined) {
+    return { accepted: false, distanceMeters: null, reason: 'GPS location is required' };
+  }
+  if (!settings.schoolLat || !settings.schoolLng) {
+    return { accepted: true, distanceMeters: null, reason: 'School GPS not configured - accepted but flagged', flagged: true };
+  }
+  const dist = distanceMeters(settings.schoolLat, settings.schoolLng, gps.latitude, gps.longitude);
+  const accepted = dist !== null && dist <= settings.radiusMeters;
+  return {
+    accepted,
+    distanceMeters: dist,
+    radiusMeters: settings.radiusMeters,
+    reason: accepted ? 'Inside school geofence' : `Outside school geofence (${dist}m away)`
+  };
+}
+
 // ============ MAIN CONTROLLER FUNCTIONS ============
 
 exports.getDutyStats = async (req, res) => {
@@ -581,6 +664,245 @@ exports.updateTeacherPoints = async (req, res) => {
     await teacher.save();
     res.json({ success: true, data: { points: stats.points } });
   } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+// ============ V9.3 SMART DUTY VERIFICATION ENDPOINTS ============
+exports.getDutyVerificationConfig = async (req, res) => {
+  try {
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    const settings = getDutyVerificationSettings(school);
+    const today = moment().format('YYYY-MM-DD');
+    res.json({
+      success: true,
+      data: {
+        settings,
+        todayQrToken: buildDutyQrToken(school.schoolId, today, 'ALL'),
+        serverTime: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('getDutyVerificationConfig error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateDutyVerificationConfig = async (req, res) => {
+  try {
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+
+    const current = school.settings || {};
+    const duty = current.dutyManagement || {};
+    const geoFence = duty.geoFence || {};
+
+    const nextGeoFence = {
+      ...geoFence,
+      enabled: req.body.enabled !== undefined ? !!req.body.enabled : geoFence.enabled !== false,
+      requireGps: req.body.requireGps !== undefined ? !!req.body.requireGps : geoFence.requireGps !== false,
+      requireQr: req.body.requireQr !== undefined ? !!req.body.requireQr : geoFence.requireQr === true,
+      radiusMeters: Number(req.body.radiusMeters || geoFence.radiusMeters || 150),
+      center: {
+        lat: Number(req.body.schoolLat ?? geoFence.center?.lat ?? 0),
+        lng: Number(req.body.schoolLng ?? geoFence.center?.lng ?? 0)
+      }
+    };
+
+    school.settings = {
+      ...current,
+      dutyManagement: {
+        ...duty,
+        reportingTime: req.body.reportingTime || duty.reportingTime || '07:00',
+        dutyGraceMinutes: Number(req.body.dutyGraceMinutes || duty.dutyGraceMinutes || duty.checkInWindow || 15),
+        studentReportingTime: req.body.studentReportingTime || duty.studentReportingTime || '07:30',
+        studentGraceMinutes: Number(req.body.studentGraceMinutes || duty.studentGraceMinutes || 10),
+        geoFence: nextGeoFence
+      }
+    };
+    await school.save();
+
+    res.json({ success: true, data: getDutyVerificationSettings(school), message: 'Duty verification settings updated' });
+  } catch (error) {
+    console.error('updateDutyVerificationConfig error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.verifiedCheckInDuty = async (req, res) => {
+  try {
+    const { gps, qrToken, notes, deviceInfo } = req.body;
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+
+    const today = moment().format('YYYY-MM-DD');
+    const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
+    if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
+
+    const dutyIndex = roster.duties.findIndex(d => Number(d.teacherId) === Number(teacher.id));
+    if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
+
+    const duty = roster.duties[dutyIndex];
+    const settings = getDutyVerificationSettings(school);
+    const geo = verifyGeo(settings, gps);
+    const qrOk = !settings.requireQr || verifyQrToken(qrToken, school.schoolId, today, duty.id || duty.type || duty.area);
+    const now = moment();
+    const late = checkLateStatus(expectedDutyStart(duty, today), now, settings.dutyGraceMinutes);
+    const accepted = geo.accepted && qrOk;
+
+    const verification = {
+      method: 'gps_qr_timestamp',
+      accepted,
+      status: accepted ? (late.isLate ? 'late_verified' : 'verified') : 'rejected',
+      checkedAt: new Date().toISOString(),
+      serverTimestamp: new Date().toISOString(),
+      gps: gps || null,
+      geo,
+      qr: { required: settings.requireQr, accepted: qrOk, tokenUsed: qrToken || null },
+      late,
+      notes: notes || '',
+      deviceInfo: deviceInfo || {},
+      checkedBy: req.user.id
+    };
+
+    duty.checkedIn = verification;
+    duty.status = accepted ? (late.isLate ? 'late' : 'checked_in') : 'rejected';
+    duty.verification = verification;
+    roster.duties[dutyIndex] = duty;
+    roster.changed('duties', true);
+    await roster.save();
+
+    if (!accepted) {
+      return res.status(400).json({ success: false, message: verification.geo.reason || 'Duty check-in rejected', data: verification });
+    }
+
+    res.json({ success: true, message: late.isLate ? `Checked in late by ${late.lateMinutes} min` : 'Verified check-in successful', data: verification });
+  } catch (error) {
+    console.error('verifiedCheckInDuty error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.verifiedCheckOutDuty = async (req, res) => {
+  try {
+    const { gps, qrToken, notes, deviceInfo } = req.body;
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+
+    const today = moment().format('YYYY-MM-DD');
+    const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
+    if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
+
+    const dutyIndex = roster.duties.findIndex(d => Number(d.teacherId) === Number(teacher.id));
+    if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
+
+    const duty = roster.duties[dutyIndex];
+    const settings = getDutyVerificationSettings(school);
+    const geo = verifyGeo(settings, gps);
+    const qrOk = !settings.requireQr || verifyQrToken(qrToken, school.schoolId, today, duty.id || duty.type || duty.area);
+    const accepted = geo.accepted && qrOk;
+
+    const verification = {
+      method: 'gps_qr_timestamp',
+      accepted,
+      status: accepted ? 'checked_out_verified' : 'checkout_rejected',
+      checkedOutAt: new Date().toISOString(),
+      serverTimestamp: new Date().toISOString(),
+      gps: gps || null,
+      geo,
+      qr: { required: settings.requireQr, accepted: qrOk, tokenUsed: qrToken || null },
+      notes: notes || '',
+      deviceInfo: deviceInfo || {},
+      checkedBy: req.user.id
+    };
+
+    duty.checkedOut = verification;
+    duty.status = accepted ? 'completed' : (duty.status || 'checked_in');
+    duty.checkOutVerification = verification;
+    roster.duties[dutyIndex] = duty;
+    roster.changed('duties', true);
+    await roster.save();
+
+    if (!accepted) {
+      return res.status(400).json({ success: false, message: verification.geo.reason || 'Duty check-out rejected', data: verification });
+    }
+
+    res.json({ success: true, message: 'Verified check-out successful', data: verification });
+  } catch (error) {
+    console.error('verifiedCheckOutDuty error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getDutyComplianceReport = async (req, res) => {
+  try {
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+
+    const date = req.query.date || moment().format('YYYY-MM-DD');
+    const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date } });
+    const duties = roster?.duties || [];
+
+    const summary = {
+      date,
+      total: duties.length,
+      verified: duties.filter(d => d.checkedIn?.accepted === true).length,
+      late: duties.filter(d => d.checkedIn?.late?.isLate || d.status === 'late').length,
+      rejected: duties.filter(d => d.checkedIn?.accepted === false || d.status === 'rejected').length,
+      notCheckedIn: duties.filter(d => !d.checkedIn).length,
+      outsideGeoFence: duties.filter(d => d.checkedIn?.geo?.accepted === false).length
+    };
+
+    res.json({ success: true, data: { summary, duties } });
+  } catch (error) {
+    console.error('getDutyComplianceReport error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getLateArrivalReport = async (req, res) => {
+  try {
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+
+    const date = req.query.date || moment().format('YYYY-MM-DD');
+    const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date } });
+    const duties = roster?.duties || [];
+
+    const lateTeachers = duties
+      .filter(d => d.checkedIn?.late?.isLate || d.status === 'late')
+      .map(d => ({
+        teacherId: d.teacherId,
+        teacherName: d.teacherName,
+        duty: d.area || d.type,
+        checkedAt: d.checkedIn?.checkedAt,
+        lateMinutes: d.checkedIn?.late?.lateMinutes || 0,
+        geo: d.checkedIn?.geo || null
+      }));
+
+    // Student late arrivals are exposed as a structure now.
+    // It is ready for gate scan/manual attendance integration without breaking existing attendance.
+    const lateStudents = [];
+
+    res.json({
+      success: true,
+      data: {
+        date,
+        lateTeachers,
+        lateStudents,
+        counts: { teachers: lateTeachers.length, students: lateStudents.length }
+      }
+    });
+  } catch (error) {
+    console.error('getLateArrivalReport error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

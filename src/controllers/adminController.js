@@ -48,19 +48,41 @@ exports.getAllTeachers = async (req, res) => {
 exports.updateTeacher = async (req, res) => {
   try {
     const { teacherId } = req.params;
-    const { name, email, phone, subjects, department, classTeacher, qualification } = req.body;
+    const {
+      name, email, phone, subjects, department, classTeacher, qualification,
+      employeeId, specialization, approvalStatus, classId, dateJoined,
+      gender, dateOfBirth, location, notes, tscNumber, roles
+    } = req.body;
     
     const teacher = await Teacher.findByPk(teacherId, { include: [{ model: User }] });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
     
     if (name || email || phone) await teacher.User.update({ name, email, phone });
     
-    await teacher.update({ 
-      subjects: subjects ? (Array.isArray(subjects) ? subjects : subjects.split(',').map(s => s.trim())) : teacher.subjects,
-      department: department || teacher.department,
-      classTeacher: classTeacher || teacher.classTeacher,
-      qualification: qualification || teacher.qualification
-    });
+    const teacherFields = {
+      subjects: subjects ? (Array.isArray(subjects) ? subjects : String(subjects).split(',').map(s => s.trim()).filter(Boolean)) : teacher.subjects,
+      department: department !== undefined ? department : teacher.department,
+      classTeacher: classTeacher !== undefined ? classTeacher : teacher.classTeacher,
+      qualification: qualification !== undefined ? qualification : teacher.qualification,
+      specialization: specialization !== undefined ? specialization : teacher.specialization,
+      approvalStatus: approvalStatus !== undefined ? approvalStatus : teacher.approvalStatus,
+      classId: classId !== undefined && classId !== '' ? classId : teacher.classId,
+      dateJoined: dateJoined !== undefined && dateJoined !== '' ? dateJoined : teacher.dateJoined
+    };
+    if (employeeId !== undefined && employeeId !== '') teacherFields.employeeId = employeeId;
+    const existingDuties = teacher.duties && typeof teacher.duties === 'object' ? teacher.duties : {};
+    teacherFields.duties = {
+      ...(Array.isArray(existingDuties) ? { list: existingDuties } : existingDuties),
+      profile: {
+        gender: gender || existingDuties?.profile?.gender || null,
+        dateOfBirth: dateOfBirth || existingDuties?.profile?.dateOfBirth || null,
+        location: location || existingDuties?.profile?.location || null,
+        notes: notes || existingDuties?.profile?.notes || null,
+        tscNumber: tscNumber || existingDuties?.profile?.tscNumber || null,
+        roles: roles || existingDuties?.profile?.roles || []
+      }
+    };
+    await teacher.update(teacherFields);
     
     res.json({ success: true, message: 'Teacher updated successfully', data: teacher });
   } catch (error) {
@@ -125,7 +147,13 @@ exports.getStudentDetails = async (req, res) => {
 exports.updateStudent = async (req, res) => {
   try {
     const { studentId } = req.params;
-    const { name, email, phone, grade, status, isPrefect } = req.body;
+    const {
+      name, email, phone, grade, status, isPrefect,
+      assessmentNumber, nemisNumber, location,
+      parentName, parentEmail, parentPhone, parentRelationship,
+      dateOfBirth, gender, academicStatus, house, transport, stream,
+      medicalNotes, disciplineNotes, clubs, schoolType
+    } = req.body;
 
     const student = await Student.findByPk(studentId, { include: [{ model: User }] });
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
@@ -144,6 +172,27 @@ exports.updateStudent = async (req, res) => {
     if (grade !== undefined) studentFields.grade = grade;
     if (status !== undefined) studentFields.status = status;
     if (isPrefect !== undefined) studentFields.isPrefect = isPrefect;
+    if (assessmentNumber !== undefined) studentFields.assessmentNumber = assessmentNumber;
+    if (nemisNumber !== undefined) studentFields.nemisNumber = nemisNumber;
+    if (location !== undefined) studentFields.location = location;
+    if (parentName !== undefined) studentFields.parentName = parentName;
+    if (parentEmail !== undefined) studentFields.parentEmail = parentEmail;
+    if (parentPhone !== undefined) studentFields.parentPhone = parentPhone;
+    if (parentRelationship !== undefined) studentFields.parentRelationship = parentRelationship;
+    if (dateOfBirth !== undefined && dateOfBirth !== '') studentFields.dateOfBirth = dateOfBirth;
+    if (gender !== undefined && gender !== '') studentFields.gender = gender;
+    if (academicStatus !== undefined && academicStatus !== '') studentFields.academicStatus = academicStatus;
+    const existingPreferences = student.preferences && typeof student.preferences === 'object' ? student.preferences : {};
+    studentFields.preferences = {
+      ...existingPreferences,
+      schoolType: schoolType || existingPreferences.schoolType || null,
+      house: house || existingPreferences.house || null,
+      transport: transport || existingPreferences.transport || null,
+      stream: stream || existingPreferences.stream || null,
+      medicalNotes: medicalNotes || existingPreferences.medicalNotes || null,
+      disciplineNotes: disciplineNotes || existingPreferences.disciplineNotes || null,
+      clubs: Array.isArray(clubs) ? clubs : (clubs ? String(clubs).split(',').map(c => c.trim()).filter(Boolean) : existingPreferences.clubs || [])
+    };
 
     if (Object.keys(studentFields).length > 0) {
       await student.update(studentFields);
