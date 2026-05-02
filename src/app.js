@@ -36,6 +36,7 @@ const timetableRoutes = require('./routes/timetableRoutes');
 const homeworkRoutes = require('./routes/homeworkRoutes');
 const gamificationRoutes = require('./routes/gamificationRoutes');
 const chatV9Routes = require('./routes/chatV9Routes');
+const paymentRoutes = require('./routes/paymentRoutes');
 
 const app = express();
 
@@ -125,6 +126,7 @@ app.use('/api/timetable', timetableRoutes);
 app.use('/api/homework', homeworkRoutes);
 app.use('/api/gamification', gamificationRoutes);
 app.use('/api/chat-v9', chatV9Routes);
+app.use('/api/payments', paymentRoutes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {
