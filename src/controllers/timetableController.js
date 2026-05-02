@@ -1,4 +1,4 @@
-const { Timetable, Class, Teacher, User } = require('../models');
+const { Timetable, Class, Teacher, User, Student, Parent } = require('../models');
 const moment = require('moment');
 
 const DAYS = ['monday','tuesday','wednesday','thursday','friday'];
@@ -37,3 +37,35 @@ exports.publish = async (req,res) => { try { await Timetable.update({ isPublishe
 exports.getForClass = async (req,res) => { try { const tt=await Timetable.findOne({ where:{ schoolId:req.user.schoolCode, weekStartDate:req.query.weekStart||moment().startOf('isoWeek').format('YYYY-MM-DD') } }); if(!tt) return res.json({ success:true, data:[] }); const found=(tt.classes||[]).find(c=>Number(c.classId)===Number(req.params.classId)); res.json({ success:true, data:found?found.timetable:[] }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
 exports.getForTeacher = async (req,res) => { try { const tt=await Timetable.findOne({ where:{ schoolId:req.user.schoolCode, weekStartDate:req.query.weekStart||moment().startOf('isoWeek').format('YYYY-MM-DD') } }); if(!tt) return res.json({ success:true, data:[] }); const data=(tt.slots||[]).map(d=>({ day:d.day, periods:(d.periods||[]).map(p=>({ ...p, classes:(p.classes||[]).filter(c=>Number(c.teacherId)===Number(req.params.teacherId)) })).filter(p=>p.break||p.classes.length) })).filter(d=>d.periods.length); res.json({ success:true, data }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
 exports.getByWeek = async (req,res) => { try { const where={ schoolId:req.user.schoolCode, weekStartDate:req.query.weekStartDate||moment().startOf('isoWeek').format('YYYY-MM-DD') }; if(req.query.term) where.term=req.query.term; if(req.query.year) where.year=Number(req.query.year); const tt=await Timetable.findOne({ where, order:[['updatedAt','DESC']] }); res.json({ success:true, data:tt||null }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
+
+
+function v12ResolveClassForStudent(student, classes){
+  if(!student || !classes) return null;
+  const g=String(student.grade||'').toLowerCase().trim();
+  return classes.find(c=>String(c.id)===String(student.classId)) || classes.find(c=>String(c.name||'').toLowerCase()===g) || classes.find(c=>String(c.grade||'').toLowerCase()===g) || classes.find(c=>g && String(c.name||'').toLowerCase().includes(g));
+}
+function v12FindClassBlock(tt, cls){
+  if(!tt || !cls) return null;
+  return (tt.classes||[]).find(c=>String(c.classId)===String(cls.id) || String(c.className||'').toLowerCase()===String(cls.name||'').toLowerCase());
+}
+function v12StudyUpdates(slots){
+  const now=new Date(); const day=now.toLocaleDateString('en-US',{weekday:'long'}); const time=now.toTimeString().slice(0,5);
+  return (slots||[]).filter(s=>String(s.day||'').toLowerCase()===day.toLowerCase() && s.subject && !/break|lunch|free/i.test(s.subject) && String(s.endTime||'00:00')<=time).slice(-8).map(s=>({subject:s.subject,teacherName:s.teacherName||s.teacher||'Teacher',room:s.room||'',startTime:s.startTime,endTime:s.endTime}));
+}
+exports.getForStudentMe = async (req,res)=>{ try{
+  const student=await Student.findOne({where:{userId:req.user.id},include:[{model:User,attributes:['id','name','email','phone']}]});
+  if(!student) return res.status(404).json({success:false,message:'Student profile not found'});
+  const classes=await Class.findAll({where:{schoolCode:req.user.schoolCode,isActive:true}}); const cls=v12ResolveClassForStudent(student,classes);
+  const week=req.query.weekStart||moment().startOf('isoWeek').format('YYYY-MM-DD'); const tt=await Timetable.findOne({where:{schoolId:req.user.schoolCode,weekStartDate:week}});
+  const block=v12FindClassBlock(tt,cls); const slots=block?block.timetable:[];
+  res.json({success:true,data:{student,classInfo:cls,timetable:slots,updates:v12StudyUpdates(slots),weekStart:week,published:!!tt?.isPublished}});
+}catch(error){res.status(500).json({success:false,message:error.message});}};
+exports.getForParentChild = async (req,res)=>{ try{
+  const parent=await Parent.findOne({where:{userId:req.user.id}}); if(!parent) return res.status(404).json({success:false,message:'Parent profile not found'});
+  const student=await Student.findOne({where:{id:req.params.studentId},include:[{model:User,attributes:['id','name','email','phone']} ]}); if(!student) return res.status(404).json({success:false,message:'Student not found'});
+  if(parent.hasStudent){ const ok=await parent.hasStudent(student); if(!ok) return res.status(403).json({success:false,message:'Child not linked to this parent'}); }
+  const classes=await Class.findAll({where:{schoolCode:req.user.schoolCode,isActive:true}}); const cls=v12ResolveClassForStudent(student,classes);
+  const week=req.query.weekStart||moment().startOf('isoWeek').format('YYYY-MM-DD'); const tt=await Timetable.findOne({where:{schoolId:req.user.schoolCode,weekStartDate:week}});
+  const block=v12FindClassBlock(tt,cls); const slots=block?block.timetable:[];
+  res.json({success:true,data:{child:student,classInfo:cls,timetable:slots,updates:v12StudyUpdates(slots),weekStart:week,published:!!tt?.isPublished}});
+}catch(error){res.status(500).json({success:false,message:error.message});}};

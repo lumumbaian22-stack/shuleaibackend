@@ -11,6 +11,8 @@ router.get('/classes', protect, authorize('admin'), timetableCtrl.getClasses);
 router.post('/generate', protect, authorize('admin'), timetableCtrl.generate);
 router.put('/:id', protect, authorize('admin'), timetableCtrl.manualUpdate);
 router.post('/:id/publish', protect, authorize('admin'), timetableCtrl.publish);
+router.get('/student/me', protect, authorize('student'), timetableCtrl.getForStudentMe);
+router.get('/parent/child/:studentId', protect, authorize('parent'), timetableCtrl.getForParentChild);
 router.get('/class/:classId', protect, timetableCtrl.getForClass);
 router.get('/teacher/:teacherId', protect, timetableCtrl.getForTeacher);
 

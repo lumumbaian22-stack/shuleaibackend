@@ -925,25 +925,26 @@ exports.getClassStudents = async (req, res) => {
     const { classId } = req.params;
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
-    
-    const classItem = await Class.findOne({
-      where: { id: classId, schoolCode: req.user.schoolCode, isActive: true }
-    });
+    const classItem = await Class.findOne({ where: { id: classId, schoolCode: req.user.schoolCode, isActive: true } });
     if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-    
-    const isClassTeacher = classItem.teacherId === teacher.id;
-    const isSubjectTeacher = classItem.subjectTeachers?.some(st => st.teacherId === teacher.id);
-    if (!isClassTeacher && !isSubjectTeacher) {
-      return res.status(403).json({ success: false, message: 'You do not have access to this class' });
-    }
-    
-    const students = await Student.findAll({
-      where: { grade: classItem.name },
-      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }],  // FIXED
+    const subjectTeachers = Array.isArray(classItem.subjectTeachers) ? classItem.subjectTeachers : [];
+    const isClassTeacher = String(classItem.teacherId) === String(teacher.id) || String(teacher.classTeacher||'').toLowerCase() === String(classItem.name||'').toLowerCase();
+    const isSubjectTeacher = subjectTeachers.some(st => String(st.teacherId) === String(teacher.id));
+    if (!isClassTeacher && !isSubjectTeacher) return res.status(403).json({ success: false, message: 'You do not have access to this class' });
+    const names = [...new Set([classItem.name, classItem.grade, `${classItem.grade} ${classItem.stream||''}`.trim()].filter(Boolean))];
+    let students = await Student.findAll({
+      where: { grade: { [Op.in]: names } },
+      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }],
       order: [['createdAt', 'ASC']]
     });
-    
-    res.json({ success: true, data: students });
+    if (!students.length && classItem.grade) {
+      students = await Student.findAll({
+        where: { grade: { [Op.iLike]: `%${classItem.grade}%` } },
+        include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }],
+        order: [['createdAt', 'ASC']]
+      });
+    }
+    res.json({ success: true, data: students, meta: { className: classItem.name, grade: classItem.grade, stream: classItem.stream, matchedBy: students.length ? 'grade/name fallback' : 'none' } });
   } catch (error) {
     console.error('Get class students error:', error);
     res.status(500).json({ success: false, message: error.message });
