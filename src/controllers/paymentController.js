@@ -1,6 +1,5 @@
 const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest } = require('../models');
 const daraja = require('../services/darajaService');
-const { applyPaymentConfirmation } = require('../services/subscriptionService');
 
 function ref(prefix){ return `${prefix}-${Date.now()}-${Math.floor(Math.random()*10000)}`; }
 function cleanAmount(v, fallback=1){ const n = Math.round(Number(v || fallback)); return Math.max(1, n); }
@@ -107,18 +106,9 @@ exports.adminNameChangePaymentSTK = async (req, res) => {
 
 exports.genericPlatformSTK = async (req, res) => {
   try {
-    const { phone, amount, accountReference='SHULEAI', description='Shule AI payment', metadata={}, plan='monthly' } = req.body;
-    let payment = null;
-    const parent = req.user.role === 'parent' ? await Parent.findOne({ where:{ userId:req.user.id } }) : null;
-    const student = metadata.studentId ? await Student.findByPk(metadata.studentId) : null;
-    payment = await Payment.create({
-      studentId: student?.id || metadata.studentId || null,
-      parentId: parent?.id || metadata.parentId || null,
-      amount: cleanAmount(amount), method:'mpesa', reference:ref('PLAT'), plan:['basic','premium','ultimate'].includes(metadata.parentPlan)?metadata.parentPlan:'basic', status:'pending', schoolCode:req.user.schoolCode || metadata.schoolCode || 'PLATFORM', paymentType:'other', currency:'KES', paymentGateway:'daraja', metadata:{ ...metadata, plan, schoolSubscription: metadata.schoolSubscription === true || req.user.role === 'admin', destinationType:'PLATFORM', userId:req.user.id, role:req.user.role, schoolCode:req.user.schoolCode }
-    });
-    const stk = await daraja.initiateSTKPush({ phone, amount: payment.amount, accountReference, transactionDesc: description, metadata:{ ...metadata, paymentId:payment.id, reference:payment.reference, userId:req.user.id, role:req.user.role, schoolCode:req.user.schoolCode } });
-    await payment.update({ transactionId:stk.CheckoutRequestID || payment.transactionId, gatewayResponse:stk, metadata:{ ...payment.metadata, merchantRequestId:stk.MerchantRequestID, checkoutRequestId:stk.CheckoutRequestID } });
-    res.json({ success:true, message:'M-PESA prompt sent.', data:{ payment:publicPayment(payment), checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
+    const { phone, amount, accountReference='SHULEAI', description='Shule AI payment', metadata={} } = req.body;
+    const stk = await daraja.initiateSTKPush({ phone, amount: cleanAmount(amount), accountReference, transactionDesc: description, metadata:{ ...metadata, userId:req.user.id, role:req.user.role, schoolCode:req.user.schoolCode } });
+    res.json({ success:true, message:'M-PESA prompt sent.', data:{ checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
 
@@ -150,8 +140,9 @@ exports.darajaCallback = async (req, res) => {
           await fee.update({ paidAmount, status, payments });
         }
       }
-      if (success) {
-        await applyPaymentConfirmation(payment);
+      if (success && payment.paymentType === 'subscription') {
+        const student = await Student.findByPk(payment.studentId);
+        if (student) await student.upgradeSubscription(payment.plan, payment.amount);
       }
     }
     res.json({ ResultCode: 0, ResultDesc: 'Accepted' });

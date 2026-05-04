@@ -2,60 +2,56 @@ const { Sequelize } = require('sequelize');
 require('dotenv').config();
 
 const isProduction = process.env.NODE_ENV === 'production';
+const shouldUseSsl = process.env.DB_SSL === 'false' ? false : true;
 
-console.log('🔧 Database Config Debug:');
-console.log('📊 NODE_ENV:', process.env.NODE_ENV);
-console.log('📊 DATABASE_URL exists:', !!process.env.DATABASE_URL);
-console.log('📊 isProduction:', isProduction);
-
-if (process.env.DATABASE_URL) {
-  console.log('📊 Using DATABASE_URL (first 20 chars):', process.env.DATABASE_URL.substring(0, 20) + '...');
-} else {
-  console.log('📊 Using DB_NAME:', process.env.DB_NAME);
-  console.log('📊 Using DB_USER:', process.env.DB_USER);
-  console.log('📊 Using DB_HOST:', process.env.DB_HOST);
+function intEnv(name, fallback) {
+  const value = parseInt(process.env[name], 10);
+  return Number.isFinite(value) ? value : fallback;
 }
 
-const sequelize = process.env.DATABASE_URL
-  ? new Sequelize(process.env.DATABASE_URL, {
-      dialect: 'postgres',
-      logging: !isProduction ? console.log : false,
-      dialectOptions: {
-        ssl: {
-          require: true,
-          rejectUnauthorized: false // This is critical for Render
-        }
-      }
-    })
-  : new Sequelize(
-      process.env.DB_NAME,
-      process.env.DB_USER,
-      process.env.DB_PASSWORD,
-      {
-        host: process.env.DB_HOST,
-        port: process.env.DB_PORT || 5432,
-        dialect: 'postgres',
-        logging: !isProduction ? console.log : false,
-        dialectOptions: {
-          ssl: {
-            require: true,
-            rejectUnauthorized: false // This is critical for Render
-          }
-        }
-      }
-    );
+const pool = {
+  max: intEnv('DB_POOL_MAX', isProduction ? 25 : 10),
+  min: intEnv('DB_POOL_MIN', isProduction ? 2 : 0),
+  acquire: intEnv('DB_POOL_ACQUIRE_MS', 30000),
+  idle: intEnv('DB_POOL_IDLE_MS', 10000),
+  evict: intEnv('DB_POOL_EVICT_MS', 10000)
+};
 
-// Test the connection immediately
-sequelize
-  .authenticate()
-  .then(() => {
-    console.log('✅ Database connection test SUCCESSFUL');
-  })
+const commonOptions = {
+  dialect: 'postgres',
+  logging: process.env.DB_LOGGING === 'true' ? console.log : false,
+  pool,
+  benchmark: process.env.DB_BENCHMARK === 'true',
+  retry: {
+    max: intEnv('DB_RETRY_MAX', 3),
+    match: [/SequelizeConnectionError/, /SequelizeConnectionRefusedError/, /SequelizeHostNotFoundError/, /SequelizeHostNotReachableError/, /SequelizeInvalidConnectionError/, /SequelizeConnectionTimedOutError/, /TimeoutError/]
+  },
+  dialectOptions: shouldUseSsl ? {
+    ssl: { require: true, rejectUnauthorized: false },
+    statement_timeout: intEnv('DB_STATEMENT_TIMEOUT_MS', 30000),
+    idle_in_transaction_session_timeout: intEnv('DB_IDLE_TX_TIMEOUT_MS', 30000)
+  } : {
+    statement_timeout: intEnv('DB_STATEMENT_TIMEOUT_MS', 30000),
+    idle_in_transaction_session_timeout: intEnv('DB_IDLE_TX_TIMEOUT_MS', 30000)
+  }
+};
+
+let sequelize;
+if (process.env.DATABASE_URL) {
+  sequelize = new Sequelize(process.env.DATABASE_URL, commonOptions);
+} else {
+  sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASSWORD, {
+    ...commonOptions,
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT || 5432
+  });
+}
+
+sequelize.authenticate()
+  .then(() => console.log(`✅ Database connection ready. Pool max=${pool.max}`))
   .catch(err => {
-    console.error('❌ Database connection test FAILED:');
-    console.error('Error name:', err.name);
-    console.error('Error message:', err.message);
-    console.error('Full error:', err);
+    console.error('❌ Database connection failed:', err.message);
+    if (!isProduction) console.error(err);
   });
 
 module.exports = sequelize;

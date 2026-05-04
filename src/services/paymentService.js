@@ -1,12 +1,86 @@
-const { Payment, Fee, Student, Parent } = require('../models');
-const daraja = require('./darajaService');
-const { applyPaymentConfirmation } = require('./subscriptionService');
+/**
+ * Payment Service (placeholder for integration with MPesa, Stripe, etc.)
+ * Currently only logs payments and updates database.
+ */
+
+const { Payment, Fee, Student } = require('../models');
 const { createAlert } = require('./notificationService');
-function cleanAmount(v){ const n=Math.round(Number(v||0)); if(!Number.isFinite(n)||n<1) throw new Error('A valid amount is required'); return n; }
-function ref(prefix='PAY'){ return `${prefix}-${Date.now()}-${Math.floor(Math.random()*100000)}`; }
-async function createPendingPayment(data){ return Payment.create({ studentId:data.studentId, parentId:data.parentId, feeId:data.feeId||null, amount:cleanAmount(data.amount), method:data.method||'mpesa', reference:data.reference||ref(data.prefix), plan:data.plan||'basic', status:'pending', schoolCode:data.schoolCode, paymentType:data.paymentType||'other', currency:data.currency||'KES', paymentGateway:data.paymentGateway||'daraja', metadata:data.metadata||{} }); }
-async function initiateDarajaPayment(payment,{phone,accountReference,transactionDesc}){ const stk=await daraja.initiateSTKPush({phone,amount:payment.amount,accountReference,transactionDesc,metadata:{paymentId:payment.id,reference:payment.reference}}); await payment.update({transactionId:stk.CheckoutRequestID||payment.transactionId,gatewayResponse:stk,metadata:{...(payment.metadata||{}),merchantRequestId:stk.MerchantRequestID,checkoutRequestId:stk.CheckoutRequestID,phone}}); return stk; }
-async function verifyPayment(reference){ const payment=await Payment.findOne({where:{reference}}); return { verified: !!payment && payment.status==='completed', payment }; }
-async function completePayment(payment, callbackData={}){ await payment.update({status:'completed',completedAt:new Date(),gatewayResponse:callbackData.raw||payment.gatewayResponse,metadata:{...(payment.metadata||{}),...callbackData}}); await applyPaymentConfirmation(payment); if(payment.feeId){ const fee=await Fee.findByPk(payment.feeId); if(fee){ const paidAmount=Number(fee.paidAmount||0)+Number(payment.amount||0); const status=paidAmount>=Number(fee.totalAmount||0)?'paid':'partial'; await fee.update({paidAmount,status}); } } return payment; }
-async function processPayment(paymentData){ const payment=await createPendingPayment(paymentData); if(paymentData.markCompleted===true) return completePayment(payment,{source:'manual'}); return payment; }
-module.exports={ cleanAmount, ref, createPendingPayment, initiateDarajaPayment, verifyPayment, completePayment, processPayment };
+
+/**
+ * Process a payment (mock implementation)
+ * @param {Object} paymentData - { studentId, parentId, amount, method, reference, plan }
+ * @returns {Promise<Object>} - The created payment record
+ */
+const processPayment = async (paymentData) => {
+  try {
+    const { studentId, parentId, amount, method, reference, plan } = paymentData;
+
+    // Find or create fee record
+    let fee = await Fee.findOne({ where: { studentId, status: 'unpaid' } });
+    if (!fee) {
+      // Create a dummy fee for the term
+      fee = await Fee.create({
+        studentId,
+        schoolCode: (await Student.findByPk(studentId)).schoolCode,
+        term: 'Term 1',
+        year: new Date().getFullYear(),
+        totalAmount: 5000, // placeholder, should come from school fee structure
+        paidAmount: 0,
+        paymentPlan: plan || 'basic'
+      });
+    }
+
+    // Create payment record
+    const payment = await Payment.create({
+      studentId,
+      parentId,
+      feeId: fee.id,
+      amount,
+      method,
+      reference,
+      plan: plan || fee.paymentPlan,
+      status: 'completed' // assume success for demo
+    });
+
+    // Update fee paid amount
+    fee.paidAmount = (fee.paidAmount || 0) + amount;
+    await fee.save();
+
+    // If fully paid, unlock student's payment status
+    if (fee.balance <= 0) {
+      const student = await Student.findByPk(studentId);
+      student.paymentStatus = { plan: fee.paymentPlan, paid: fee.paidAmount, status: 'unlocked' };
+      await student.save();
+
+      // Notify parent and student
+      await createAlert({
+        userId: parentId,
+        role: 'parent',
+        type: 'fee',
+        severity: 'success',
+        title: 'Payment Successful',
+        message: `Payment of KES ${amount} received. Access unlocked.`
+      });
+    }
+
+    return payment;
+  } catch (error) {
+    console.error('Payment processing error:', error);
+    throw error;
+  }
+};
+
+/**
+ * Verify payment with external gateway (mock)
+ * @param {String} reference - Payment reference
+ * @returns {Promise<Boolean>}
+ */
+const verifyPayment = async (reference) => {
+  // In real implementation, call MPesa API or similar
+  return true;
+};
+
+module.exports = {
+  processPayment,
+  verifyPayment
+};

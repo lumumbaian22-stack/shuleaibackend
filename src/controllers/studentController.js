@@ -1,6 +1,5 @@
 // src/controllers/studentController.js
 const { Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School } = require('../models');
-const learningController = require('./learningController');
 const { Op } = require('sequelize');
 
 // Helper: get grade from score using the school's curriculum (simplified)
@@ -173,10 +172,54 @@ exports.getDashboard = async (req, res) => {
   }
 };
 
-// @desc    Get learning materials
+// @desc    Get grade-aware learning materials generated from school curriculum and student performance
 // @route   GET /api/student/materials
 // @access  Private/Student
-exports.getMaterials = learningController.getMaterials;
+exports.getMaterials = async (req, res) => {
+  try {
+    const student = await Student.findOne({ where: { userId: req.user.id } });
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+
+    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    const curriculum = school?.system || 'cbc';
+    const schoolLevel = school?.settings?.schoolLevel || 'both';
+    const curriculumHelper = require('../utils/curriculumHelper');
+    const subjects = curriculumHelper.getSubjectsForCurriculum(curriculum, schoolLevel) || ['Mathematics','English','Kiswahili','Science'];
+    const records = await AcademicRecord.findAll({ where: { studentId: student.id, schoolCode: req.user.schoolCode, isPublished: true } });
+
+    const avgBySubject = {};
+    for (const subject of subjects) {
+      const rows = records.filter(r => String(r.subject).toLowerCase() === String(subject).toLowerCase());
+      avgBySubject[subject] = rows.length ? Math.round(rows.reduce((sum, r) => sum + Number(r.score || 0), 0) / rows.length) : null;
+    }
+
+    const materials = subjects.slice(0, 12).map((subject, idx) => {
+      const avg = avgBySubject[subject];
+      const level = avg === null ? 'starter' : avg < 40 ? 'foundation' : avg < 60 ? 'practice' : avg < 80 ? 'mastery' : 'extension';
+      return {
+        id: `${student.id}-${idx + 1}`,
+        title: `${subject} ${level.charAt(0).toUpperCase() + level.slice(1)} Pack`,
+        subject,
+        grade: student.grade,
+        curriculum,
+        type: 'guided-study',
+        level,
+        performanceAverage: avg,
+        activities: [
+          `Review today’s ${subject} class notes`,
+          `Complete 5 ${level} questions`,
+          `Explain one ${subject} idea to a parent or study partner`,
+          `Write one question to ask your teacher`
+        ],
+        estimatedMinutes: level === 'foundation' ? 25 : 15
+      };
+    });
+
+    res.json({ success: true, data: materials });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 // @desc    Get own grades (only published)
 // @route   GET /api/student/grades

@@ -1,5 +1,9 @@
 const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, sequelize } = require('../models');
 const { createAlert } = require('../services/notificationService');
+function rolloutMoneyDisabled(res) {
+  return res.status(503).json({ success: false, message: 'Real money collection is disabled in this national rollout school-operations build. Fee/payment records can be enabled after Daraja live audit.' });
+}
+
 const { Op } = require('sequelize');
 
 // @desc    Get parent's children
@@ -231,6 +235,7 @@ exports.getSubscriptionPlans = async (req, res) => {
 // @route   POST /api/parent/pay
 // @access  Private/Parent
 exports.makePayment = async (req, res) => {
+  return rolloutMoneyDisabled(res);
   try {
     const { studentId, amount, method, reference, plan } = req.body;
     
@@ -287,6 +292,7 @@ exports.makePayment = async (req, res) => {
 // @route   POST /api/parent/payment-confirm
 // @access  Private/Parent
 exports.confirmPayment = async (req, res) => {
+  return rolloutMoneyDisabled(res);
   try {
     const { paymentId, transactionId } = req.body;
     
@@ -370,6 +376,7 @@ exports.getPayments = async (req, res) => {
 // @route   POST /api/parent/upgrade-plan
 // @access  Private/Parent
 exports.upgradePlan = async (req, res) => {
+  return rolloutMoneyDisabled(res);
   try {
     const { studentId, newPlan } = req.body;
     
@@ -639,6 +646,7 @@ exports.getFees = async (req, res) => {
 // @route   POST /api/parent/fees/pay
 // @access  Private/Parent
 exports.addPayment = async (req, res) => {
+  return rolloutMoneyDisabled(res);
   try {
     const { studentId, term, year, amount, method, reference } = req.body;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });

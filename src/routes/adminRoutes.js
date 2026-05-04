@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
-const { requireActiveSchoolSubscription } = require('../middleware/subscription');
 const { validate, validationRules } = require('../middleware/validation');
 const teacherSignupController = require('../controllers/teacherSignupController');
 const dutyController = require('../controllers/dutyController');
@@ -14,7 +13,6 @@ router.get('/settings', protect, adminController.getSchoolSettings);
 
 // ============ ADMIN / SUPER ADMIN ONLY ROUTES ============
 router.use(protect, authorize('admin', 'super_admin'));
-router.use(requireActiveSchoolSubscription());
 
 // Dashboard
 router.get('/dashboard', adminController.getDashboardStats);

@@ -3,7 +3,6 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const compression = require('compression');
-const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const fileUpload = require('express-fileupload');
@@ -20,6 +19,7 @@ const teacherRoutes = require('./routes/teacherRoutes');
 const parentRoutes = require('./routes/parentRoutes');
 const studentRoutes = require('./routes/studentRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const schoolRoutes = require('./routes/schoolRoutes');
 const parentMessageRoutes = require('./routes/parentMessageRoutes');
@@ -37,14 +37,16 @@ const homeworkRoutes = require('./routes/homeworkRoutes');
 const gamificationRoutes = require('./routes/gamificationRoutes');
 const chatV9Routes = require('./routes/chatV9Routes');
 const paymentRoutes = require('./routes/paymentRoutes');
-const subscriptionRoutes = require('./routes/subscriptionRoutes');
-const learningRoutes = require('./routes/learningRoutes');
-const tutorRoutes = require('./routes/tutorRoutes');
-const legalRoutes = require('./routes/legalRoutes');
+const nationalRolloutRoutes = require('./routes/nationalRolloutRoutes');
+const scaleRoutes = require('./routes/scaleRoutes');
+const jobRoutes = require('./routes/jobRoutes');
+const { routeAwareApiLimiter } = require('./middleware/productionRateLimits');
+const { requestContext, productionErrorHandler } = require('./middleware/requestContext');
 
 const app = express();
 
 // ============ MIDDLEWARE ============
+app.use(requestContext);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 app.use(cors({
@@ -54,12 +56,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: { success: false, message: 'Too many requests, please try again later.' }
-});
-app.use('/api', limiter);
+// Route-aware limits: strict for auth/uploads/writes, generous for dashboard reads.
+app.use('/api', routeAwareApiLimiter);
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -114,6 +112,7 @@ app.use('/api/teacher', teacherRoutes);
 app.use('/api/parent', parentRoutes);
 app.use('/api/student', studentRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/school', schoolRoutes);
 app.use('/api/parent-messages', parentMessageRoutes);
@@ -130,11 +129,11 @@ app.use('/api/timetable', timetableRoutes);
 app.use('/api/homework', homeworkRoutes);
 app.use('/api/gamification', gamificationRoutes);
 app.use('/api/chat-v9', chatV9Routes);
+app.use('/api/scale', scaleRoutes);
+app.use('/api/jobs', jobRoutes);
+// National rollout completion routes fill missing school-operations APIs and disable live money collection.
+app.use('/api', nationalRolloutRoutes);
 app.use('/api/payments', paymentRoutes);
-app.use('/api/subscription', subscriptionRoutes);
-app.use('/api/learning', learningRoutes);
-app.use('/api/tutor', tutorRoutes);
-app.use('/api/legal', legalRoutes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {
@@ -142,12 +141,6 @@ app.use((req, res) => {
 });
 
 // ============ ERROR HANDLER ============
-app.use((err, req, res, next) => {
-  console.error('Error:', err.stack);
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || 'Internal server error'
-  });
-});
+app.use(productionErrorHandler);
 
 module.exports = app;

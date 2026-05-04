@@ -48,11 +48,6 @@ const ChatMessage = require('./ChatMessage')(sequelize, DataTypes);
 const ClassroomThread = require('./ClassroomThread')(sequelize, DataTypes);
 const ThreadReply = require('./ThreadReply')(sequelize, DataTypes);
 const AchievementEvent = require('./AchievementEvent')(sequelize, DataTypes);
-const LearningMaterial = require('./LearningMaterial')(sequelize, DataTypes);
-const TutorSession = require('./TutorSession')(sequelize, DataTypes);
-const TutorMessage = require('./TutorMessage')(sequelize, DataTypes);
-const TutorInsight = require('./TutorInsight')(sequelize, DataTypes);
-const LegalDocument = require('./LegalDocument')(sequelize, DataTypes);
 
 // Add to associations: School.hasMany(SchoolCalendar)
 
@@ -280,18 +275,6 @@ AchievementEvent.belongsTo(User, { as: 'RecipientUser', foreignKey: 'userId' });
 AchievementEvent.belongsTo(Student, { foreignKey: 'studentId' });
 Student.hasMany(AchievementEvent, { foreignKey: 'studentId' });
 
-
-LearningMaterial.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
-School.hasMany(LearningMaterial, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
-TutorSession.belongsTo(Student, { foreignKey: 'studentId' });
-TutorSession.belongsTo(User, { foreignKey: 'userId' });
-Student.hasMany(TutorSession, { foreignKey: 'studentId' });
-TutorSession.hasMany(TutorMessage, { foreignKey: 'sessionId' });
-TutorMessage.belongsTo(TutorSession, { foreignKey: 'sessionId' });
-TutorMessage.belongsTo(Student, { foreignKey: 'studentId' });
-TutorInsight.belongsTo(Student, { foreignKey: 'studentId' });
-Student.hasMany(TutorInsight, { foreignKey: 'studentId' });
-
 // Consent models associations
 UserConsent.belongsTo(User, { foreignKey: 'userId' });
 User.hasOne(UserConsent, { foreignKey: 'userId' });
@@ -348,10 +331,6 @@ module.exports = {
     ChatMessage,
     ClassroomThread,
     ThreadReply,
-    AchievementEvent,
-    LearningMaterial,
-    TutorSession,
-    TutorMessage,
-    TutorInsight,
-    LegalDocument
+    AchievementEvent
+    
 };
