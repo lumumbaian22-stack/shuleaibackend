@@ -922,29 +922,48 @@ exports.getTeacherStats = async (req, res) => {
 // @access  Private/Teacher
 exports.getClassStudents = async (req, res) => {
   try {
+    const { Op } = require('sequelize');
     const { classId } = req.params;
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+
     const classItem = await Class.findOne({ where: { id: classId, schoolCode: req.user.schoolCode, isActive: true } });
     if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
+
     const subjectTeachers = Array.isArray(classItem.subjectTeachers) ? classItem.subjectTeachers : [];
-    const isClassTeacher = String(classItem.teacherId) === String(teacher.id) || String(teacher.classTeacher||'').toLowerCase() === String(classItem.name||'').toLowerCase();
+    const isClassTeacher = String(classItem.teacherId) === String(teacher.id) || String(teacher.classTeacher || '').toLowerCase() === String(classItem.name || '').toLowerCase();
     const isSubjectTeacher = subjectTeachers.some(st => String(st.teacherId) === String(teacher.id));
     if (!isClassTeacher && !isSubjectTeacher) return res.status(403).json({ success: false, message: 'You do not have access to this class' });
-    const names = [...new Set([classItem.name, classItem.grade, `${classItem.grade} ${classItem.stream||''}`.trim()].filter(Boolean))];
+
+    const names = [...new Set([
+      classItem.name,
+      classItem.grade,
+      `${classItem.grade || ''} ${classItem.stream || ''}`.trim(),
+      `${classItem.name || ''} ${classItem.stream || ''}`.trim()
+    ].filter(Boolean))];
+
+    const userInclude = { model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'], where: { schoolCode: req.user.schoolCode }, required: true };
     let students = await Student.findAll({
-      where: { grade: { [Op.in]: names } },
-      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }],
-      order: [['createdAt', 'ASC']]
+      where: { grade: { [Op.in]: names }, status: { [Op.ne]: 'inactive' } },
+      include: [userInclude],
+      order: [['createdAt', 'ASC']],
+      limit: 1000
     });
+
     if (!students.length && classItem.grade) {
       students = await Student.findAll({
-        where: { grade: { [Op.iLike]: `%${classItem.grade}%` } },
-        include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }],
-        order: [['createdAt', 'ASC']]
+        where: { grade: { [Op.iLike]: `%${classItem.grade}%` }, status: { [Op.ne]: 'inactive' } },
+        include: [userInclude],
+        order: [['createdAt', 'ASC']],
+        limit: 1000
       });
     }
-    res.json({ success: true, data: students, meta: { className: classItem.name, grade: classItem.grade, stream: classItem.stream, matchedBy: students.length ? 'grade/name fallback' : 'none' } });
+
+    res.json({
+      success: true,
+      data: students,
+      meta: { classId: classItem.id, className: classItem.name, grade: classItem.grade, stream: classItem.stream, count: students.length }
+    });
   } catch (error) {
     console.error('Get class students error:', error);
     res.status(500).json({ success: false, message: error.message });

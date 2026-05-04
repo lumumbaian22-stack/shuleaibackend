@@ -2,53 +2,97 @@ const { HomeTask, HomeTaskAssignment, Student, Teacher, Class } = require('../mo
 
 exports.createAssignment = async (req, res) => {
     try {
-        const { title, instructions, subject, dueDate, classId, studentIds } = req.body;
-        const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-        if (!teacher) return res.status(403).json({ success: false });
-
-        // Create HomeTask without competencyId (or with null)
-        const task = await HomeTask.create({
+        const { Op } = require('sequelize');
+        const {
             title,
             instructions,
-            type: 'teacher',
+            description,
+            content,
             subject,
-            gradeLevel: 'all',
-            difficulty: 'medium',
-            estimatedMinutes: 30,
-            points: 10,
-            competencyId: null,   // <-- explicitly null
-            createdBy: teacher.id,
             dueDate,
+            classId,
+            className,
+            grade,
+            studentIds,
+            estimatedMinutes,
+            points,
+            difficulty
+        } = req.body || {};
+
+        const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+        if (!teacher) return res.status(403).json({ success: false, message: 'Teacher account not found' });
+
+        const safeTitle = String(title || '').trim();
+        const safeSubject = String(subject || 'General').trim();
+        const safeInstructions = String(instructions || description || content || '').trim();
+
+        if (!safeTitle) return res.status(400).json({ success: false, message: 'Homework title is required' });
+        if (!safeInstructions) return res.status(400).json({ success: false, message: 'Homework instructions are required' });
+
+        let resolvedClassId = classId || null;
+        let classItem = null;
+        if (resolvedClassId) {
+            classItem = await Class.findOne({ where: { id: resolvedClassId, schoolCode: req.user.schoolCode, isActive: true } });
+        }
+        if (!classItem && (className || grade)) {
+            const name = String(className || grade).trim();
+            classItem = await Class.findOne({
+                where: {
+                    schoolCode: req.user.schoolCode,
+                    isActive: true,
+                    [Op.or]: [
+                        { name },
+                        { grade: name },
+                        { name: { [Op.iLike]: `%${name}%` } },
+                        { grade: { [Op.iLike]: `%${name}%` } }
+                    ]
+                }
+            });
+            if (classItem) resolvedClassId = classItem.id;
+        }
+
+        const task = await HomeTask.create({
+            title: safeTitle,
+            instructions: safeInstructions,
+            type: 'teacher',
+            subject: safeSubject,
+            gradeLevel: classItem?.grade || className || grade || 'all',
+            difficulty: difficulty || 'medium',
+            estimatedMinutes: Number(estimatedMinutes || 30),
+            points: Number(points || 10),
+            competencyId: null,
+            createdBy: teacher.id,
+            dueDate: dueDate || null,
             materials: ''
         });
 
-        // Determine target students
-        let targetStudentIds = studentIds || [];
-        if (classId && (!studentIds || studentIds.length === 0)) {
-            const classItem = await Class.findByPk(classId);
+        let targetStudentIds = Array.isArray(studentIds) ? studentIds.filter(Boolean) : [];
+        if (resolvedClassId && targetStudentIds.length === 0) {
+            if (!classItem) classItem = await Class.findOne({ where: { id: resolvedClassId, schoolCode: req.user.schoolCode, isActive: true } });
             if (classItem) {
+                const names = [...new Set([classItem.name, classItem.grade, `${classItem.grade || ''} ${classItem.stream || ''}`.trim()].filter(Boolean))];
                 const students = await Student.findAll({
-                    where: {
-                        [require('sequelize').Op.or]: [
-                            { classId: classItem.id },
-                            { grade: classItem.name }
-                        ]
-                    }
+                    where: { grade: { [Op.in]: names }, status: 'active' },
+                    include: [{ model: require('../models').User, attributes: ['id'], where: { schoolCode: req.user.schoolCode }, required: true }],
+                    attributes: ['id']
                 });
                 targetStudentIds = students.map(s => s.id);
             }
         }
 
-        // Create assignments
         const assignments = targetStudentIds.map(sid => ({
             studentId: sid,
             taskId: task.id,
             assignedAt: new Date(),
             status: 'pending'
         }));
-        await HomeTaskAssignment.bulkCreate(assignments);
+        if (assignments.length) await HomeTaskAssignment.bulkCreate(assignments, { ignoreDuplicates: true });
 
-        res.json({ success: true, message: 'Homework assigned', data: { assignedCount: assignments.length, taskId: task.id } });
+        res.status(201).json({
+            success: true,
+            message: assignments.length ? 'Homework assigned' : 'Homework created, but no matching students were found for the selected class',
+            data: { assignedCount: assignments.length, taskId: task.id, classId: resolvedClassId || null }
+        });
     } catch (error) {
         console.error('Create homework error:', error);
         res.status(500).json({ success: false, message: error.message });
