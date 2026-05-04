@@ -1,5 +1,6 @@
 // src/controllers/studentController.js
 const { Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School } = require('../models');
+const learningController = require('./learningController');
 const { Op } = require('sequelize');
 
 // Helper: get grade from score using the school's curriculum (simplified)
@@ -172,20 +173,10 @@ exports.getDashboard = async (req, res) => {
   }
 };
 
-// @desc    Get learning materials (placeholder)
+// @desc    Get learning materials
 // @route   GET /api/student/materials
 // @access  Private/Student
-exports.getMaterials = async (req, res) => {
-  try {
-    const materials = [
-      { id: 1, title: 'Mathematics Notes', type: 'pdf', url: '/uploads/math.pdf' },
-      { id: 2, title: 'Science Video', type: 'video', url: '/uploads/science.mp4' }
-    ];
-    res.json({ success: true, data: materials });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+exports.getMaterials = learningController.getMaterials;
 
 // @desc    Get own grades (only published)
 // @route   GET /api/student/grades

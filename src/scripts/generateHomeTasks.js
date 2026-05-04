@@ -1,4 +1,4 @@
-const { sequelize, HomeTask, Competency, LearningOutcome } = require('../src/models');
+const { sequelize, HomeTask, Competency, LearningOutcome } = require('../models');
 
 const templates = [
   {

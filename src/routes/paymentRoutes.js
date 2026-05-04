@@ -10,8 +10,8 @@ router.post('/callback', ctrl.darajaCallback);
 router.get('/admin/school-settings', protect, authorize('admin'), ctrl.getAdminPaymentSettings);
 router.put('/admin/school-settings', protect, authorize('admin'), ctrl.updateAdminPaymentSettings);
 
-router.get('/superadmin/platform-settings', protect, authorize('superadmin'), ctrl.getPlatformPaymentSettings);
-router.put('/superadmin/platform-settings', protect, authorize('superadmin'), ctrl.updatePlatformPaymentSettings);
+router.get('/superadmin/platform-settings', protect, authorize('super_admin'), ctrl.getPlatformPaymentSettings);
+router.put('/superadmin/platform-settings', protect, authorize('super_admin'), ctrl.updatePlatformPaymentSettings);
 
 router.post('/parent/fee/stk', protect, authorize('parent'), ctrl.parentFeeSTK);
 router.post('/parent/subscription/stk', protect, authorize('parent'), ctrl.parentSubscriptionSTK);

@@ -2,12 +2,12 @@ module.exports = (sequelize, DataTypes) => {
   const Payment = sequelize.define('Payment', {
     studentId: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: { model: 'Students', key: 'id' }
     },
     parentId: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: { model: 'Parents', key: 'id' }
     },
     feeId: {

@@ -1,0 +1,10 @@
+const express = require('express');
+const router = express.Router();
+const { protect, authorize } = require('../middleware/auth');
+const tutor = require('../controllers/tutorController');
+router.use(protect, authorize('student','parent'));
+router.post('/chat', tutor.chat);
+router.get('/insights', tutor.getInsights);
+router.get('/insights/:studentId', tutor.getInsights);
+router.get('/sessions', tutor.getSessions);
+module.exports = router;

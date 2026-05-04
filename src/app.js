@@ -19,7 +19,7 @@ const superAdminRoutes = require('./routes/superAdminRoutes');
 const teacherRoutes = require('./routes/teacherRoutes');
 const parentRoutes = require('./routes/parentRoutes');
 const studentRoutes = require('./routes/studentRoutes');
-//const analyticsRoutes = require('./routes/analyticsRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const schoolRoutes = require('./routes/schoolRoutes');
 const parentMessageRoutes = require('./routes/parentMessageRoutes');
@@ -37,6 +37,10 @@ const homeworkRoutes = require('./routes/homeworkRoutes');
 const gamificationRoutes = require('./routes/gamificationRoutes');
 const chatV9Routes = require('./routes/chatV9Routes');
 const paymentRoutes = require('./routes/paymentRoutes');
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
+const learningRoutes = require('./routes/learningRoutes');
+const tutorRoutes = require('./routes/tutorRoutes');
+const legalRoutes = require('./routes/legalRoutes');
 
 const app = express();
 
@@ -109,7 +113,7 @@ app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/teacher', teacherRoutes);
 app.use('/api/parent', parentRoutes);
 app.use('/api/student', studentRoutes);
-//app.use('/api/analytics', analyticsRoutes);
+app.use('/api/analytics', analyticsRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/school', schoolRoutes);
 app.use('/api/parent-messages', parentMessageRoutes);
@@ -127,6 +131,10 @@ app.use('/api/homework', homeworkRoutes);
 app.use('/api/gamification', gamificationRoutes);
 app.use('/api/chat-v9', chatV9Routes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/learning', learningRoutes);
+app.use('/api/tutor', tutorRoutes);
+app.use('/api/legal', legalRoutes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {

@@ -1,8 +1,13 @@
-const { School, User, Admin, SchoolNameRequest, Student, Teacher, Parent, ApprovalRequest } = require('../models');
+const { School, User, Admin, SchoolNameRequest, Student, Teacher, Parent, ApprovalRequest, Settings, Payment } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const superAdminController = require('../controllers/superAdminController');
 const { Op } = require('sequelize');
 const { sequelize } = require('../models');
+const fs = require('fs');
+const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 
 // @desc    Get platform overview
 // @route   GET /api/super-admin/overview
@@ -667,6 +672,7 @@ exports.getSchoolParents = async (req, res) => {
 exports.getSystemStatus = async (req, res) => {
   try {
     // Check database connection
+    const apiStart = process.hrtime.bigint();
     let databaseStatus = 'operational';
     let databaseLastCheck = new Date();
     try {
@@ -676,9 +682,10 @@ exports.getSystemStatus = async (req, res) => {
       console.error('Database check failed:', dbError);
     }
     
-    // Check API status (always operational if we're here)
+    // Check API latency using actual process timing, not a random number
+    await sequelize.query('SELECT 1');
     const apiStatus = 'operational';
-    const apiLatency = Math.floor(Math.random() * 50) + 50; // Mock latency
+    const apiLatency = Number((process.hrtime.bigint() - apiStart) / 1000000n);
     
     // Check WebSocket (if you have socket.io)
     let websocketStatus = 'connected';
@@ -802,25 +809,9 @@ exports.getRecentEvents = async (req, res) => {
 // @access  Private/SuperAdmin
 exports.getPlatformSettings = async (req, res) => {
   try {
-    // Get from database or config
-    const settings = {
-      platformName: 'ShuleAI',
-      defaultCurriculum: 'cbc',
-      nameChangeFee: 50,
-      maintenanceMode: false,
-      allowNewRegistrations: true,
-      contactEmail: 'support@shuleai.com',
-      supportPhone: '+254 700 000 000'
-    };
-    
-    res.json({
-      success: true,
-      data: settings
-    });
-  } catch (error) {
-    console.error('Get platform settings error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+    const [row] = await Settings.findOrCreate({ where: { key: 'platform_settings' }, defaults: { category:'platform', description:'Global platform settings', value: { platformName:'ShuleAI', defaultCurriculum:'cbc', nameChangeFee:500, maintenanceMode:false, allowNewRegistrations:true, contactEmail:'support@shuleai.com', supportPhone:'+254 700 000 000' } } });
+    res.json({ success: true, data: row.value });
+  } catch (error) { console.error('Get platform settings error:', error); res.status(500).json({ success: false, message: error.message }); }
 };
 
 // @desc    Update platform settings
@@ -828,28 +819,11 @@ exports.getPlatformSettings = async (req, res) => {
 // @access  Private/SuperAdmin
 exports.updatePlatformSettings = async (req, res) => {
   try {
-    const { platformName, defaultCurriculum, nameChangeFee, maintenanceMode, allowNewRegistrations } = req.body;
-    
-    // Save to database or config file
-    // For now, just return success
-    // In production, save to a Settings table
-    
-    res.json({
-      success: true,
-      message: 'Settings updated successfully',
-      data: {
-        platformName,
-        defaultCurriculum,
-        nameChangeFee,
-        maintenanceMode,
-        allowNewRegistrations,
-        updatedAt: new Date()
-      }
-    });
-  } catch (error) {
-    console.error('Update platform settings error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+    const [row] = await Settings.findOrCreate({ where: { key:'platform_settings' }, defaults:{ category:'platform', description:'Global platform settings', value:{} } });
+    const value = { ...(row.value || {}), ...(req.body || {}), updatedAt:new Date().toISOString(), updatedBy:req.user.id };
+    await row.update({ value });
+    res.json({ success: true, message: 'Settings updated successfully', data: value });
+  } catch (error) { console.error('Update platform settings error:', error); res.status(500).json({ success: false, message: error.message }); }
 };
 
 // @desc    Reset platform settings to default
@@ -857,23 +831,11 @@ exports.updatePlatformSettings = async (req, res) => {
 // @access  Private/SuperAdmin
 exports.resetPlatformSettings = async (req, res) => {
   try {
-    const defaultSettings = {
-      platformName: 'ShuleAI',
-      defaultCurriculum: 'cbc',
-      nameChangeFee: 50,
-      maintenanceMode: false,
-      allowNewRegistrations: true
-    };
-    
-    res.json({
-      success: true,
-      message: 'Settings reset to default',
-      data: defaultSettings
-    });
-  } catch (error) {
-    console.error('Reset settings error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+    const defaultSettings = { platformName:'ShuleAI', defaultCurriculum:'cbc', nameChangeFee:500, maintenanceMode:false, allowNewRegistrations:true, contactEmail:'support@shuleai.com', supportPhone:'+254 700 000 000' };
+    const [row] = await Settings.findOrCreate({ where:{ key:'platform_settings' }, defaults:{ category:'platform', description:'Global platform settings', value:defaultSettings } });
+    await row.update({ value: defaultSettings });
+    res.json({ success: true, message: 'Settings reset to default', data: defaultSettings });
+  } catch (error) { console.error('Reset settings error:', error); res.status(500).json({ success: false, message: error.message }); }
 };
 
 // @desc    Run system backup
@@ -882,24 +844,19 @@ exports.resetPlatformSettings = async (req, res) => {
 exports.runSystemBackup = async (req, res) => {
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `shuleai_backup_${timestamp}.sql`;
-    
-    // This would actually run a database backup
-    // For now, return success
-    
-    res.json({
-      success: true,
-      message: 'Backup completed successfully',
-      data: {
-        filename,
-        timestamp: new Date(),
-        size: '0 MB' // Placeholder
-      }
-    });
-  } catch (error) {
-    console.error('Run backup error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+    const backupDir = path.join(__dirname, '../../backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+    const filename = `shuleai_backup_${timestamp}.json`;
+    const filepath = path.join(backupDir, filename);
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      counts: { schools: await School.count(), users: await User.count(), students: await Student.count(), teachers: await Teacher.count(), parents: await Parent.count(), payments: await Payment.count() },
+      platformSettings: (await Settings.findAll()).map(s => ({ key:s.key, value:s.value, category:s.category, updatedAt:s.updatedAt }))
+    };
+    fs.writeFileSync(filepath, JSON.stringify(payload, null, 2));
+    const sizeBytes = fs.statSync(filepath).size;
+    res.json({ success: true, message: 'Backup completed successfully', data: { filename, path: filepath, timestamp: new Date(), sizeBytes, size: `${(sizeBytes/1024/1024).toFixed(3)} MB`, format:'json-export' } });
+  } catch (error) { console.error('Run backup error:', error); res.status(500).json({ success: false, message: error.message }); }
 };
 
 // @desc    Clear platform cache

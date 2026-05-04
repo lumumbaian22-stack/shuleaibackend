@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
+const { requireActiveSchoolSubscription } = require('../middleware/subscription');
 const teacherController = require('../controllers/teacherController');
 const teacherMessageController = require('../controllers/teacherMessageController');
 const taskController = require('../controllers/taskController');
@@ -9,6 +10,7 @@ const analyticsController = require('../controllers/analyticsController'); // Ad
 
 router.use(protect);
 router.use(authorize('teacher'));
+router.use(requireActiveSchoolSubscription());
 
 // Students
 router.get('/students', teacherController.getMyStudents);
