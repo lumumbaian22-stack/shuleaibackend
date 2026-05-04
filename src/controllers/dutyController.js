@@ -70,15 +70,19 @@ function getDutyVerificationSettings(school) {
   const duty = school?.settings?.dutyManagement || {};
   const geo = duty.geoFence || {};
   const location = geo.center || duty.schoolLocation || school.address?.location || {};
+  // v17: GPS should be optional unless the school admin explicitly requires it.
+  // Earlier builds defaulted requireGps to true, which caused normal teacher dashboard
+  // check-in buttons to fail with 'GPS location is required'.
   return {
-    enabled: geo.enabled !== false,
-    requireGps: geo.requireGps !== false,
+    enabled: geo.enabled === true,
+    requireGps: geo.requireGps === true,
     requireQr: geo.requireQr === true,
     radiusMeters: Number(geo.radiusMeters || duty.allowedRadiusMeters || 150),
     schoolLat: Number(location.lat || location.latitude || process.env.SCHOOL_LATITUDE || 0) || null,
     schoolLng: Number(location.lng || location.longitude || process.env.SCHOOL_LONGITUDE || 0) || null,
     reportingTime: duty.reportingTime || '07:00',
     dutyGraceMinutes: Number(duty.dutyGraceMinutes || duty.checkInWindow || 15),
+    checkInWindow: Number(duty.checkInWindow || duty.dutyGraceMinutes || 15),
     studentReportingTime: duty.studentReportingTime || '07:30',
     studentGraceMinutes: Number(duty.studentGraceMinutes || 10)
   };
@@ -497,15 +501,16 @@ exports.checkInDuty = async (req, res) => {
     const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
     if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
 
-    const dutyIndex = roster.duties.findIndex(d => d.teacherId === teacher.id);
+    const dutyIndex = roster.duties.findIndex(d => Number(d.teacherId) === Number(teacher.id) || Number(d.teacherId) === Number(req.user.id));
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
 
     const currentTime = moment();
     const slot = roster.duties[dutyIndex].timeSlot;
     const start = moment(slot.start, 'HH:mm');
     const window = school.settings?.dutyManagement?.checkInWindow || 15;
-    if (!currentTime.isBetween(start.clone().subtract(window, 'minutes'), start.clone().add(window, 'minutes'))) {
-      return res.status(400).json({ success: false, message: `Check-in only allowed within ${window} minutes of duty time` });
+    const enforceWindow = school.settings?.dutyManagement?.enforceCheckInWindow === true;
+    if (enforceWindow && !currentTime.isBetween(start.clone().subtract(window, 'minutes'), start.clone().add(window, 'minutes'))) {
+      return res.status(400).json({ success: false, message: `Check-in only allowed within ${window} minutes of duty time`, data: { allowed:false, enforceWindow, dutyStart: start.format('HH:mm'), windowMinutes: window } });
     }
 
     roster.duties[dutyIndex].checkedIn = { at: new Date(), by: req.user.id, location: location || 'School' };
@@ -548,7 +553,7 @@ exports.checkOutDuty = async (req, res) => {
     const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
     if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
 
-    const dutyIndex = roster.duties.findIndex(d => d.teacherId === teacher.id);
+    const dutyIndex = roster.duties.findIndex(d => Number(d.teacherId) === Number(teacher.id) || Number(d.teacherId) === Number(req.user.id));
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
 
     roster.duties[dutyIndex].checkedOut = { at: new Date(), by: req.user.id, location: location || 'School' };

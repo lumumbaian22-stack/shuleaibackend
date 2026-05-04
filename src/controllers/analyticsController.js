@@ -452,3 +452,101 @@ exports.compareCurriculum = async (req, res) => {
         data: { studentId: req.params.studentId }
     });
 };
+
+// ============ V17 OVERRIDE: role-aware student analytics ============
+exports.getStudentAnalytics = async (req, res) => {
+    try {
+        let studentId = req.params.studentId || null;
+        let student = null;
+
+        if (req.user.role === 'student') {
+            student = await Student.findOne({ where: { userId: req.user.id }, include: [{ model: User }] });
+            studentId = student?.id;
+        } else if (studentId) {
+            student = await Student.findByPk(studentId, { include: [{ model: User }] });
+            if (!student || student.User?.schoolCode !== req.user.schoolCode) {
+                return res.status(404).json({ success: false, message: 'Student not found in your school' });
+            }
+            if (req.user.role === 'parent') {
+                const parent = await Parent.findOne({ where: { userId: req.user.id } });
+                if (!parent || !(await parent.hasStudent(student))) {
+                    return res.status(403).json({ success: false, message: 'Not your child' });
+                }
+            }
+        }
+
+        if (!student || !studentId) return res.status(404).json({ success: false, message: 'Student not found' });
+
+        const school = await School.findOne({ where: { schoolId: student.User?.schoolCode || req.user.schoolCode } });
+        const curriculum = school?.system || 'cbc';
+        const schoolLevel = school?.settings?.schoolLevel || 'secondary';
+        const curriculumHelper = require('../utils/curriculumHelper');
+
+        const publishedOnly = req.user.role === 'parent' || req.user.role === 'student';
+        const records = await AcademicRecord.findAll({
+            where: { studentId, ...(publishedOnly ? { isPublished: true } : {}) },
+            order: [['date', 'DESC'], ['createdAt', 'DESC']]
+        });
+        const overallAverage = records.length ? Math.round(records.reduce((s, r) => s + Number(r.score || 0), 0) / records.length) : 0;
+        const attendance = await Attendance.findAll({ where: { studentId }, order: [['date', 'DESC']] });
+        const present = attendance.filter(a => a.status === 'present').length;
+        const absent = attendance.filter(a => a.status === 'absent').length;
+        const late = attendance.filter(a => a.status === 'late').length;
+        const attendanceRate = attendance.length ? Math.round((present / attendance.length) * 100) : 0;
+
+        const recentRecords = records.slice(0, 10).reverse();
+        const gradeTrend = { labels: recentRecords.map(r => r.assessmentName?.substring(0, 14) || r.subject || 'Assessment'), values: recentRecords.map(r => Number(r.score || 0)) };
+        const subjectMap = {};
+        records.forEach(r => {
+            if (!subjectMap[r.subject]) subjectMap[r.subject] = { total: 0, count: 0 };
+            subjectMap[r.subject].total += Number(r.score || 0);
+            subjectMap[r.subject].count++;
+        });
+        const subjectPerformance = Object.entries(subjectMap).map(([subject, d]) => {
+            const score = Math.round(d.total / d.count);
+            return { subject, score, average: score, grade: curriculumHelper.getGradeFromScore(score, curriculum, schoolLevel) };
+        });
+
+        const gradeCounts = {};
+        records.forEach(r => {
+            const g = r.grade || curriculumHelper.getGradeFromScore(r.score, curriculum, schoolLevel);
+            gradeCounts[g] = (gradeCounts[g] || 0) + 1;
+        });
+
+        res.json({ success: true, data: {
+            student: { id: student.id, name: student.User?.name, grade: student.grade, elimuid: student.elimuid, photo: student.User?.profileImage },
+            curriculum, schoolLevel,
+            overallAverage,
+            grade: curriculumHelper.getGradeFromScore(overallAverage, curriculum, schoolLevel),
+            attendance: { rate: attendanceRate, present, absent, late, total: attendance.length },
+            attendanceRate,
+            records,
+            gradeTrend,
+            gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) },
+            subjectPerformance,
+            points: student.points || 0,
+            personalBest: Math.max(...records.map(r => Number(r.score || 0)), 0)
+        }});
+    } catch (error) {
+        console.error('V17 getStudentAnalytics error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ============ V17 OVERRIDE: parent analytics can auto-select first child ============
+exports.getParentAnalytics = async (req, res) => {
+    try {
+        const parent = await Parent.findOne({ where: { userId: req.user.id }, include: [{ model: Student, as: 'students', include: [{ model: User }] }] });
+        if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
+        const childId = req.query.childId || parent.students?.[0]?.id;
+        if (!childId) return res.json({ success: true, data: { empty: true, message: 'No child linked to this parent account' } });
+        const student = parent.students.find(s => Number(s.id) === Number(childId)) || await Student.findByPk(childId, { include: [{ model: User }] });
+        if (!student || !(await parent.hasStudent(student))) return res.status(403).json({ success: false, message: 'Not your child' });
+
+        req.params.studentId = student.id;
+        return exports.getStudentAnalytics(req, res);
+    } catch (error) {
+        console.error('V17 getParentAnalytics error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};

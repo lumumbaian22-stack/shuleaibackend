@@ -52,4 +52,37 @@ router.get('/super-admin/logs', authorize('super_admin'), async (req,res)=>{ try
 router.get('/super-admin/schools/:schoolId/stats', authorize('super_admin'), async (req,res)=>{ try{ const schoolCode=req.params.schoolId; const [teachers,students,parents,classes,alerts]=await Promise.all([User.count({where:{schoolCode,role:'teacher'}}),User.count({where:{schoolCode,role:'student'}}),User.count({where:{schoolCode,role:'parent'}}),Class.count({where:{schoolCode}}),Alert.count({where:{schoolCode}}).catch(()=>0)]); return ok(res,{ schoolCode, teachers, students, parents, classes, alerts }); }catch(e){ return fail(res,500,e.message); } });
 router.get('/super-admin/requests/history', authorize('super_admin'), async (req,res)=>{ try{ return ok(res, []); }catch(e){ return fail(res,500,e.message); } });
 
+
+// ============ V17 CURRICULUM + SCHOOL META ============
+router.get('/school/curriculum', authorize('admin','teacher','parent','student','super_admin'), async (req,res)=>{ try{
+  const school = await School.findOne({ where:{ schoolId:req.user.schoolCode } });
+  const system = school?.system || 'cbc';
+  const curriculumHelper = require('../utils/curriculumHelper');
+  const schoolLevel = school?.settings?.schoolLevel || 'secondary';
+  return ok(res, { schoolCode:req.user.schoolCode, curriculum:system, system, schoolLevel, gradingScale: curriculumHelper.CURRICULUMS[system]?.[schoolLevel === 'both' ? 'secondary' : schoolLevel] || curriculumHelper.CURRICULUMS[system]?.secondary || [], subjects: curriculumHelper.getSubjectsForCurriculum(system, schoolLevel), schoolName: school?.name || null }, 'School curriculum loaded');
+} catch(e){ return fail(res,500,e.message); } });
+
+// Real teacher student actions used by student detail modal
+router.post('/teacher/students/:studentId/report-absence', authorize('teacher'), async (req,res)=>{ try{
+  const teacher = await Teacher.findOne({ where:{ userId:req.user.id } }); if(!teacher) return fail(res,404,'Teacher profile not found');
+  const student = await studentById(req.params.studentId, req.user.schoolCode); if(!student) return fail(res,404,'Student not found');
+  const today = new Date().toISOString().slice(0,10);
+  const [row, created] = await Attendance.findOrCreate({ where:{ studentId:student.id, date:today }, defaults:{ studentId:student.id, schoolCode:req.user.schoolCode, date:today, status:'absent', markedBy:req.user.id, remarks:req.body?.reason || 'Marked absent by teacher' } });
+  if(!created) await row.update({ status:'absent', markedBy:req.user.id, remarks:req.body?.reason || row.remarks || 'Marked absent by teacher' });
+  return ok(res,row,'Absence recorded for today');
+} catch(e){ return fail(res,500,e.message); } });
+
+router.get('/teacher/students/:studentId/parent-contact', authorize('teacher'), async (req,res)=>{ try{
+  const student = await studentById(req.params.studentId, req.user.schoolCode); if(!student) return fail(res,404,'Student not found');
+  let parent = null;
+  if (student.parentEmail) parent = await User.findOne({ where:{ email:student.parentEmail, schoolCode:req.user.schoolCode, role:'parent' } });
+  if (!parent && student.parentPhone) parent = await User.findOne({ where:{ phone:student.parentPhone, schoolCode:req.user.schoolCode, role:'parent' } });
+  if (!parent) {
+    const linked = await Parent.findOne({ include:[{ model:Student, as:'students', where:{ id:student.id }, required:true }, { model:User, attributes:['id','name','email','phone','role','schoolCode'] }] }).catch(()=>null);
+    parent = linked?.User || null;
+  }
+  if(!parent) return fail(res,404,'No linked parent account/contact found for this student');
+  return ok(res,{ parentId:parent.id, name:parent.name, email:parent.email, phone:parent.phone, studentId:student.id }, 'Parent contact loaded');
+} catch(e){ return fail(res,500,e.message); } });
+
 module.exports = router;

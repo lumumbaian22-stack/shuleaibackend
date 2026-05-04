@@ -5,7 +5,7 @@ const dutyController = require('../controllers/dutyController');
 
 router.use(protect);
 
-router.get('/today', dutyController.getTodayDuty);
+router.get('/today', authorize('teacher', 'admin', 'super_admin'), dutyController.getTodayDuty);
 router.get('/week', dutyController.getWeeklyDuty);
 router.get('/verification-config', authorize('teacher', 'admin'), dutyController.getDutyVerificationConfig);
 router.put('/verification-config', authorize('admin'), dutyController.updateDutyVerificationConfig);
