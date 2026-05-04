@@ -430,3 +430,189 @@ function getGradeFromScore(score) {
     if (score >= 50) return 'D';
     return 'E';
 }
+
+// ---------- ROUTE-COMPATIBILITY ANALYTICS HANDLERS ----------
+// These handlers are intentionally defined at the end so Express never receives
+// an undefined callback from src/routes/analyticsRoutes.js. They use the same
+// models already used by the dashboard analytics above and return frontend-safe
+// payloads even when a school has little data yet.
+exports.getClassAnalytics = async (req, res) => {
+    try {
+        const classId = req.params.classId;
+        const classItem = await Class.findByPk(classId);
+        if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
+
+        if (req.user.role !== 'super_admin' && req.user.schoolCode && classItem.schoolCode !== req.user.schoolCode) {
+            return res.status(403).json({ success: false, message: 'You cannot view analytics for this class' });
+        }
+
+        const students = await Student.findAll({
+            where: { grade: classItem.name },
+            include: [{ model: User, attributes: ['id', 'name', 'email'] }]
+        });
+        const studentIds = students.map(s => s.id);
+
+        const records = studentIds.length ? await AcademicRecord.findAll({
+            where: { studentId: { [Op.in]: studentIds }, schoolCode: classItem.schoolCode }
+        }) : [];
+
+        const attendance = studentIds.length ? await Attendance.findAll({
+            where: { studentId: { [Op.in]: studentIds }, schoolCode: classItem.schoolCode }
+        }) : [];
+
+        const overallAverage = records.length
+            ? Math.round(records.reduce((sum, r) => sum + Number(r.score || 0), 0) / records.length)
+            : 0;
+        const presentCount = attendance.filter(a => a.status === 'present').length;
+        const attendanceRate = attendance.length ? Math.round((presentCount / attendance.length) * 100) : 0;
+
+        const subjectMap = {};
+        records.forEach(r => {
+            const subject = r.subject || 'Unknown';
+            if (!subjectMap[subject]) subjectMap[subject] = { total: 0, count: 0 };
+            subjectMap[subject].total += Number(r.score || 0);
+            subjectMap[subject].count += 1;
+        });
+
+        const gradeCounts = { A: 0, B: 0, C: 0, D: 0, E: 0 };
+        records.forEach(r => {
+            const grade = (r.grade || getGradeFromScore(Number(r.score || 0)) || 'E').charAt(0).toUpperCase();
+            if (gradeCounts[grade] !== undefined) gradeCounts[grade] += 1;
+        });
+
+        const studentPerformance = students.map(student => {
+            const own = records.filter(r => r.studentId === student.id);
+            const average = own.length ? Math.round(own.reduce((sum, r) => sum + Number(r.score || 0), 0) / own.length) : 0;
+            return {
+                studentId: student.id,
+                name: student.User?.name || student.elimuid,
+                average,
+                grade: getGradeFromScore(average),
+                records: own.length
+            };
+        }).sort((a, b) => b.average - a.average);
+
+        res.json({
+            success: true,
+            data: {
+                class: { id: classItem.id, name: classItem.name, grade: classItem.grade, stream: classItem.stream },
+                overview: { totalStudents: students.length, totalRecords: records.length, overallAverage, attendanceRate },
+                subjectAverages: Object.entries(subjectMap).map(([subject, data]) => ({
+                    subject,
+                    average: Math.round(data.total / data.count),
+                    records: data.count
+                })),
+                gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) },
+                studentPerformance
+            }
+        });
+    } catch (error) {
+        console.error('Class analytics error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.getSchoolAnalytics = async (req, res) => {
+    try {
+        const schoolCode = req.user.role === 'super_admin' ? (req.query.schoolCode || req.user.schoolCode) : req.user.schoolCode;
+        if (!schoolCode) return res.status(400).json({ success: false, message: 'schoolCode is required' });
+
+        const [totalStudents, totalTeachers, totalClasses] = await Promise.all([
+            Student.count({ include: [{ model: User, where: { schoolCode } }] }),
+            Teacher.count({ include: [{ model: User, where: { schoolCode, role: 'teacher' } }] }),
+            Class.count({ where: { schoolCode, isActive: true } })
+        ]);
+
+        const records = await AcademicRecord.findAll({ where: { schoolCode } });
+        const attendance = await Attendance.findAll({ where: { schoolCode } });
+        const fees = await Fee.findAll({ where: { schoolCode } });
+
+        const overallAverage = records.length ? Math.round(records.reduce((sum, r) => sum + Number(r.score || 0), 0) / records.length) : 0;
+        const presentCount = attendance.filter(a => a.status === 'present').length;
+        const attendanceRate = attendance.length ? Math.round((presentCount / attendance.length) * 100) : 0;
+        const totalFees = fees.reduce((sum, f) => sum + Number(f.totalAmount || 0), 0);
+        const paidFees = fees.reduce((sum, f) => sum + Number(f.paidAmount || 0), 0);
+        const feeCollectionRate = totalFees ? Math.round((paidFees / totalFees) * 100) : 0;
+
+        const subjectMap = {};
+        records.forEach(r => {
+            const subject = r.subject || 'Unknown';
+            if (!subjectMap[subject]) subjectMap[subject] = { total: 0, count: 0 };
+            subjectMap[subject].total += Number(r.score || 0);
+            subjectMap[subject].count += 1;
+        });
+
+        const classRows = await Class.findAll({ where: { schoolCode, isActive: true } });
+        const classPerformance = [];
+        for (const cls of classRows) {
+            const students = await Student.findAll({ where: { grade: cls.name }, include: [{ model: User, where: { schoolCode }, attributes: ['id'] }] });
+            const ids = students.map(s => s.id);
+            const classRecords = ids.length ? records.filter(r => ids.includes(r.studentId)) : [];
+            classPerformance.push({
+                classId: cls.id,
+                className: cls.name,
+                students: students.length,
+                average: classRecords.length ? Math.round(classRecords.reduce((sum, r) => sum + Number(r.score || 0), 0) / classRecords.length) : 0
+            });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                overview: { totalStudents, totalTeachers, totalClasses, overallAverage, attendanceRate, feeCollectionRate },
+                subjectAverages: Object.entries(subjectMap).map(([subject, data]) => ({ subject, average: Math.round(data.total / data.count), records: data.count })),
+                classPerformance,
+                finance: { totalFees, paidFees, outstanding: Math.max(totalFees - paidFees, 0) }
+            }
+        });
+    } catch (error) {
+        console.error('School analytics error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.compareCurriculum = async (req, res) => {
+    try {
+        const studentId = req.params.studentId;
+        const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }] });
+        if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+
+        if (req.user.role !== 'super_admin' && req.user.schoolCode && student.User?.schoolCode !== req.user.schoolCode) {
+            return res.status(403).json({ success: false, message: 'You cannot compare this student' });
+        }
+
+        const records = await AcademicRecord.findAll({ where: { studentId: student.id }, order: [['date', 'DESC']] });
+        const subjectMap = {};
+        records.forEach(r => {
+            const subject = r.subject || 'Unknown';
+            if (!subjectMap[subject]) subjectMap[subject] = { total: 0, count: 0 };
+            subjectMap[subject].total += Number(r.score || 0);
+            subjectMap[subject].count += 1;
+        });
+        const subjects = Object.entries(subjectMap).map(([subject, data]) => {
+            const average = Math.round(data.total / data.count);
+            return {
+                subject,
+                average,
+                localGrade: getGradeFromScore(average),
+                cbcLevel: average >= 80 ? 'Exceeding Expectations' : average >= 60 ? 'Meeting Expectations' : average >= 40 ? 'Approaching Expectations' : 'Below Expectations',
+                recommendation: average >= 70 ? 'Maintain enrichment practice' : average >= 50 ? 'Add targeted revision' : 'Needs guided remediation'
+            };
+        });
+        const overallAverage = records.length ? Math.round(records.reduce((sum, r) => sum + Number(r.score || 0), 0) / records.length) : 0;
+
+        res.json({
+            success: true,
+            data: {
+                student: { id: student.id, name: student.User?.name || student.elimuid, grade: student.grade },
+                overallAverage,
+                overallGrade: getGradeFromScore(overallAverage),
+                subjects,
+                summary: subjects.length ? 'Curriculum comparison generated from published academic records.' : 'No academic records available for comparison yet.'
+            }
+        });
+    } catch (error) {
+        console.error('Curriculum comparison error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
