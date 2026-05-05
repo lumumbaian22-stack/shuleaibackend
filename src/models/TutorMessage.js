@@ -4,7 +4,7 @@ module.exports = (sequelize, DataTypes) => {
     sessionId: { type: DataTypes.INTEGER, allowNull: true },
     studentId: { type: DataTypes.INTEGER, allowNull: false },
     userId: { type: DataTypes.INTEGER, allowNull: true },
-    role: { type: DataTypes.ENUM('student', 'tutor', 'system'), allowNull: false },
+    role: { type: DataTypes.STRING, allowNull: false },
     message: { type: DataTypes.TEXT, allowNull: false },
     subject: { type: DataTypes.STRING, allowNull: true },
     topic: { type: DataTypes.STRING, allowNull: true },

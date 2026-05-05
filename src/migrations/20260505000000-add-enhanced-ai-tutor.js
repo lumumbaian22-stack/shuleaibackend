@@ -22,7 +22,7 @@ module.exports = {
       sessionId: { type: Sequelize.INTEGER, allowNull: true },
       studentId: { type: Sequelize.INTEGER, allowNull: false },
       userId: { type: Sequelize.INTEGER, allowNull: true },
-      role: { type: Sequelize.ENUM('student', 'tutor', 'system'), allowNull: false },
+      role: { type: Sequelize.STRING, allowNull: false },
       message: { type: Sequelize.TEXT, allowNull: false },
       subject: { type: Sequelize.STRING, allowNull: true },
       topic: { type: Sequelize.STRING, allowNull: true },
