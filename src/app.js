@@ -40,6 +40,7 @@ const paymentRoutes = require('./routes/paymentRoutes');
 const nationalRolloutRoutes = require('./routes/nationalRolloutRoutes');
 const scaleRoutes = require('./routes/scaleRoutes');
 const jobRoutes = require('./routes/jobRoutes');
+const tutorRoutes = require('./routes/tutorRoutes');
 const { routeAwareApiLimiter } = require('./middleware/productionRateLimits');
 const { requestContext, productionErrorHandler } = require('./middleware/requestContext');
 
@@ -131,6 +132,7 @@ app.use('/api/gamification', gamificationRoutes);
 app.use('/api/chat-v9', chatV9Routes);
 app.use('/api/scale', scaleRoutes);
 app.use('/api/jobs', jobRoutes);
+app.use('/api/tutor', tutorRoutes);
 // National rollout completion routes fill missing school-operations APIs and disable live money collection.
 app.use('/api', nationalRolloutRoutes);
 app.use('/api/payments', paymentRoutes);

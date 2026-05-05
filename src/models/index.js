@@ -48,6 +48,10 @@ const ChatMessage = require('./ChatMessage')(sequelize, DataTypes);
 const ClassroomThread = require('./ClassroomThread')(sequelize, DataTypes);
 const ThreadReply = require('./ThreadReply')(sequelize, DataTypes);
 const AchievementEvent = require('./AchievementEvent')(sequelize, DataTypes);
+const TutorSession = require('./TutorSession')(sequelize, DataTypes);
+const TutorMessage = require('./TutorMessage')(sequelize, DataTypes);
+const TutorProgress = require('./TutorProgress')(sequelize, DataTypes);
+const TutorUsage = require('./TutorUsage')(sequelize, DataTypes);
 
 // Add to associations: School.hasMany(SchoolCalendar)
 
@@ -275,6 +279,22 @@ AchievementEvent.belongsTo(User, { as: 'RecipientUser', foreignKey: 'userId' });
 AchievementEvent.belongsTo(Student, { foreignKey: 'studentId' });
 Student.hasMany(AchievementEvent, { foreignKey: 'studentId' });
 
+// Enhanced AI Tutor associations
+Student.hasMany(TutorSession, { foreignKey: 'studentId' });
+TutorSession.belongsTo(Student, { foreignKey: 'studentId' });
+User.hasMany(TutorSession, { foreignKey: 'userId' });
+TutorSession.belongsTo(User, { foreignKey: 'userId' });
+
+TutorSession.hasMany(TutorMessage, { foreignKey: 'sessionId' });
+TutorMessage.belongsTo(TutorSession, { foreignKey: 'sessionId' });
+Student.hasMany(TutorMessage, { foreignKey: 'studentId' });
+TutorMessage.belongsTo(Student, { foreignKey: 'studentId' });
+
+Student.hasMany(TutorProgress, { foreignKey: 'studentId' });
+TutorProgress.belongsTo(Student, { foreignKey: 'studentId' });
+Student.hasMany(TutorUsage, { foreignKey: 'studentId' });
+TutorUsage.belongsTo(Student, { foreignKey: 'studentId' });
+
 // Consent models associations
 UserConsent.belongsTo(User, { foreignKey: 'userId' });
 User.hasOne(UserConsent, { foreignKey: 'userId' });
@@ -331,6 +351,10 @@ module.exports = {
     ChatMessage,
     ClassroomThread,
     ThreadReply,
-    AchievementEvent
+    AchievementEvent,
+    TutorSession,
+    TutorMessage,
+    TutorProgress,
+    TutorUsage
     
 };
