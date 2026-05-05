@@ -22,12 +22,20 @@ async function ensureColumn(queryInterface, Sequelize, tableName, columnName, de
 async function safeAddIndex(queryInterface, tableName, fields, options = {}) {
   const indexName = options.name || `idx_${tableName.toLowerCase()}_${fields.join('_')}`;
   try {
+    const table = await queryInterface.describeTable(tableName);
+    const missing = fields.filter((field) => !table[field]);
+    if (missing.length) {
+      console.warn(`[migration:tutor] Skipping index ${indexName}; missing columns on ${tableName}: ${missing.join(', ')}`);
+      return;
+    }
     await queryInterface.addIndex(tableName, fields, { ...options, name: indexName });
   } catch (err) {
     const msg = String(err && (err.message || err.original?.message || err));
-    if (!msg.includes('already exists') && !msg.includes('relation') && !msg.includes('exists')) {
-      throw err;
+    if (msg.includes('already exists') || msg.includes('relation') || msg.includes('exists') || msg.includes('does not exist') || msg.includes('column')) {
+      console.warn(`[migration:tutor] Skipped index ${indexName} safely: ${msg}`);
+      return;
     }
+    throw err;
   }
 }
 

@@ -44,14 +44,39 @@ async function createTableIfMissing(tableName, ddl) {
   await sequelize.query(ddl);
 }
 
-async function addIndexIfMissing(indexName, ddl) {
+async function addIndexIfMissing(indexName, ddl, requirements = {}) {
   const result = await sequelize.query(
     `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = :indexName) AS exists`,
     { replacements: { indexName }, type: QueryTypes.SELECT }
   );
   if (result[0]?.exists) return;
-  console.warn(`[schemaSafety] Creating missing index "${indexName}"`);
-  await sequelize.query(ddl);
+
+  if (requirements.table && Array.isArray(requirements.columns)) {
+    if (!(await tableExists(requirements.table))) {
+      console.warn(`[schemaSafety] Cannot create index "${indexName}" because table "${requirements.table}" is missing; skipping`);
+      return;
+    }
+    const missing = [];
+    for (const column of requirements.columns) {
+      if (!(await columnExists(requirements.table, column))) missing.push(column);
+    }
+    if (missing.length) {
+      console.warn(`[schemaSafety] Cannot create index "${indexName}" because columns are missing on "${requirements.table}": ${missing.join(', ')}; skipping safely`);
+      return;
+    }
+  }
+
+  try {
+    console.warn(`[schemaSafety] Creating missing index "${indexName}"`);
+    await sequelize.query(ddl);
+  } catch (err) {
+    const msg = String(err?.original?.message || err?.message || err);
+    if (msg.includes('already exists') || msg.includes('does not exist') || msg.includes('column')) {
+      console.warn(`[schemaSafety] Skipped index "${indexName}" safely: ${msg}`);
+      return;
+    }
+    throw err;
+  }
 }
 
 async function ensureTutorTables() {
@@ -120,9 +145,60 @@ async function ensureTutorTables() {
       "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
 
-  await addIndexIfMissing('idx_tutor_messages_school_student_created', 'CREATE INDEX idx_tutor_messages_school_student_created ON "TutorMessages" ("schoolId", "studentId", "createdAt")');
-  await addIndexIfMissing('idx_tutor_progress_unique_school_student_subject_topic', 'CREATE UNIQUE INDEX idx_tutor_progress_unique_school_student_subject_topic ON "TutorProgresses" ("schoolId", "studentId", "subject", "topic")');
-  await addIndexIfMissing('idx_tutor_usage_unique_school_student_date', 'CREATE UNIQUE INDEX idx_tutor_usage_unique_school_student_date ON "TutorUsages" ("schoolId", "studentId", "usageDate")');
+  // Repair partially-created tutor tables before creating indexes. This is required for Render DBs
+  // where an older deployment created the table without the newer columns.
+  await addColumnIfMissing('TutorSessions', 'schoolId', "VARCHAR(255) NOT NULL DEFAULT 'default-school'");
+  await addColumnIfMissing('TutorSessions', 'studentId', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing('TutorSessions', 'userId', 'INTEGER');
+  await addColumnIfMissing('TutorSessions', 'grade', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorSessions', 'level', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorSessions', 'subject', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorSessions', 'mode', "VARCHAR(255) NOT NULL DEFAULT 'learn'");
+  await addColumnIfMissing('TutorSessions', 'lastCommand', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorSessions', 'metadata', "JSONB DEFAULT '{}'::jsonb");
+  await addColumnIfMissing('TutorSessions', 'createdAt', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+  await addColumnIfMissing('TutorSessions', 'updatedAt', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+
+  await addColumnIfMissing('TutorMessages', 'schoolId', "VARCHAR(255) NOT NULL DEFAULT 'default-school'");
+  await addColumnIfMissing('TutorMessages', 'sessionId', 'INTEGER');
+  await addColumnIfMissing('TutorMessages', 'studentId', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing('TutorMessages', 'userId', 'INTEGER');
+  await addColumnIfMissing('TutorMessages', 'role', "VARCHAR(255) NOT NULL DEFAULT 'student'");
+  await addColumnIfMissing('TutorMessages', 'message', "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing('TutorMessages', 'subject', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorMessages', 'topic', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorMessages', 'command', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorMessages', 'source', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorMessages', 'metadata', "JSONB DEFAULT '{}'::jsonb");
+  await addColumnIfMissing('TutorMessages', 'createdAt', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+  await addColumnIfMissing('TutorMessages', 'updatedAt', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+
+  await addColumnIfMissing('TutorProgresses', 'schoolId', "VARCHAR(255) NOT NULL DEFAULT 'default-school'");
+  await addColumnIfMissing('TutorProgresses', 'studentId', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing('TutorProgresses', 'grade', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorProgresses', 'level', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorProgresses', 'subject', "VARCHAR(255) NOT NULL DEFAULT 'General'");
+  await addColumnIfMissing('TutorProgresses', 'topic', "VARCHAR(255) NOT NULL DEFAULT 'General'");
+  await addColumnIfMissing('TutorProgresses', 'attempts', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing('TutorProgresses', 'correct', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing('TutorProgresses', 'lastCommand', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorProgresses', 'lastSource', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorProgresses', 'lastStudiedAt', 'TIMESTAMPTZ');
+  await addColumnIfMissing('TutorProgresses', 'metadata', "JSONB DEFAULT '{}'::jsonb");
+  await addColumnIfMissing('TutorProgresses', 'createdAt', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+  await addColumnIfMissing('TutorProgresses', 'updatedAt', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+
+  await addColumnIfMissing('TutorUsages', 'schoolId', "VARCHAR(255) NOT NULL DEFAULT 'default-school'");
+  await addColumnIfMissing('TutorUsages', 'studentId', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing('TutorUsages', 'usageDate', 'DATE NOT NULL DEFAULT CURRENT_DATE');
+  await addColumnIfMissing('TutorUsages', 'totalQuestions', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing('TutorUsages', 'aiCalls', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing('TutorUsages', 'createdAt', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+  await addColumnIfMissing('TutorUsages', 'updatedAt', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+
+  await addIndexIfMissing('idx_tutor_messages_school_student_created', 'CREATE INDEX idx_tutor_messages_school_student_created ON "TutorMessages" ("schoolId", "studentId", "createdAt")', { table: 'TutorMessages', columns: ['schoolId', 'studentId', 'createdAt'] });
+  await addIndexIfMissing('idx_tutor_progress_unique_school_student_subject_topic', 'CREATE UNIQUE INDEX idx_tutor_progress_unique_school_student_subject_topic ON "TutorProgresses" ("schoolId", "studentId", "subject", "topic")', { table: 'TutorProgresses', columns: ['schoolId', 'studentId', 'subject', 'topic'] });
+  await addIndexIfMissing('idx_tutor_usage_unique_school_student_date', 'CREATE UNIQUE INDEX idx_tutor_usage_unique_school_student_date ON "TutorUsages" ("schoolId", "studentId", "usageDate")', { table: 'TutorUsages', columns: ['schoolId', 'studentId', 'usageDate'] });
 }
 
 async function ensureSchoolCalendarTable() {
@@ -161,7 +237,7 @@ async function ensureSchoolCalendarTable() {
   await addColumnIfMissing('SchoolCalendars', 'audience', "VARCHAR(255) DEFAULT 'whole_school'");
   await addColumnIfMissing('SchoolCalendars', 'createdAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
   await addColumnIfMissing('SchoolCalendars', 'updatedAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
-  await addIndexIfMissing('idx_school_calendar_school_date', 'CREATE INDEX idx_school_calendar_school_date ON "SchoolCalendars" ("schoolId", "startDate")');
+  await addIndexIfMissing('idx_school_calendar_school_date', 'CREATE INDEX idx_school_calendar_school_date ON "SchoolCalendars" ("schoolId", "startDate")', { table: 'SchoolCalendars', columns: ['schoolId', 'startDate'] });
 }
 
 async function ensureRuntimeSchema() {
