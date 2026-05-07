@@ -1,7 +1,8 @@
-const { TutorSession, TutorMessage, TutorProgress, TutorUsage, Student } = require('../models');
+const { TutorSession, TutorMessage, TutorProgress, TutorUsage, Student, AcademicRecord, Attendance } = require('../models');
 const { detectCommand } = require('../services/tutor/commandDetector');
 const { LEVELS, normalizeGrade, getLevelByGrade, detectSubject } = require('../services/tutor/curriculumSubjects');
 const { detectTopic, buildTutorAnswer } = require('../services/tutor/tutorKnowledge');
+const { callClaudeTutor } = require('../services/claudeTutorService');
 
 async function resolveStudent(req, requestedStudentId) {
   if (requestedStudentId) {
@@ -23,7 +24,7 @@ exports.getTutorConfig = async (req, res) => {
 
 exports.askTutor = async (req, res) => {
   try {
-    const { question = '', studentId, grade, subject, mode } = req.body;
+    const { question = '', studentId, grade, subject, mode, curriculum } = req.body;
     if (!String(question).trim()) return res.status(400).json({ success: false, message: 'Question is required' });
 
     const schoolId = req.user.schoolCode || req.body.schoolId || 'default';
@@ -45,7 +46,17 @@ exports.askTutor = async (req, res) => {
     const session = await TutorSession.create({ schoolId, studentId: realStudentId, userId: req.user.id, grade: realGrade, level: level.id, subject: realSubject, mode: mode || command, lastCommand: command });
     await TutorMessage.create({ schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'student', message: question, subject: realSubject, topic, command, source: 'student' });
 
-    const answer = buildTutorAnswer({ question, command, subject: realSubject, topic, grade: realGrade, level });
+    const localAnswer = buildTutorAnswer({ question, command, subject: realSubject, topic, grade: realGrade, level });
+
+    const recentMarks = student ? await AcademicRecord.findAll({ where: { studentId: student.id, schoolCode: schoolId }, order: [['createdAt','DESC']], limit: 5 }).catch(()=>[]) : [];
+    const recentAttendance = student ? await Attendance.findAll({ where: { studentId: student.id, schoolCode: schoolId }, order: [['date','DESC']], limit: 5 }).catch(()=>[]) : [];
+    let aiText = null;
+    try {
+      aiText = await callClaudeTutor({ question, command, subject: realSubject, topic, grade: realGrade, curriculum: curriculum || student?.curriculum || 'cbc', studentContext: { recentMarks: recentMarks.map(r=>({subject:r.subject, score:r.score, term:r.term, year:r.year})), recentAttendance: recentAttendance.map(a=>({date:a.date, status:a.status})) } });
+    } catch (aiError) {
+      console.error('Claude tutor failed, using deterministic tutor engine:', aiError.message);
+    }
+    const answer = { ...localAnswer, explanation: aiText || localAnswer.explanation, source: aiText ? 'claude-haiku' : localAnswer.source };
 
     await TutorMessage.create({ schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'tutor', message: answer.explanation, subject: realSubject, topic, command, source: answer.source, metadata: answer });
     const [progress] = await TutorProgress.findOrCreate({ where: { schoolId, studentId: realStudentId, subject: realSubject, topic }, defaults: { schoolId, studentId: realStudentId, grade: realGrade, level: level.id, subject: realSubject, topic, attempts: 0, correct: 0 } });

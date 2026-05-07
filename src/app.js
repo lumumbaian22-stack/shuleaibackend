@@ -41,6 +41,9 @@ const nationalRolloutRoutes = require('./routes/nationalRolloutRoutes');
 const scaleRoutes = require('./routes/scaleRoutes');
 const jobRoutes = require('./routes/jobRoutes');
 const tutorRoutes = require('./routes/tutorRoutes');
+const reportRoutes = require('./routes/reportRoutes');
+const compatibilityRoutes = require('./routes/compatibilityRoutes');
+const feeStructureRoutes = require('./routes/feeStructureRoutes');
 const { routeAwareApiLimiter } = require('./middleware/productionRateLimits');
 const { requestContext, productionErrorHandler } = require('./middleware/requestContext');
 
@@ -125,6 +128,9 @@ app.use('/api/cbe', competencyRoutes);
 app.use('/api/home-tasks', homeTaskRoutes);
 app.use('/api/consent', consentRoutes);   // <-- ADDED
 app.use('/api/search', searchRoutes);
+app.use('/api/reports', reportRoutes);
+// V27 compatibility routes fix old frontend/test endpoints and role-safe aliases.
+app.use('/api', compatibilityRoutes);
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/timetable', timetableRoutes);
 app.use('/api/homework', homeworkRoutes);
@@ -136,6 +142,8 @@ app.use('/api/tutor', tutorRoutes);
 // National rollout completion routes fill missing school-operations APIs and disable live money collection.
 app.use('/api', nationalRolloutRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/fee-structures', feeStructureRoutes);
+app.use('/api/fees/structures', feeStructureRoutes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {

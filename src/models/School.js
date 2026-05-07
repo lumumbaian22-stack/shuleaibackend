@@ -105,10 +105,13 @@ module.exports = (sequelize, DataTypes) => {
     bankDetails: {
       type: DataTypes.JSONB,
       defaultValue: {
-        bankName: 'Equity Bank',
-        accountName: 'ShuleAI Schools',
-        accountNumber: '1234567890',
-        branch: 'Head Office'
+        bankName: '',
+        accountName: '',
+        accountNumber: '',
+        branch: '',
+        paybill: '',
+        till: '',
+        active: false
       }
     },
     stats: {

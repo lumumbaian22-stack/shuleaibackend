@@ -642,7 +642,7 @@ exports.getFees = async (req, res) => {
   }
 };
 
-// @desc    Add a manual fee payment
+// @desc    Fee payment endpoint disabled; production uses Daraja STK + callback
 // @route   POST /api/parent/fees/pay
 // @access  Private/Parent
 exports.addPayment = async (req, res) => {

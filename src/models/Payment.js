@@ -29,7 +29,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     plan: {
       type: DataTypes.ENUM('basic', 'premium', 'ultimate'),
-      allowNull: false
+      allowNull: true
     },
     status: {
       type: DataTypes.ENUM('pending', 'completed', 'failed', 'refunded'),
@@ -67,12 +67,21 @@ module.exports = (sequelize, DataTypes) => {
     },
     currency: {
       type: DataTypes.STRING,
-      defaultValue: 'USD'
+      defaultValue: 'KES'
     },
     paymentGateway: {
       type: DataTypes.STRING,
-      defaultValue: 'manual'
+      allowNull: false,
+      defaultValue: 'daraja'
     },
+    accountReference: { type: DataTypes.STRING, allowNull: true },
+    checkoutRequestId: { type: DataTypes.STRING, allowNull: true },
+    merchantRequestId: { type: DataTypes.STRING, allowNull: true },
+    mpesaReceiptNumber: { type: DataTypes.STRING, allowNull: true },
+    payerPhone: { type: DataTypes.STRING, allowNull: true },
+    paidTo: { type: DataTypes.ENUM('school', 'platform'), allowNull: false, defaultValue: 'platform' },
+    locked: { type: DataTypes.BOOLEAN, defaultValue: true },
+    auditTrail: { type: DataTypes.JSONB, defaultValue: [] },
     gatewayResponse: {
       type: DataTypes.JSONB,
       defaultValue: {}

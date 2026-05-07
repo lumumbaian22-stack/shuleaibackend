@@ -21,11 +21,16 @@ module.exports = (sequelize, DataTypes) => {
     reportedBy: DataTypes.INTEGER,
     reportedByParent: { type: DataTypes.BOOLEAN, defaultValue: false },
     timeIn: DataTypes.STRING,
-    timeOut: DataTypes.STRING
+    timeOut: DataTypes.STRING,
+    classId: { type: DataTypes.INTEGER, allowNull: true },
+    markedBy: { type: DataTypes.INTEGER, allowNull: true },
+    editedBy: { type: DataTypes.INTEGER, allowNull: true },
+    editReason: { type: DataTypes.TEXT, allowNull: true },
+    auditTrail: { type: DataTypes.JSONB, defaultValue: [] }
   }, {
     timestamps: true,
     indexes: [
-      { unique: true, fields: ['studentId', 'date'] }
+      { unique: true, fields: ['schoolCode', 'studentId', 'date'] }
     ]
   });
 

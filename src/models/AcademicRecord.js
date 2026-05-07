@@ -42,7 +42,17 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: null
     },
     date: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    isPublished: { type: DataTypes.BOOLEAN, defaultValue: false }
+    classId: { type: DataTypes.INTEGER, allowNull: true },
+    curriculum: { type: DataTypes.STRING, allowNull: true },
+    status: { type: DataTypes.ENUM('draft', 'reviewed', 'published', 'locked'), defaultValue: 'draft' },
+    isPublished: { type: DataTypes.BOOLEAN, defaultValue: false },
+    publishedAt: { type: DataTypes.DATE, allowNull: true },
+    publishedBy: { type: DataTypes.INTEGER, allowNull: true },
+    lockedAt: { type: DataTypes.DATE, allowNull: true },
+    unlockedBy: { type: DataTypes.INTEGER, allowNull: true },
+    unlockReason: { type: DataTypes.TEXT, allowNull: true },
+    version: { type: DataTypes.INTEGER, defaultValue: 1 },
+    auditTrail: { type: DataTypes.JSONB, defaultValue: [] }
   }, {
     timestamps: true
     // The beforeSave hook has been removed – grading is now handled in the controller

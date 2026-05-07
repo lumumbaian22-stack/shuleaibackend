@@ -15,6 +15,7 @@ const Admin = require('./Admin')(sequelize, DataTypes);
 const AcademicRecord = require('./AcademicRecord')(sequelize, DataTypes);
 const Attendance = require('./Attendance')(sequelize, DataTypes);
 const Fee = require('./Fee')(sequelize, DataTypes);
+const FeeStructure = require('./FeeStructure')(sequelize, DataTypes);
 const Payment = require('./Payment')(sequelize, DataTypes);
 const Message = require('./Message')(sequelize, DataTypes);
 const Alert = require('./Alert')(sequelize, DataTypes);
@@ -52,6 +53,8 @@ const TutorSession = require('./TutorSession')(sequelize, DataTypes);
 const TutorMessage = require('./TutorMessage')(sequelize, DataTypes);
 const TutorProgress = require('./TutorProgress')(sequelize, DataTypes);
 const TutorUsage = require('./TutorUsage')(sequelize, DataTypes);
+const AuditLog = require('./AuditLog')(sequelize, DataTypes);
+const ReportSnapshot = require('./ReportSnapshot')(sequelize, DataTypes);
 
 // Add to associations: School.hasMany(SchoolCalendar)
 
@@ -171,6 +174,11 @@ Teacher.hasMany(AcademicRecord, { foreignKey: 'teacherId' });
 // Attendance
 Attendance.belongsTo(Student, { foreignKey: 'studentId' });
 Student.hasMany(Attendance, { foreignKey: 'studentId' });
+
+// Fee Structure
+FeeStructure.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
+School.hasMany(FeeStructure, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
+FeeStructure.hasMany(Fee, { foreignKey: 'feeStructureId', sourceKey: 'id' });
 
 // Fee
 Fee.belongsTo(Student, { foreignKey: 'studentId' });
@@ -295,6 +303,9 @@ TutorProgress.belongsTo(Student, { foreignKey: 'studentId' });
 Student.hasMany(TutorUsage, { foreignKey: 'studentId' });
 TutorUsage.belongsTo(Student, { foreignKey: 'studentId' });
 
+Student.hasMany(ReportSnapshot, { foreignKey: 'studentId' });
+ReportSnapshot.belongsTo(Student, { foreignKey: 'studentId' });
+
 // Consent models associations
 UserConsent.belongsTo(User, { foreignKey: 'userId' });
 User.hasOne(UserConsent, { foreignKey: 'userId' });
@@ -316,6 +327,7 @@ module.exports = {
     AcademicRecord,
     Attendance,
     Fee,
+    FeeStructure,
     Payment,
     Message,
     Alert,
@@ -355,6 +367,8 @@ module.exports = {
     TutorSession,
     TutorMessage,
     TutorProgress,
-    TutorUsage
+    TutorUsage,
+    AuditLog,
+    ReportSnapshot
     
 };

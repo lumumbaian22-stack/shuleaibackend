@@ -38,7 +38,14 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM('basic', 'premium', 'ultimate'),
       defaultValue: 'basic'
     },
-    payments: { type: DataTypes.JSONB, defaultValue: [] }
+    payments: { type: DataTypes.JSONB, defaultValue: [] },
+    feeStructureId: { type: DataTypes.STRING, allowNull: true },
+    classId: { type: DataTypes.INTEGER, allowNull: true },
+    currency: { type: DataTypes.STRING, defaultValue: 'KES' },
+    locked: { type: DataTypes.BOOLEAN, defaultValue: false },
+    auditTrail: { type: DataTypes.JSONB, defaultValue: [] },
+    adjustments: { type: DataTypes.JSONB, defaultValue: [] },
+    lastReconciledAt: { type: DataTypes.DATE, allowNull: true }
   }, {
     timestamps: true
   });
