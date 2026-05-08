@@ -258,6 +258,8 @@ async function ensureRuntimeSchema() {
   await addColumnIfMissing('Fees', 'auditTrail', "JSONB DEFAULT '[]'::jsonb");
   await addColumnIfMissing('Fees', 'adjustments', "JSONB DEFAULT '[]'::jsonb");
   await addColumnIfMissing('Fees', 'lastReconciledAt', 'TIMESTAMP WITH TIME ZONE');
+  await addColumnIfMissing('AcademicRecords', 'classId', 'INTEGER');
+  await addColumnIfMissing('Attendance', 'classId', 'INTEGER');
 
   await addIndexIfMissing('idx_students_class_id_v30', 'CREATE INDEX idx_students_class_id_v30 ON "Students" ("classId")', { table: 'Students', columns: ['classId'] });
   await addIndexIfMissing('idx_fees_class_term_v30', 'CREATE INDEX idx_fees_class_term_v30 ON "Fees" ("schoolCode", "classId", "term", "year")', { table: 'Fees', columns: ['schoolCode', 'classId', 'term', 'year'] });

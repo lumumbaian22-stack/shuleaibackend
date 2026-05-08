@@ -8,6 +8,18 @@ const {
 } = require('../models');
 const moment = require('moment');
 
+
+async function ensureAnalyticsRuntimeColumns() {
+    // Last-line protection for live Postgres/Render databases that missed older migrations.
+    // This prevents /api/admin/analytics from crashing when Sequelize selects Student.classId.
+    await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+    await sequelize.query("ALTER TABLE IF EXISTS \"Students\" ADD COLUMN IF NOT EXISTS \"curriculum\" VARCHAR(255) DEFAULT 'cbc'");
+    await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "admissionNumber" VARCHAR(255)');
+    await sequelize.query('ALTER TABLE IF EXISTS "Fees" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+    await sequelize.query('ALTER TABLE IF EXISTS "AcademicRecords" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+    await sequelize.query('ALTER TABLE IF EXISTS "Attendance" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+}
+
 // ---------- SUPER ADMIN ANALYTICS ----------
 exports.getSuperAdminAnalytics = async (req, res) => {
     try {
@@ -70,6 +82,7 @@ exports.getSuperAdminAnalytics = async (req, res) => {
 // ---------- ADMIN ANALYTICS (extended) ----------
 exports.getAdminAnalytics = async (req, res) => {
     try {
+        await ensureAnalyticsRuntimeColumns();
         const schoolCode = req.user.schoolCode;
         const school = await School.findOne({ where: { schoolId: schoolCode } });
         if (!school) return res.status(404).json({ success: false, message: 'School not found' });
