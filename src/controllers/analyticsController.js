@@ -79,6 +79,41 @@ exports.getSuperAdminAnalytics = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
+
+async function getAdminAnalyticsSafeFallback(schoolCode) {
+    const q = async (sql, replacements = {}) => sequelize.query(sql, { replacements, type: sequelize.QueryTypes.SELECT });
+    const scalar = async (sql, replacements = {}) => {
+        const rows = await q(sql, replacements);
+        const first = rows[0] || {};
+        return Number(first.count ?? first.total ?? first.value ?? 0) || 0;
+    };
+    const totalStudents = await scalar('SELECT COUNT(*) AS count FROM "Students" s JOIN "Users" u ON u.id = s."userId" WHERE u."schoolCode" = :schoolCode', { schoolCode }).catch(() => 0);
+    const totalTeachers = await scalar('SELECT COUNT(*) AS count FROM "Teachers" t JOIN "Users" u ON u.id = t."userId" WHERE u."schoolCode" = :schoolCode AND u.role = \'teacher\'', { schoolCode }).catch(() => 0);
+    const totalClasses = await scalar('SELECT COUNT(*) AS count FROM "Classes" WHERE "schoolCode" = :schoolCode AND COALESCE("isActive", true) = true', { schoolCode }).catch(() => 0);
+    const attendanceRows = await q('SELECT status, COUNT(*) AS count FROM "Attendance" WHERE "schoolCode" = :schoolCode AND date >= CURRENT_DATE - INTERVAL \'30 days\' GROUP BY status', { schoolCode }).catch(() => []);
+    const attendanceTotal = attendanceRows.reduce((s, r) => s + Number(r.count || 0), 0);
+    const present = attendanceRows.find(r => r.status === 'present')?.count || 0;
+    const attendanceRate = attendanceTotal ? Math.round((Number(present) / attendanceTotal) * 100) : 0;
+    const feeRows = await q('SELECT COALESCE(SUM("totalAmount"),0) AS total, COALESCE(SUM("paidAmount"),0) AS paid FROM "Fees" WHERE "schoolCode" = :schoolCode', { schoolCode }).catch(() => [{ total: 0, paid: 0 }]);
+    const totalFees = Number(feeRows[0]?.total || 0);
+    const paidFees = Number(feeRows[0]?.paid || 0);
+    const feeCollectionRate = totalFees ? Math.round((paidFees / totalFees) * 100) : 0;
+    const feeStatusRows = await q('SELECT status, COUNT(*) AS count FROM "Fees" WHERE "schoolCode" = :schoolCode GROUP BY status', { schoolCode }).catch(() => []);
+    const feeStatus = { paid: 0, partial: 0, unpaid: 0 };
+    feeStatusRows.forEach(r => { feeStatus[r.status] = Number(r.count || 0); });
+    return {
+        overview: { totalStudents, totalTeachers, totalClasses, attendanceRate, feeCollectionRate },
+        enrollmentTrend: { labels: [], values: [] },
+        gradeDistribution: { labels: [], values: [] },
+        attendanceByGrade: { labels: [], values: [] },
+        feeStatus,
+        teacherWorkload: [],
+        parentEngagement: [],
+        tardinessTrend: { labels: ['Monday','Tuesday','Wednesday','Thursday','Friday'], values: [0,0,0,0,0] },
+        submitPattern: { onTime: 0, late: 0 }
+    };
+}
+
 // ---------- ADMIN ANALYTICS (extended) ----------
 exports.getAdminAnalytics = async (req, res) => {
     try {
@@ -188,7 +223,20 @@ exports.getAdminAnalytics = async (req, res) => {
         const submitPattern = { onTime, late };
 
         res.json({ success: true, data: { overview: { totalStudents, totalTeachers, totalClasses, attendanceRate, feeCollectionRate }, enrollmentTrend, gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) }, attendanceByGrade, feeStatus, teacherWorkload: workloadData, parentEngagement: engagementData, tardinessTrend, submitPattern } });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+    } catch (error) {
+        const message = String(error?.original?.message || error?.message || error);
+        console.error('Admin analytics error:', message);
+        if (message.includes('classId') || message.includes('column')) {
+            try {
+                await ensureAnalyticsRuntimeColumns();
+                const data = await getAdminAnalyticsSafeFallback(req.user.schoolCode);
+                return res.json({ success: true, data, repaired: true });
+            } catch (fallbackError) {
+                console.error('Admin analytics fallback error:', fallbackError);
+            }
+        }
+        res.status(500).json({ success: false, message });
+    }
 };
 
 // ---------- TEACHER ANALYTICS (extended) ----------
