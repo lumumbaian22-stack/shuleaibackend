@@ -246,6 +246,22 @@ async function ensureRuntimeSchema() {
     return;
   }
 
+  // V30: hard runtime repair for live Render/Postgres DBs that missed the v29 migration.
+  // Sequelize queries "Student" columns with exact quoted camelCase names, so the DB must contain "classId" exactly.
+  await addColumnIfMissing('Students', 'classId', 'INTEGER');
+  await addColumnIfMissing('Students', 'curriculum', "VARCHAR(255) DEFAULT 'cbc'");
+  await addColumnIfMissing('Students', 'admissionNumber', 'VARCHAR(255)');
+  await addColumnIfMissing('Fees', 'feeStructureId', 'VARCHAR(255)');
+  await addColumnIfMissing('Fees', 'classId', 'INTEGER');
+  await addColumnIfMissing('Fees', 'currency', "VARCHAR(255) DEFAULT 'KES'");
+  await addColumnIfMissing('Fees', 'locked', 'BOOLEAN DEFAULT false');
+  await addColumnIfMissing('Fees', 'auditTrail', "JSONB DEFAULT '[]'::jsonb");
+  await addColumnIfMissing('Fees', 'adjustments', "JSONB DEFAULT '[]'::jsonb");
+  await addColumnIfMissing('Fees', 'lastReconciledAt', 'TIMESTAMP WITH TIME ZONE');
+
+  await addIndexIfMissing('idx_students_class_id_v30', 'CREATE INDEX idx_students_class_id_v30 ON "Students" ("classId")', { table: 'Students', columns: ['classId'] });
+  await addIndexIfMissing('idx_fees_class_term_v30', 'CREATE INDEX idx_fees_class_term_v30 ON "Fees" ("schoolCode", "classId", "term", "year")', { table: 'Fees', columns: ['schoolCode', 'classId', 'term', 'year'] });
+
   await addColumnIfMissing('Students', 'assessmentNumber', 'VARCHAR(255)');
   await addColumnIfMissing('Students', 'nemisNumber', 'VARCHAR(255)');
   await addColumnIfMissing('Students', 'location', 'VARCHAR(255)');
