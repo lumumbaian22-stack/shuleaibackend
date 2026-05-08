@@ -20,36 +20,6 @@ async function ensureAnalyticsRuntimeColumns() {
     await sequelize.query('ALTER TABLE IF EXISTS "Attendance" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
 }
 
-
-
-async function getAdminAnalyticsFallback(req) {
-    const schoolCode = req.user?.schoolCode;
-    const safeCount = async (sql, replacements = {}) => {
-        try {
-            const rows = await sequelize.query(sql, { replacements, type: Sequelize.QueryTypes.SELECT });
-            return Number(rows?.[0]?.count || 0);
-        } catch (_) { return 0; }
-    };
-    const totalStudents = await safeCount('SELECT COUNT(*) AS count FROM "Users" WHERE "schoolCode" = :schoolCode AND "role" = \'student\'', { schoolCode });
-    const totalTeachers = await safeCount('SELECT COUNT(*) AS count FROM "Users" WHERE "schoolCode" = :schoolCode AND "role" = \'teacher\'', { schoolCode });
-    const totalClasses = await safeCount('SELECT COUNT(*) AS count FROM "Classes" WHERE "schoolCode" = :schoolCode', { schoolCode });
-    const attendanceTotal = await safeCount('SELECT COUNT(*) AS count FROM "Attendance" WHERE "schoolCode" = :schoolCode', { schoolCode });
-    const attendancePresent = await safeCount('SELECT COUNT(*) AS count FROM "Attendance" WHERE "schoolCode" = :schoolCode AND "status" = \'present\'', { schoolCode });
-    const attendanceRate = attendanceTotal ? Math.round((attendancePresent / attendanceTotal) * 100) : 0;
-    return {
-        overview: { totalStudents, totalTeachers, totalClasses, attendanceRate, feeCollectionRate: 0 },
-        enrollmentTrend: { labels: [], values: [] },
-        gradeDistribution: { labels: ['A','B','C','D','E'], values: [0,0,0,0,0] },
-        attendanceByGrade: { labels: [], values: [] },
-        feeStatus: { paid: 0, partial: 0, unpaid: 0 },
-        teacherWorkload: [],
-        parentEngagement: [],
-        tardinessTrend: { labels: [], values: [] },
-        submitPattern: { onTime: 0, late: 0 },
-        warning: 'Analytics fallback mode used because one or more optional database columns are still being repaired.'
-    };
-}
-
 // ---------- SUPER ADMIN ANALYTICS ----------
 exports.getSuperAdminAnalytics = async (req, res) => {
     try {
@@ -218,19 +188,7 @@ exports.getAdminAnalytics = async (req, res) => {
         const submitPattern = { onTime, late };
 
         res.json({ success: true, data: { overview: { totalStudents, totalTeachers, totalClasses, attendanceRate, feeCollectionRate }, enrollmentTrend, gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) }, attendanceByGrade, feeStatus, teacherWorkload: workloadData, parentEngagement: engagementData, tardinessTrend, submitPattern } });
-    } catch (error) {
-        const msg = String(error?.original?.message || error?.message || error);
-        if (/classId|column .* does not exist/i.test(msg)) {
-            try {
-                await ensureAnalyticsRuntimeColumns();
-                const data = await getAdminAnalyticsFallback(req);
-                return res.json({ success: true, data });
-            } catch (fallbackError) {
-                return res.status(500).json({ success: false, message: fallbackError.message, original: msg });
-            }
-        }
-        res.status(500).json({ success: false, message: error.message });
-    }
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
 // ---------- TEACHER ANALYTICS (extended) ----------
@@ -604,113 +562,4 @@ exports.getParentAnalytics = async (req, res) => {
         console.error('V17 getParentAnalytics error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
-};
-
-// ============ V37 HARDENED ADMIN ANALYTICS OVERRIDE ============
-// This override intentionally avoids Sequelize Student.findAll/count because older live
-// Render/Postgres databases may still be missing quoted camelCase columns such as "classId".
-// It returns useful dashboard analytics using safe raw SQL and never lets analytics crash the UI.
-exports.getAdminAnalytics = async (req, res) => {
-  const schoolCode = req.user?.schoolCode || req.user?.schoolId || null;
-  const safeSelect = async (sql, replacements = {}) => {
-    try {
-      return await sequelize.query(sql, { replacements, type: Sequelize.QueryTypes.SELECT });
-    } catch (error) {
-      console.warn('[v37 analytics] skipped query:', error.message);
-      return [];
-    }
-  };
-  const safeCount = async (sql, replacements = {}) => {
-    const rows = await safeSelect(sql, replacements);
-    return Number(rows?.[0]?.count || 0);
-  };
-  const safeSum = async (sql, replacements = {}) => {
-    const rows = await safeSelect(sql, replacements);
-    return Number(rows?.[0]?.total || 0);
-  };
-
-  try {
-    // Repair if possible, but do not depend on this succeeding before returning analytics.
-    try { await ensureAnalyticsRuntimeColumns(); } catch (repairError) { console.warn('[v37 analytics] schema repair skipped:', repairError.message); }
-
-    const replacements = { schoolCode };
-    const userSchoolClause = schoolCode ? 'WHERE "schoolCode" = :schoolCode' : '';
-    const attendanceSchoolClause = schoolCode ? 'WHERE "schoolCode" = :schoolCode' : '';
-    const recordSchoolClause = schoolCode ? 'WHERE "schoolCode" = :schoolCode' : '';
-    const feeSchoolClause = schoolCode ? 'WHERE "schoolCode" = :schoolCode' : '';
-
-    const totalStudents = await safeCount(`SELECT COUNT(*) AS count FROM "Users" ${userSchoolClause} ${userSchoolClause ? 'AND' : 'WHERE'} "role" = 'student'`, replacements);
-    const totalTeachers = await safeCount(`SELECT COUNT(*) AS count FROM "Users" ${userSchoolClause} ${userSchoolClause ? 'AND' : 'WHERE'} "role" = 'teacher'`, replacements);
-    const totalClasses = await safeCount(`SELECT COUNT(*) AS count FROM "Classes" ${schoolCode ? 'WHERE "schoolCode" = :schoolCode' : ''}`, replacements);
-
-    const attendanceTotal = await safeCount(`SELECT COUNT(*) AS count FROM "Attendance" ${attendanceSchoolClause}`, replacements);
-    const attendancePresent = await safeCount(`SELECT COUNT(*) AS count FROM "Attendance" ${attendanceSchoolClause} ${attendanceSchoolClause ? 'AND' : 'WHERE'} "status" = 'present'`, replacements);
-    const attendanceRate = attendanceTotal ? Math.round((attendancePresent / attendanceTotal) * 100) : 0;
-
-    const totalFees = await safeSum(`SELECT COALESCE(SUM("totalAmount"), 0) AS total FROM "Fees" ${feeSchoolClause}`, replacements);
-    const paidFees = await safeSum(`SELECT COALESCE(SUM("paidAmount"), 0) AS total FROM "Fees" ${feeSchoolClause}`, replacements);
-    const feeCollectionRate = totalFees ? Math.round((paidFees / totalFees) * 100) : 0;
-
-    const gradeRows = await safeSelect(`SELECT COALESCE(SUBSTRING("grade" FROM 1 FOR 1), 'E') AS grade, COUNT(*) AS count FROM "AcademicRecords" ${recordSchoolClause} GROUP BY COALESCE(SUBSTRING("grade" FROM 1 FOR 1), 'E')`, replacements);
-    const gradeCounts = { A: 0, B: 0, C: 0, D: 0, E: 0 };
-    gradeRows.forEach(row => {
-      const g = String(row.grade || 'E').toUpperCase();
-      if (Object.prototype.hasOwnProperty.call(gradeCounts, g)) gradeCounts[g] = Number(row.count || 0);
-    });
-
-    const feeRows = await safeSelect(`SELECT COALESCE("status", 'unpaid') AS status, COUNT(*) AS count FROM "Fees" ${feeSchoolClause} GROUP BY COALESCE("status", 'unpaid')`, replacements);
-    const feeStatus = { paid: 0, partial: 0, unpaid: 0 };
-    feeRows.forEach(row => {
-      const status = String(row.status || 'unpaid').toLowerCase();
-      if (status.includes('paid') && !status.includes('partial')) feeStatus.paid += Number(row.count || 0);
-      else if (status.includes('partial')) feeStatus.partial += Number(row.count || 0);
-      else feeStatus.unpaid += Number(row.count || 0);
-    });
-
-    const lateRows = await safeSelect(`SELECT EXTRACT(DOW FROM "date") AS dow, COUNT(*) AS count FROM "Attendance" ${attendanceSchoolClause} ${attendanceSchoolClause ? 'AND' : 'WHERE'} "status" = 'late' GROUP BY EXTRACT(DOW FROM "date")`, replacements);
-    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const dayCounts = { Monday: 0, Tuesday: 0, Wednesday: 0, Thursday: 0, Friday: 0 };
-    lateRows.forEach(row => {
-      const day = dayNames[Number(row.dow || 0)];
-      if (Object.prototype.hasOwnProperty.call(dayCounts, day)) dayCounts[day] = Number(row.count || 0);
-    });
-
-    const parentRows = await safeSelect(`SELECT "name", COALESCE("loginCount", 0) AS "loginCount" FROM "Users" ${userSchoolClause} ${userSchoolClause ? 'AND' : 'WHERE'} "role" = 'parent' ORDER BY COALESCE("loginCount", 0) DESC LIMIT 10`, replacements);
-    const teacherRows = await safeSelect(`SELECT "name", 0 AS "monthlyDutyCount", 100 AS "reliabilityScore" FROM "Users" ${userSchoolClause} ${userSchoolClause ? 'AND' : 'WHERE'} "role" = 'teacher' ORDER BY "createdAt" DESC LIMIT 10`, replacements);
-
-    return res.json({
-      success: true,
-      data: {
-        overview: { totalStudents, totalTeachers, totalClasses, attendanceRate, feeCollectionRate },
-        enrollmentTrend: { labels: [], values: [] },
-        gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) },
-        attendanceByGrade: { labels: [], values: [] },
-        feeStatus,
-        teacherWorkload: teacherRows.map(t => ({ name: t.name || 'Teacher', monthlyDutyCount: Number(t.monthlyDutyCount || 0), reliabilityScore: Number(t.reliabilityScore || 100) })),
-        parentEngagement: parentRows.map(p => ({ name: p.name || 'Parent', logins: Number(p.loginCount || 0) })),
-        tardinessTrend: { labels: Object.keys(dayCounts), values: Object.values(dayCounts) },
-        submitPattern: { onTime: 0, late: 0 },
-        hardened: true,
-        warning: 'V37 hardened analytics avoids optional Student columns so dashboards do not crash during schema repair.'
-      }
-    });
-  } catch (error) {
-    console.error('[v37 analytics] final fallback failed:', error);
-    return res.json({
-      success: true,
-      data: {
-        overview: { totalStudents: 0, totalTeachers: 0, totalClasses: 0, attendanceRate: 0, feeCollectionRate: 0 },
-        enrollmentTrend: { labels: [], values: [] },
-        gradeDistribution: { labels: ['A','B','C','D','E'], values: [0,0,0,0,0] },
-        attendanceByGrade: { labels: [], values: [] },
-        feeStatus: { paid: 0, partial: 0, unpaid: 0 },
-        teacherWorkload: [],
-        parentEngagement: [],
-        tardinessTrend: { labels: ['Monday','Tuesday','Wednesday','Thursday','Friday'], values: [0,0,0,0,0] },
-        submitPattern: { onTime: 0, late: 0 },
-        hardened: true,
-        warning: error.message
-      }
-    });
-  }
 };
