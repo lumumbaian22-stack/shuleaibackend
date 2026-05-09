@@ -203,9 +203,9 @@ exports.uploadProfilePicture = async (req, res) => {
     const relativeUrl = `/uploads/profiles/${fileName}`;
     const absoluteUrl = `${req.protocol}://${req.get('host')}${relativeUrl}`;
 
-    await req.user.update({ profileImage: absoluteUrl });
+    await req.user.update({ profileImage: absoluteUrl, profilePicture: absoluteUrl });
 
-    res.json({ success: true, data: { profileImage: absoluteUrl, profileImagePath: relativeUrl } });
+    res.json({ success: true, data: { profileImage: absoluteUrl, profilePicture: absoluteUrl, profileImagePath: relativeUrl } });
   } catch (error) {
     console.error('Profile upload error:', error);
     res.status(500).json({ success: false, message: error.message });

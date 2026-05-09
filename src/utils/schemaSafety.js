@@ -246,6 +246,13 @@ async function ensureRuntimeSchema() {
     return;
   }
 
+  // V51: global profile picture compatibility. Older UI/components may request profilePicture,
+  // while the canonical uploaded URL is profileImage. Keep both columns in sync safely.
+  await addColumnIfMissing('Users', 'profilePicture', 'VARCHAR(255)');
+  await addColumnIfMissing('Users', 'profileImage', 'VARCHAR(255)');
+  await sequelize.query('UPDATE "Users" SET "profilePicture" = "profileImage" WHERE "profilePicture" IS NULL AND "profileImage" IS NOT NULL').catch(() => null);
+  await sequelize.query('UPDATE "Users" SET "profileImage" = "profilePicture" WHERE "profileImage" IS NULL AND "profilePicture" IS NOT NULL').catch(() => null);
+
   // V30: hard runtime repair for live Render/Postgres DBs that missed the v29 migration.
   // Sequelize queries "Student" columns with exact quoted camelCase names, so the DB must contain "classId" exactly.
   await addColumnIfMissing('Students', 'classId', 'INTEGER');

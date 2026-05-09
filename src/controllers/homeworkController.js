@@ -173,7 +173,7 @@ exports.getTeacherAssignments = async (req, res) => {
 
     res.json({ success: true, data: tasks.map(t => {
       const json = t.toJSON();
-      const assignments = json.HomeTaskAssignments || json.homeTaskAssignments || json.assignments || [];
+      const assignments = json.HomeTaskAssignments || json.HomeTaskAssignments || [];
       return {
         ...json,
         assignedCount: assignments.length,
