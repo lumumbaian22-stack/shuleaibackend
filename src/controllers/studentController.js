@@ -155,6 +155,10 @@ exports.getDashboard = async (req, res) => {
       data: {
         student: req.user.getPublicProfile(),
         averageScore: parseFloat(avg),
+        stats: {
+            averageScore: parseFloat(avg),
+            attendanceRate: attendance.length ? Math.round((attendance.filter(a => a.status === 'present').length / attendance.length) * 100) : 0
+        },
         recentRecords: records.map(r => ({
             ...r.toJSON(),
             grade: getGradeFromScore(r.score, curriculum, schoolLevel)

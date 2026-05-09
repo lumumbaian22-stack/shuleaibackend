@@ -3,7 +3,8 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const studentController = require('../controllers/studentController');
 const authController = require('../controllers/authController');
-const analyticsController = require('../controllers/analyticsController'); // Add import
+const analyticsController = require('../controllers/analyticsController');
+const { MoodCheckin } = require('../models');
 
 router.post('/set-first-password', authController.setFirstPassword);
 
