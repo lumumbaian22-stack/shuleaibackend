@@ -29,6 +29,7 @@ module.exports = (sequelize, DataTypes) => {
     approvalStatus: { type: DataTypes.ENUM('pending', 'approved', 'rejected'), defaultValue: 'approved' },
     approvedBy: DataTypes.INTEGER
   }, {
+    defaultScope: { attributes: { exclude: ['classId'] } },
     timestamps: true,
     hooks: {
       beforeCreate: async (student) => {

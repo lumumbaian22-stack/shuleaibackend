@@ -54,6 +54,7 @@ module.exports = (sequelize, DataTypes) => {
     version: { type: DataTypes.INTEGER, defaultValue: 1 },
     auditTrail: { type: DataTypes.JSONB, defaultValue: [] }
   }, {
+    defaultScope: { attributes: { exclude: ['classId'] } },
     timestamps: true
     // The beforeSave hook has been removed – grading is now handled in the controller
   });

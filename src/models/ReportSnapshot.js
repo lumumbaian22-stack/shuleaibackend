@@ -16,6 +16,7 @@ module.exports = (sequelize, DataTypes) => {
     checksum: { type: DataTypes.STRING, allowNull: true },
     metadata: { type: DataTypes.JSONB, defaultValue: {} }
   }, {
+    defaultScope: { attributes: { exclude: ['classId'] } },
     timestamps: true,
     indexes: [
       { unique: true, fields: ['schoolCode', 'studentId', 'term', 'year', 'reportType'] },

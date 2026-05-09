@@ -23,6 +23,7 @@ module.exports = (sequelize, DataTypes) => {
     updatedBy: { type: DataTypes.INTEGER, allowNull: true },
     auditTrail: { type: DataTypes.JSONB, defaultValue: [] }
   }, {
+    defaultScope: { attributes: { exclude: ['classId'] } },
     timestamps: true,
     indexes: [
       { fields: ['schoolCode', 'className', 'term', 'year'] },

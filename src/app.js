@@ -106,6 +106,9 @@ app.use('/uploads', (req, res, next) => {
 app.get('/health', (req, res) => {
   res.json({ success: true, timestamp: new Date().toISOString() });
 });
+app.get('/api/health', (req, res) => {
+  res.json({ success: true, timestamp: new Date().toISOString() });
+});
 
 
 // V42: run the schema guard once on first API request too. This protects Render deployments
@@ -124,6 +127,32 @@ app.use('/api', async (req, res, next) => {
     console.error('[v42-schema-guard] Continuing after schema guard error:', err.message);
   }
   next();
+});
+
+
+async function ensureCriticalDashboardColumns(req, res, next) {
+  try {
+    const { sequelize } = require('./models');
+    await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+    await sequelize.query('ALTER TABLE IF EXISTS "Teachers" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+    await sequelize.query('ALTER TABLE IF EXISTS "AcademicRecords" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+    await sequelize.query('ALTER TABLE IF EXISTS "Attendance" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+    await sequelize.query('ALTER TABLE IF EXISTS "Fees" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+    await sequelize.query('ALTER TABLE IF EXISTS "ReportSnapshots" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+    await sequelize.query('ALTER TABLE IF EXISTS "FeeStructures" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+    await sequelize.query('ALTER TABLE IF EXISTS "TutorSessions" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+    await sequelize.query('ALTER TABLE IF EXISTS "TutorMessages" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+    await sequelize.query("UPDATE \"TutorSessions\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+    await sequelize.query("UPDATE \"TutorMessages\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+  } catch (err) {
+    console.error('[critical-schema] repair failed:', err.message);
+  }
+  next();
+}
+app.use('/api', ensureCriticalDashboardColumns);
+
+app.post('/api/system/repair-schema', ensureCriticalDashboardColumns, (req, res) => {
+  res.json({ success: true, message: 'Critical dashboard schema repair completed' });
 });
 
 // ============ MOUNT ROUTES ============

@@ -28,6 +28,7 @@ module.exports = (sequelize, DataTypes) => {
     editReason: { type: DataTypes.TEXT, allowNull: true },
     auditTrail: { type: DataTypes.JSONB, defaultValue: [] }
   }, {
+    defaultScope: { attributes: { exclude: ['classId'] } },
     timestamps: true,
     indexes: [
       { unique: true, fields: ['schoolCode', 'studentId', 'date'] }
