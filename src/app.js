@@ -46,6 +46,7 @@ const compatibilityRoutes = require('./routes/compatibilityRoutes');
 const feeStructureRoutes = require('./routes/feeStructureRoutes');
 const { routeAwareApiLimiter } = require('./middleware/productionRateLimits');
 const { requestContext, productionErrorHandler } = require('./middleware/requestContext');
+const { ensureRuntimeSchema } = require('./utils/schemaSafety');
 
 const app = express();
 
@@ -104,6 +105,25 @@ app.use('/uploads', (req, res, next) => {
 // ============ TEST ENDPOINT ============
 app.get('/health', (req, res) => {
   res.json({ success: true, timestamp: new Date().toISOString() });
+});
+
+
+// V42: run the schema guard once on first API request too. This protects Render deployments
+// where startup migrations are skipped, delayed, or the old process remains warm.
+let __v42SchemaGuardPromise = null;
+app.use('/api', async (req, res, next) => {
+  try {
+    if (!__v42SchemaGuardPromise) {
+      __v42SchemaGuardPromise = ensureRuntimeSchema().catch((err) => {
+        console.error('[v42-schema-guard] Runtime schema repair failed:', err.message);
+        __v42SchemaGuardPromise = null;
+      });
+    }
+    await __v42SchemaGuardPromise;
+  } catch (err) {
+    console.error('[v42-schema-guard] Continuing after schema guard error:', err.message);
+  }
+  next();
 });
 
 // ============ MOUNT ROUTES ============

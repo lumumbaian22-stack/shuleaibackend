@@ -1,6 +1,7 @@
 module.exports = (sequelize, DataTypes) => {
   const TutorProgress = sequelize.define('TutorProgress', {
     schoolId: { type: DataTypes.STRING, allowNull: false, index: true },
+    schoolCode: { type: DataTypes.STRING, allowNull: true },
     studentId: { type: DataTypes.INTEGER, allowNull: false },
     grade: { type: DataTypes.STRING, allowNull: true },
     level: { type: DataTypes.STRING, allowNull: true },

@@ -37,14 +37,14 @@ exports.askTutor = async (req, res) => {
     const topic = detectTopic(question, realSubject);
 
     let usage = await TutorUsage.findOne({ where: { schoolId, studentId: realStudentId, usageDate: todayISO() } });
-    if (!usage) usage = await TutorUsage.create({ schoolId, studentId: realStudentId, usageDate: todayISO(), totalQuestions: 0, aiCalls: 0 });
+    if (!usage) usage = await TutorUsage.create({ schoolId, schoolCode: schoolId, studentId: realStudentId, usageDate: todayISO(), totalQuestions: 0, aiCalls: 0 });
     const dailyLimit = req.user.role === 'admin' || req.user.role === 'teacher' ? 500 : 50;
     if (usage.totalQuestions >= dailyLimit) {
       return res.status(403).json({ success: false, message: 'Daily tutor limit reached', data: { locked: true, dailyLimit } });
     }
 
-    const session = await TutorSession.create({ schoolId, studentId: realStudentId, userId: req.user.id, grade: realGrade, level: level.id, subject: realSubject, mode: mode || command, lastCommand: command });
-    await TutorMessage.create({ schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'student', message: question, subject: realSubject, topic, command, source: 'student' });
+    const session = await TutorSession.create({ schoolId, schoolCode: schoolId, studentId: realStudentId, userId: req.user.id, grade: realGrade, level: level.id, subject: realSubject, mode: mode || command, lastCommand: command });
+    await TutorMessage.create({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'student', message: question, subject: realSubject, topic, command, source: 'student' });
 
     const localAnswer = buildTutorAnswer({ question, command, subject: realSubject, topic, grade: realGrade, level });
 
@@ -58,8 +58,8 @@ exports.askTutor = async (req, res) => {
     }
     const answer = { ...localAnswer, explanation: aiText || localAnswer.explanation, source: aiText ? 'claude-haiku' : localAnswer.source };
 
-    await TutorMessage.create({ schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'tutor', message: answer.explanation, subject: realSubject, topic, command, source: answer.source, metadata: answer });
-    const [progress] = await TutorProgress.findOrCreate({ where: { schoolId, studentId: realStudentId, subject: realSubject, topic }, defaults: { schoolId, studentId: realStudentId, grade: realGrade, level: level.id, subject: realSubject, topic, attempts: 0, correct: 0 } });
+    await TutorMessage.create({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'tutor', message: answer.explanation, subject: realSubject, topic, command, source: answer.source, metadata: answer });
+    const [progress] = await TutorProgress.findOrCreate({ where: { schoolId, studentId: realStudentId, subject: realSubject, topic }, defaults: { schoolId, schoolCode: schoolId, studentId: realStudentId, grade: realGrade, level: level.id, subject: realSubject, topic, attempts: 0, correct: 0 } });
     await progress.update({ attempts: progress.attempts + 1, lastCommand: command, lastSource: answer.source, lastStudiedAt: new Date() });
     await usage.update({ totalQuestions: usage.totalQuestions + 1 });
 
@@ -94,7 +94,7 @@ exports.submitPracticeAnswer = async (req, res) => {
     const { studentId, subject = 'General', topic = 'Practice', isCorrect = false } = req.body;
     const schoolId = req.user.schoolCode || 'default';
     const realStudentId = studentId || req.user.id;
-    const [progress] = await TutorProgress.findOrCreate({ where: { schoolId, studentId: realStudentId, subject, topic }, defaults: { schoolId, studentId: realStudentId, subject, topic } });
+    const [progress] = await TutorProgress.findOrCreate({ where: { schoolId, studentId: realStudentId, subject, topic }, defaults: { schoolId, schoolCode: schoolId, studentId: realStudentId, subject, topic } });
     await progress.update({ attempts: progress.attempts + 1, correct: progress.correct + (isCorrect ? 1 : 0), lastCommand: 'quiz', lastStudiedAt: new Date() });
     res.json({ success: true, data: { correct: !!isCorrect, progress } });
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }

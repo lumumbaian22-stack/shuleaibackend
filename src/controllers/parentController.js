@@ -5,12 +5,14 @@ function rolloutMoneyDisabled(res) {
 }
 
 const { Op } = require('sequelize');
+const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 // @desc    Get parent's children
 // @route   GET /api/parent/children
 // @access  Private/Parent
 exports.getChildren = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     if (!parent) {
       return res.status(404).json({ success: false, message: 'Parent profile not found' });
@@ -32,6 +34,7 @@ exports.getChildren = async (req, res) => {
 // @access  Private/Parent
 exports.getChildSummary = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     if (!parent) return res.status(404).json({ success: false, message: 'Parent not found' });

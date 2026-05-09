@@ -1,6 +1,7 @@
 module.exports = (sequelize, DataTypes) => {
   const TutorUsage = sequelize.define('TutorUsage', {
     schoolId: { type: DataTypes.STRING, allowNull: false, index: true },
+    schoolCode: { type: DataTypes.STRING, allowNull: true },
     studentId: { type: DataTypes.INTEGER, allowNull: false },
     usageDate: { type: DataTypes.DATEONLY, allowNull: false },
     totalQuestions: { type: DataTypes.INTEGER, defaultValue: 0 },

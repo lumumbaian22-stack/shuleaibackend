@@ -1,6 +1,7 @@
 // src/controllers/studentController.js
 const { Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School } = require('../models');
 const { Op } = require('sequelize');
+const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 // Helper: get grade from score using the school's curriculum (simplified)
 function getGradeFromScore(score, curriculum, level) {
@@ -122,6 +123,7 @@ function getGradeFromScore(score, curriculum, level) {
 // @access  Private/Student
 exports.getDashboard = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
 
@@ -254,6 +256,7 @@ exports.getGrades = async (req, res) => {
 // @access  Private/Student
 exports.getAttendance = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const student = await Student.findOne({ where: { userId: req.user.id } });
     const attendance = await Attendance.findAll({ where: { studentId: student.id }, order: [['date', 'DESC']] });
     res.json({ success: true, data: attendance });

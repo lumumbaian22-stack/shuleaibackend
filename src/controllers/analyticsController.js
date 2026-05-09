@@ -7,6 +7,7 @@ const {
     ConductLog, ResourceViews, MoodCheckin, Message
 } = require('../models');
 const moment = require('moment');
+const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 
 async function ensureAnalyticsRuntimeColumns() {
@@ -18,6 +19,19 @@ async function ensureAnalyticsRuntimeColumns() {
     await sequelize.query('ALTER TABLE IF EXISTS "Fees" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
     await sequelize.query('ALTER TABLE IF EXISTS "AcademicRecords" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
     await sequelize.query('ALTER TABLE IF EXISTS "Attendance" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+}
+
+
+async function ensureAnalyticsSchema() {
+    await ensureRuntimeSchema().catch(async () => {
+        await ensureAnalyticsRuntimeColumns();
+    });
+    await ensureAnalyticsRuntimeColumns();
+}
+
+function isSchemaColumnError(error) {
+    const message = String(error?.original?.message || error?.message || error || '');
+    return message.includes('classId') || message.includes('schoolCode') || message.includes('column') || message.includes('does not exist');
 }
 
 // ---------- SUPER ADMIN ANALYTICS ----------
@@ -117,7 +131,7 @@ async function getAdminAnalyticsSafeFallback(schoolCode) {
 // ---------- ADMIN ANALYTICS (extended) ----------
 exports.getAdminAnalytics = async (req, res) => {
     try {
-        await ensureAnalyticsRuntimeColumns();
+        await ensureAnalyticsSchema();
         const schoolCode = req.user.schoolCode;
         const school = await School.findOne({ where: { schoolId: schoolCode } });
         if (!school) return res.status(404).json({ success: false, message: 'School not found' });
@@ -242,6 +256,7 @@ exports.getAdminAnalytics = async (req, res) => {
 // ---------- TEACHER ANALYTICS (extended) ----------
 exports.getTeacherAnalytics = async (req, res) => {
     try {
+        await ensureAnalyticsSchema();
         const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
         if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
@@ -346,12 +361,19 @@ exports.getTeacherAnalytics = async (req, res) => {
         const avgParentLogins = parentUsers.length ? Math.round(parentUsers.reduce((s, u) => s + (u.loginCount || 0), 0) / parentUsers.length) : 0;
 
         res.json({ success: true, data: { overview: { studentCount, classAverage, attendanceToday: `${await Attendance.count({ where: { studentId: { [Op.in]: studentIds }, date: moment().format('YYYY-MM-DD'), status: 'present' } })}/${studentCount}` }, subjectAverages, attendanceTrend, gradeDistribution: { labels: Object.keys(gradeCounts), values: Object.values(gradeCounts) }, studentPerformance, riskStudents, submitPattern, conductData, parentEngagement: avgParentLogins } });
-    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+    } catch (error) {
+        if (isSchemaColumnError(error)) {
+            await ensureAnalyticsSchema().catch(() => null);
+            return res.json({ success: true, data: { overview: { studentCount: 0, classAverage: 0, attendanceToday: '0/0' }, subjectAverages: [], attendanceTrend: { labels: [], values: [] }, gradeDistribution: { labels: [], values: [] }, studentPerformance: [], riskStudents: [], submitPattern: { onTime: 0, late: 0 }, conductData: { positive: 0, negative: 0 }, parentEngagement: 0 }, repaired: true });
+        }
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // ---------- PARENT ANALYTICS (extended) ----------
 exports.getParentAnalytics = async (req, res) => {
     try {
+        await ensureAnalyticsSchema();
         const { childId } = req.query;
         if (!childId) return res.status(400).json({ success: false, message: 'childId required' });
         const parent = await Parent.findOne({ where: { userId: req.user.id } });
@@ -414,6 +436,7 @@ exports.getParentAnalytics = async (req, res) => {
 // ---------- STUDENT ANALYTICS (extended) ----------
 exports.getStudentAnalytics = async (req, res) => {
     try {
+        await ensureAnalyticsSchema();
         const student = await Student.findOne({ where: { userId: req.user.id }, include: [{ model: User }] });
         if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
 
@@ -517,6 +540,7 @@ exports.compareCurriculum = async (req, res) => {
 // ============ V17 OVERRIDE: role-aware student analytics ============
 exports.getStudentAnalytics = async (req, res) => {
     try {
+        await ensureAnalyticsSchema();
         let studentId = req.params.studentId || null;
         let student = null;
 
@@ -590,6 +614,10 @@ exports.getStudentAnalytics = async (req, res) => {
         }});
     } catch (error) {
         console.error('V17 getStudentAnalytics error:', error);
+        if (isSchemaColumnError(error)) {
+            await ensureAnalyticsSchema().catch(() => null);
+            return res.json({ success: true, data: { overallAverage: 0, attendanceRate: 0, records: [], gradeTrend: { labels: [], values: [] }, subjectPerformance: [], repaired: true } });
+        }
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -597,6 +625,7 @@ exports.getStudentAnalytics = async (req, res) => {
 // ============ V17 OVERRIDE: parent analytics can auto-select first child ============
 exports.getParentAnalytics = async (req, res) => {
     try {
+        await ensureAnalyticsSchema();
         const parent = await Parent.findOne({ where: { userId: req.user.id }, include: [{ model: Student, as: 'students', include: [{ model: User }] }] });
         if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
         const childId = req.query.childId || parent.students?.[0]?.id;
@@ -608,6 +637,10 @@ exports.getParentAnalytics = async (req, res) => {
         return exports.getStudentAnalytics(req, res);
     } catch (error) {
         console.error('V17 getParentAnalytics error:', error);
+        if (isSchemaColumnError(error)) {
+            await ensureAnalyticsSchema().catch(() => null);
+            return res.json({ success: true, data: { empty: true, repaired: true, message: 'Analytics schema repaired. Refresh and try again.' } });
+        }
         res.status(500).json({ success: false, message: error.message });
     }
 };

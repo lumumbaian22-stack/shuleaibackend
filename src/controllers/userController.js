@@ -4,10 +4,12 @@ const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 const path = require('path');
 const fs = require('fs');
+const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 // @desc    Get user statistics for profile
 exports.getUserStats = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const user = req.user;
     let stats = {
       memberSince: user.createdAt,
@@ -61,6 +63,11 @@ exports.getUserStats = async (req, res) => {
     res.json({ success: true, data: stats });
   } catch (error) {
     console.error('Get user stats error:', error);
+    const message = String(error?.original?.message || error?.message || error);
+    if (message.includes('classId') || message.includes('schoolCode') || message.includes('column')) {
+      await ensureRuntimeSchema().catch(() => null);
+      return res.json({ success: true, data: { role: req.user.role, name: req.user.name, email: req.user.email, repaired: true } });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 };

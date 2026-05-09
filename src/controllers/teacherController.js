@@ -7,6 +7,7 @@ const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Messa
 const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
 const moment = require('moment');
+const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 // ============ EXISTING FUNCTIONS (keep your existing ones, they work) ============
 
@@ -15,6 +16,7 @@ const moment = require('moment');
 // @access  Private/Teacher
 exports.getDashboard = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) {
       return res.status(404).json({ success: false, message: 'Teacher profile not found' });
@@ -64,6 +66,7 @@ exports.getDashboard = async (req, res) => {
 // @access  Private/Teacher
 exports.getMyStudents = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) {
       return res.status(404).json({ success: false, message: 'Teacher profile not found' });
@@ -867,6 +870,7 @@ exports.getMySubjects = async (req, res) => {
 // @access  Private/Teacher
 exports.getTeacherStats = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
@@ -923,6 +927,7 @@ exports.getTeacherStats = async (req, res) => {
 // @access  Private/Teacher
 exports.getClassStudents = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const { Op } = require('sequelize');
     const { classId } = req.params;
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
@@ -1127,6 +1132,7 @@ exports.saveBulkMarks = async (req, res) => {
 // @access  Private/Teacher
 exports.getMyAssignments = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
@@ -1169,6 +1175,7 @@ exports.getMyAssignments = async (req, res) => {
 // @access  Private/Teacher
 exports.getClassStudentsForSubject = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const { classId, subject } = req.query;
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });

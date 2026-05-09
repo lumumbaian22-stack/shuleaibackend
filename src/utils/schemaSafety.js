@@ -294,6 +294,46 @@ async function ensureRuntimeSchema() {
     await addColumnIfMissing(table, 'updatedAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
   }
 
+
+  // V42: keep camelCase classId columns and tutor schoolCode compatibility columns repaired.
+  // The live database has previously missed these columns; many dashboards query Students/Fees/Attendance/AcademicRecords.
+  await addColumnIfMissing('Students', 'classId', 'INTEGER');
+  await addColumnIfMissing('Fees', 'classId', 'INTEGER');
+  await addColumnIfMissing('AcademicRecords', 'classId', 'INTEGER');
+  await addColumnIfMissing('Attendance', 'classId', 'INTEGER');
+  await addColumnIfMissing('ReportSnapshots', 'classId', 'INTEGER');
+  await addColumnIfMissing('FeeStructures', 'classId', 'INTEGER');
+  await addColumnIfMissing('TutorSessions', 'schoolCode', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorMessages', 'schoolCode', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorProgresses', 'schoolCode', 'VARCHAR(255)');
+  await addColumnIfMissing('TutorUsages', 'schoolCode', 'VARCHAR(255)');
+  await sequelize.query("UPDATE \"TutorSessions\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+  await sequelize.query("UPDATE \"TutorMessages\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+  await sequelize.query("UPDATE \"TutorProgresses\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+  await sequelize.query("UPDATE \"TutorUsages\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+
+
+
+  // V44 organized schema repair: keep model fields and DB columns aligned before any dashboard query runs.
+  // This is source-level runtime repair, not a frontend workaround.
+  await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "curriculum" VARCHAR(255) DEFAULT \'cbc\'').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "admissionNumber" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Teachers" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "AcademicRecords" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Attendance" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Fees" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "FeeStructures" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "ReportSnapshots" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "TutorSessions" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "TutorMessages" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "TutorProgresses" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "TutorUsages" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+  await sequelize.query("UPDATE \"TutorSessions\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+  await sequelize.query("UPDATE \"TutorMessages\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+  await sequelize.query("UPDATE \"TutorProgresses\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+  await sequelize.query("UPDATE \"TutorUsages\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+
   console.log('[schemaSafety] Runtime schema check complete');
 }
 
