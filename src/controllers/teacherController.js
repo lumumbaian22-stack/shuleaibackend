@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');
 const { Op } = require('sequelize');
-const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School, Task } = require('../models');
+const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School, Task, TeacherSubjectAssignment } = require('../models');
 const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
 const moment = require('moment');
@@ -836,29 +836,41 @@ exports.getMyClass = async (req, res) => {
 // @access  Private/Teacher
 exports.getMySubjects = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
-    const allClasses = await Class.findAll({
-      where: { schoolCode: req.user.schoolCode, isActive: true }
+    const assignments = await TeacherSubjectAssignment.findAll({
+      where: { teacherId: teacher.id },
+      include: [{ model: Class, required: false }],
+      order: [['subject', 'ASC']]
     });
 
-    const subjects = teacher.subjects || [];
-    const subjectList = subjects.map(subject => {
-      const classes = allClasses.filter(cls => {
-        const subjectTeacher = cls.subjectTeachers?.find(st => st.teacherId === teacher.id && st.subject === subject);
-        return subjectTeacher || cls.teacherId === teacher.id;
-      }).map(cls => ({
-        id: cls.id,
-        name: cls.name,
-        grade: cls.grade,
-        studentCount: 0
-      }));
+    const bySubject = new Map();
+    for (const a of assignments) {
+      const cls = a.Class;
+      if (cls && cls.schoolCode !== req.user.schoolCode) continue;
+      const subject = a.subject || 'General';
+      if (!bySubject.has(subject)) bySubject.set(subject, { name: subject, classes: [] });
+      bySubject.get(subject).classes.push({
+        id: a.classId,
+        name: cls?.name || `Class ${a.classId}`,
+        grade: cls?.grade || '',
+        stream: cls?.stream || '',
+        isClassTeacher: !!a.isClassTeacher
+      });
+    }
 
-      return { name: subject, classes };
+    // Also include legacy class teacher class if assigned directly on Teacher/Class.
+    const classTeacherClasses = await Class.findAll({
+      where: { schoolCode: req.user.schoolCode, isActive: true, [Op.or]: [{ teacherId: teacher.id }, { id: teacher.classId || 0 }] }
     });
+    if (classTeacherClasses.length && !bySubject.has('Class Teacher')) bySubject.set('Class Teacher', { name: 'Class Teacher', classes: [] });
+    for (const cls of classTeacherClasses) {
+      bySubject.get('Class Teacher').classes.push({ id: cls.id, name: cls.name, grade: cls.grade, stream: cls.stream, isClassTeacher: true });
+    }
 
-    res.json({ success: true, data: subjectList });
+    res.json({ success: true, data: Array.from(bySubject.values()) });
   } catch (error) {
     console.error('Get my subjects error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -972,6 +984,27 @@ exports.getClassStudents = async (req, res) => {
     });
   } catch (error) {
     console.error('Get class students error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+// @desc    Get one student visible to the teacher
+// @route   GET /api/teacher/students/:studentId
+// @access  Private/Teacher
+exports.getTeacherStudentDetails = async (req, res) => {
+  try {
+    await ensureRuntimeSchema().catch(() => null);
+    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
+    const student = await Student.findOne({
+      where: { id: req.params.studentId, status: { [Op.ne]: 'inactive' } },
+      include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture','schoolCode'], where: { schoolCode: req.user.schoolCode }, required: true }]
+    });
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    res.json({ success: true, data: student });
+  } catch (error) {
+    console.error('Get teacher student details error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -1136,32 +1169,47 @@ exports.getMyAssignments = async (req, res) => {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
-    const classes = await Class.findAll({
-      where: {
-        schoolCode: req.user.schoolCode,
-        isActive: true,
-        [Op.or]: [
-          { teacherId: teacher.id },
-          { subjectTeachers: { [Op.contains]: [{ teacherId: teacher.id }] } }
-        ]
-      }
+    const subjectAssignments = await TeacherSubjectAssignment.findAll({
+      where: { teacherId: teacher.id },
+      include: [{ model: Class, required: false }],
+      order: [['subject', 'ASC']]
     });
 
-    const classTeacherClass = classes.find(c => c.teacherId === teacher.id);
-    const subjectClasses = classes.filter(c => c.teacherId !== teacher.id);
+    const classesById = new Map();
+    const subjects = [];
+    for (const a of subjectAssignments) {
+      const cls = a.Class;
+      if (cls && cls.schoolCode !== req.user.schoolCode) continue;
+      const clsData = {
+        classId: a.classId,
+        className: cls?.name || `Class ${a.classId}`,
+        grade: cls?.grade || '',
+        stream: cls?.stream || '',
+        subject: a.subject || 'General',
+        isClassTeacher: !!a.isClassTeacher
+      };
+      subjects.push(clsData);
+      if (!classesById.has(String(a.classId))) classesById.set(String(a.classId), { id: a.classId, name: clsData.className, grade: clsData.grade, stream: clsData.stream, subjects: [] });
+      classesById.get(String(a.classId)).subjects.push(clsData.subject);
+    }
+
+    const directClasses = await Class.findAll({
+      where: { schoolCode: req.user.schoolCode, isActive: true, [Op.or]: [{ teacherId: teacher.id }, { id: teacher.classId || 0 }] }
+    });
+    for (const cls of directClasses) {
+      if (!classesById.has(String(cls.id))) classesById.set(String(cls.id), { id: cls.id, name: cls.name, grade: cls.grade, stream: cls.stream, subjects: [] });
+    }
+
+    const classTeacherClass = directClasses[0] || (teacher.classId ? await Class.findOne({ where: { id: teacher.classId, schoolCode: req.user.schoolCode } }) : null);
 
     res.json({
       success: true,
       data: {
         teacherId: teacher.id,
         teacherName: req.user.name,
-        classTeacher: classTeacherClass ? { id: classTeacherClass.id, name: classTeacherClass.name, grade: classTeacherClass.grade } : null,
-        subjects: subjectClasses.map(c => ({
-          classId: c.id,
-          className: c.name,
-          grade: c.grade,
-          subject: c.subjectTeachers?.find(st => st.teacherId === teacher.id)?.subject || 'Unknown'
-        }))
+        classTeacher: classTeacherClass ? { id: classTeacherClass.id, name: classTeacherClass.name, grade: classTeacherClass.grade, stream: classTeacherClass.stream } : null,
+        subjects,
+        classes: Array.from(classesById.values())
       }
     });
   } catch (error) {

@@ -259,7 +259,11 @@ async function ensureRuntimeSchema() {
   await addColumnIfMissing('Fees', 'adjustments', "JSONB DEFAULT '[]'::jsonb");
   await addColumnIfMissing('Fees', 'lastReconciledAt', 'TIMESTAMP WITH TIME ZONE');
   await addColumnIfMissing('AcademicRecords', 'classId', 'INTEGER');
-  await addColumnIfMissing('Attendance', 'classId', 'INTEGER');
+  await addColumnIfMissing('Attendances', 'classId', 'INTEGER');
+  await addColumnIfMissing('Attendances', 'markedBy', 'INTEGER');
+  await addColumnIfMissing('Attendances', 'editedBy', 'INTEGER');
+  await addColumnIfMissing('Attendances', 'editReason', 'TEXT');
+  await addColumnIfMissing('Attendances', 'auditTrail', "JSONB DEFAULT '[]'::jsonb");
 
   await addIndexIfMissing('idx_students_class_id_v30', 'CREATE INDEX idx_students_class_id_v30 ON "Students" ("classId")', { table: 'Students', columns: ['classId'] });
   await addIndexIfMissing('idx_fees_class_term_v30', 'CREATE INDEX idx_fees_class_term_v30 ON "Fees" ("schoolCode", "classId", "term", "year")', { table: 'Fees', columns: ['schoolCode', 'classId', 'term', 'year'] });
@@ -300,7 +304,11 @@ async function ensureRuntimeSchema() {
   await addColumnIfMissing('Students', 'classId', 'INTEGER');
   await addColumnIfMissing('Fees', 'classId', 'INTEGER');
   await addColumnIfMissing('AcademicRecords', 'classId', 'INTEGER');
-  await addColumnIfMissing('Attendance', 'classId', 'INTEGER');
+  await addColumnIfMissing('Attendances', 'classId', 'INTEGER');
+  await addColumnIfMissing('Attendances', 'markedBy', 'INTEGER');
+  await addColumnIfMissing('Attendances', 'editedBy', 'INTEGER');
+  await addColumnIfMissing('Attendances', 'editReason', 'TEXT');
+  await addColumnIfMissing('Attendances', 'auditTrail', "JSONB DEFAULT '[]'::jsonb");
   await addColumnIfMissing('ReportSnapshots', 'classId', 'INTEGER');
   await addColumnIfMissing('FeeStructures', 'classId', 'INTEGER');
   await addColumnIfMissing('TutorSessions', 'schoolCode', 'VARCHAR(255)');
@@ -321,7 +329,7 @@ async function ensureRuntimeSchema() {
   await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "admissionNumber" VARCHAR(255)').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "Teachers" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "AcademicRecords" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
-  await sequelize.query('ALTER TABLE IF EXISTS "Attendance" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Attendances" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "Fees" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "FeeStructures" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "ReportSnapshots" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
@@ -333,6 +341,21 @@ async function ensureRuntimeSchema() {
   await sequelize.query("UPDATE \"TutorMessages\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
   await sequelize.query("UPDATE \"TutorProgresses\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
   await sequelize.query("UPDATE \"TutorUsages\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
+
+
+  // V47 homework/attendance source schema alignment.
+  await sequelize.query('ALTER TABLE IF EXISTS "Attendances" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Attendances" ADD COLUMN IF NOT EXISTS "markedBy" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Attendances" ADD COLUMN IF NOT EXISTS "editedBy" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Attendances" ADD COLUMN IF NOT EXISTS "editReason" TEXT').catch(() => null);
+  await sequelize.query("ALTER TABLE IF EXISTS \"Attendances\" ADD COLUMN IF NOT EXISTS \"auditTrail\" JSONB DEFAULT '[]'::jsonb").catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "createdBy" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "createdByUserId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "className" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTaskAssignments" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTaskAssignments" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
 
   console.log('[schemaSafety] Runtime schema check complete');
 }

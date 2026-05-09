@@ -13,6 +13,7 @@ router.use(authorize('teacher'));
 // Students
 router.get('/students', teacherController.getMyStudents);
 router.post('/students', teacherController.addStudent);
+router.get('/students/:studentId', teacherController.getTeacherStudentDetails);
 router.delete('/students/:studentId', teacherController.deleteStudent);
 router.post('/students/upload', teacherController.uploadStudentsCSV);
 router.get('/class-students', teacherController.getClassStudentsForSubject);

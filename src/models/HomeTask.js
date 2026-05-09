@@ -11,7 +11,12 @@ module.exports = (sequelize, DataTypes) => {
     estimatedMinutes: { type: DataTypes.INTEGER, defaultValue: 15 },
     materials: { type: DataTypes.TEXT, allowNull: true },
     points: { type: DataTypes.INTEGER, defaultValue: 10 },
-    isActive: { type: DataTypes.BOOLEAN, defaultValue: true }
+    isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
+    schoolCode: { type: DataTypes.STRING, allowNull: true },
+    createdBy: { type: DataTypes.INTEGER, allowNull: true },
+    createdByUserId: { type: DataTypes.INTEGER, allowNull: true },
+    classId: { type: DataTypes.INTEGER, allowNull: true },
+    className: { type: DataTypes.STRING, allowNull: true }
   }, { timestamps: true });
   return HomeTask;
 };

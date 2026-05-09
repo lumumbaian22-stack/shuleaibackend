@@ -18,7 +18,7 @@ async function ensureAnalyticsRuntimeColumns() {
     await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "admissionNumber" VARCHAR(255)');
     await sequelize.query('ALTER TABLE IF EXISTS "Fees" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
     await sequelize.query('ALTER TABLE IF EXISTS "AcademicRecords" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
-    await sequelize.query('ALTER TABLE IF EXISTS "Attendance" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+    await sequelize.query('ALTER TABLE IF EXISTS "Attendances" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
 }
 
 
@@ -104,7 +104,7 @@ async function getAdminAnalyticsSafeFallback(schoolCode) {
     const totalStudents = await scalar('SELECT COUNT(*) AS count FROM "Students" s JOIN "Users" u ON u.id = s."userId" WHERE u."schoolCode" = :schoolCode', { schoolCode }).catch(() => 0);
     const totalTeachers = await scalar('SELECT COUNT(*) AS count FROM "Teachers" t JOIN "Users" u ON u.id = t."userId" WHERE u."schoolCode" = :schoolCode AND u.role = \'teacher\'', { schoolCode }).catch(() => 0);
     const totalClasses = await scalar('SELECT COUNT(*) AS count FROM "Classes" WHERE "schoolCode" = :schoolCode AND COALESCE("isActive", true) = true', { schoolCode }).catch(() => 0);
-    const attendanceRows = await q('SELECT status, COUNT(*) AS count FROM "Attendance" WHERE "schoolCode" = :schoolCode AND date >= CURRENT_DATE - INTERVAL \'30 days\' GROUP BY status', { schoolCode }).catch(() => []);
+    const attendanceRows = await q('SELECT status, COUNT(*) AS count FROM "Attendances" WHERE "schoolCode" = :schoolCode AND date >= CURRENT_DATE - INTERVAL \'30 days\' GROUP BY status', { schoolCode }).catch(() => []);
     const attendanceTotal = attendanceRows.reduce((s, r) => s + Number(r.count || 0), 0);
     const present = attendanceRows.find(r => r.status === 'present')?.count || 0;
     const attendanceRate = attendanceTotal ? Math.round((Number(present) / attendanceTotal) * 100) : 0;
