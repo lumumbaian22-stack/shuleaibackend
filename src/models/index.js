@@ -55,12 +55,6 @@ const TutorProgress = require('./TutorProgress')(sequelize, DataTypes);
 const TutorUsage = require('./TutorUsage')(sequelize, DataTypes);
 const AuditLog = require('./AuditLog')(sequelize, DataTypes);
 const ReportSnapshot = require('./ReportSnapshot')(sequelize, DataTypes);
-const SchoolPaymentSetting = require('./SchoolPaymentSetting')(sequelize, DataTypes);
-const PlatformPaymentSetting = require('./PlatformPaymentSetting')(sequelize, DataTypes);
-const SubscriptionPlan = require('./SubscriptionPlan')(sequelize, DataTypes);
-const Subscription = require('./Subscription')(sequelize, DataTypes);
-const SubscriptionPayment = require('./SubscriptionPayment')(sequelize, DataTypes);
-const FeatureLock = require('./FeatureLock')(sequelize, DataTypes);
 
 // Add to associations: School.hasMany(SchoolCalendar)
 
@@ -312,27 +306,6 @@ TutorUsage.belongsTo(Student, { foreignKey: 'studentId' });
 Student.hasMany(ReportSnapshot, { foreignKey: 'studentId' });
 ReportSnapshot.belongsTo(Student, { foreignKey: 'studentId' });
 
-
-// Payment and subscription settings
-School.hasOne(SchoolPaymentSetting, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
-SchoolPaymentSetting.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
-School.hasMany(Subscription, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
-Subscription.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
-Parent.hasMany(Subscription, { foreignKey: 'parentId' });
-Subscription.belongsTo(Parent, { foreignKey: 'parentId' });
-Student.hasMany(Subscription, { foreignKey: 'studentId' });
-Subscription.belongsTo(Student, { foreignKey: 'studentId' });
-SubscriptionPlan.hasMany(Subscription, { foreignKey: 'planId' });
-Subscription.belongsTo(SubscriptionPlan, { foreignKey: 'planId' });
-Subscription.hasMany(SubscriptionPayment, { foreignKey: 'subscriptionId' });
-SubscriptionPayment.belongsTo(Subscription, { foreignKey: 'subscriptionId' });
-SubscriptionPlan.hasMany(SubscriptionPayment, { foreignKey: 'planId' });
-SubscriptionPayment.belongsTo(SubscriptionPlan, { foreignKey: 'planId' });
-Student.hasMany(SubscriptionPayment, { foreignKey: 'studentId' });
-SubscriptionPayment.belongsTo(Student, { foreignKey: 'studentId' });
-Parent.hasMany(SubscriptionPayment, { foreignKey: 'parentId' });
-SubscriptionPayment.belongsTo(Parent, { foreignKey: 'parentId' });
-
 // Consent models associations
 UserConsent.belongsTo(User, { foreignKey: 'userId' });
 User.hasOne(UserConsent, { foreignKey: 'userId' });
@@ -396,12 +369,6 @@ module.exports = {
     TutorProgress,
     TutorUsage,
     AuditLog,
-    ReportSnapshot,
-    SchoolPaymentSetting,
-    PlatformPaymentSetting,
-    SubscriptionPlan,
-    Subscription,
-    SubscriptionPayment,
-    FeatureLock
+    ReportSnapshot
     
 };

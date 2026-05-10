@@ -1,43 +1,39 @@
 const { Op } = require('sequelize');
-const { SubscriptionPlan, Subscription, SubscriptionPayment, Parent, Student, User, School, Payment } = require('../models');
-const subscriptionService = require('../services/subscriptionService');
+const { SubscriptionPlan, Parent, Student, User, Payment } = require('../models');
 
-function currentSchoolCode(req) {
-  return req.user?.schoolCode || req.user?.school?.schoolId || req.user?.school?.id || null;
+const DEFAULT_PLANS = [
+  { id: 'basic', name: 'basic', displayName: 'Basic', price_kes: 150, features: ['Student dashboard', 'Basic reports', 'Homework tasks'] },
+  { id: 'premium', name: 'premium', displayName: 'Premium', price_kes: 300, features: ['Advanced reports', 'Parent guidance', 'Gamified missions'] },
+  { id: 'ultimate', name: 'ultimate', displayName: 'Ultimate', price_kes: 800, features: ['Full analytics', 'Priority support', 'AI-ready learning tools'] }
+];
+
+function normalizePlan(plan){
+  const value = String(plan || 'basic').toLowerCase();
+  return ['basic', 'premium', 'ultimate'].includes(value) ? value : 'basic';
 }
 
-function activeFlag(subscription) {
-  return Boolean(subscription && subscription.status === 'active' && subscription.endDate && new Date(subscription.endDate) > new Date());
-}
-
-function serializeSubscription(subscription) {
-  if (!subscription) return null;
-  return {
-    id: subscription.id,
-    ownerType: subscription.ownerType,
-    schoolCode: subscription.schoolCode,
-    parentId: subscription.parentId,
-    studentId: subscription.studentId,
-    planCode: subscription.planCode,
-    planName: subscription.planName,
-    billingCycle: subscription.billingCycle,
-    status: activeFlag(subscription) ? 'active' : subscription.status,
-    startDate: subscription.startDate,
-    endDate: subscription.endDate,
-    remainingDays: subscriptionService.remainingDays(subscription),
-    features: subscription.featuresSnapshot || [],
-    limits: subscription.limitsSnapshot || {},
-    isActive: activeFlag(subscription)
-  };
+async function getParentWithStudents(userId){
+  const parent = await Parent.findOne({ where: { userId }, include: [{ model: Student, as: 'students', include: [{ model: User, attributes: ['id', 'name', 'email'] }] }] });
+  return parent;
 }
 
 exports.getPlans = async (req, res) => {
   try {
-    const audience = req.query.audience || undefined;
-    const where = { isActive: true };
-    if (audience && ['school', 'child'].includes(audience)) where.audience = audience;
-    const plans = await SubscriptionPlan.findAll({ where, order: [['audience', 'ASC'], ['tier', 'ASC'], ['price_kes', 'ASC']] });
-    res.json({ success: true, data: plans });
+    let plans = [];
+    try {
+      const schoolId = req.user?.school?.id || null;
+      plans = await SubscriptionPlan.findAll({
+        where: {
+          [Op.or]: [{ schoolId }, { schoolId: null }],
+          isActive: true
+        },
+        order: [['price_kes', 'ASC']]
+      });
+    } catch (dbError) {
+      console.warn('SubscriptionPlan lookup fallback:', dbError.message);
+    }
+    const data = plans.length ? plans : DEFAULT_PLANS;
+    res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -45,142 +41,66 @@ exports.getPlans = async (req, res) => {
 
 exports.getMyStatus = async (req, res) => {
   try {
-    await subscriptionService.expireDueSubscriptions();
-
     if (req.user.role === 'student') {
-      const student = await Student.findOne({ where: { userId: req.user.id }, include: [{ model: User, attributes: ['id','name','email','profileImage','profilePicture'] }] });
+      const student = await Student.findOne({ where: { userId: req.user.id } });
       if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
-      const subscription = await Subscription.findOne({ where: { ownerType: 'child', studentId: student.id }, order: [['createdAt', 'DESC']] });
-      return res.json({ success: true, data: { role: 'student', studentId: student.id, subscription: serializeSubscription(subscription) } });
+      return res.json({ success: true, data: { students: [{ id: student.id, name: req.user.name, plan: student.subscriptionPlan, status: student.subscriptionStatus, expiry: student.subscriptionExpiry, remainingDays: student.getRemainingSubscriptionDays?.() || 0 }], primary: student } });
     }
 
-    if (req.user.role === 'parent') {
-      const { parent, children } = await subscriptionService.getParentChildStatus(req.user.id);
-      if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
-      return res.json({ success: true, data: { role: 'parent', parentId: parent.id, children } });
+    if (req.user.role !== 'parent') {
+      return res.json({ success: true, data: { role: req.user.role, message: 'Subscription status is only enforced for parent/student access in this build.' } });
     }
 
-    if (['admin', 'teacher'].includes(req.user.role)) {
-      const schoolCode = currentSchoolCode(req);
-      const subscription = schoolCode ? await Subscription.findOne({ where: { ownerType: 'school', schoolCode }, order: [['createdAt', 'DESC']] }) : null;
-      return res.json({ success: true, data: { role: req.user.role, schoolCode, subscription: serializeSubscription(subscription) } });
-    }
-
-    return res.json({ success: true, data: { role: req.user.role } });
+    const parent = await getParentWithStudents(req.user.id);
+    if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
+    const students = (parent.students || []).map(s => ({
+      id: s.id,
+      name: s.User?.name || s.elimuid,
+      plan: s.subscriptionPlan,
+      status: s.subscriptionStatus,
+      expiry: s.subscriptionExpiry,
+      remainingDays: s.getRemainingSubscriptionDays?.() || 0
+    }));
+    res.json({ success: true, data: { parentId: parent.id, students, primary: students[0] || null } });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-exports.getChildStatus = async (req, res) => {
+exports.upgrade = async (req, res) => {
   try {
-    const parent = await Parent.findOne({ where: { userId: req.user.id }, include: [{ model: Student, as: 'students' }] });
+    const { studentId, planName, plan, amount } = req.body || {};
+    const selectedPlan = normalizePlan(planName || plan);
+    const prices = { basic: 150, premium: 300, ultimate: 800 };
+    const parent = await getParentWithStudents(req.user.id);
     if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
-    const child = (parent.students || []).find(s => String(s.id) === String(req.params.studentId));
-    if (!child) return res.status(403).json({ success: false, message: 'This child is not linked to your parent account' });
-    const subscription = await Subscription.findOne({ where: { ownerType: 'child', studentId: child.id }, order: [['createdAt', 'DESC']] });
-    res.json({ success: true, data: { studentId: child.id, subscription: serializeSubscription(subscription) } });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
 
-exports.createChildSubscriptionRequest = async (req, res) => {
-  try {
-    const { studentId, planCode, billingCycle = 'monthly', amount } = req.body || {};
-    if (!studentId || !planCode) return res.status(400).json({ success: false, message: 'studentId and planCode are required' });
+    const child = (parent.students || []).find(s => String(s.id) === String(studentId)) || parent.students?.[0];
+    if (!child) return res.status(404).json({ success: false, message: 'No linked student found for this parent' });
 
-    const parent = await Parent.findOne({ where: { userId: req.user.id }, include: [{ model: Student, as: 'students' }] });
-    if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
-    const child = (parent.students || []).find(s => String(s.id) === String(studentId));
-    if (!child) return res.status(403).json({ success: false, message: 'This child is not linked to your parent account' });
-
-    const plan = await subscriptionService.getPlanByCode(planCode, 'child');
-    const payAmount = Number(amount || plan.price_kes || 0);
-    if (payAmount <= 0) return res.status(400).json({ success: false, message: 'Invalid subscription amount' });
-
-    let subscription = await Subscription.findOne({ where: { ownerType: 'child', studentId: child.id }, order: [['createdAt', 'DESC']] });
-    if (!subscription) {
-      subscription = await Subscription.create({
-        ownerType: 'child',
-        schoolCode: req.user.schoolCode || child.schoolCode,
-        parentId: parent.id,
-        studentId: child.id,
-        planId: plan.id,
-        planCode: plan.code,
-        planName: plan.displayName || plan.name,
-        billingCycle,
-        status: 'pending',
-        featuresSnapshot: plan.features || [],
-        limitsSnapshot: plan.limits || {}
-      });
-    } else {
-      await subscription.update({ planId: plan.id, planCode: plan.code, planName: plan.displayName || plan.name, billingCycle, status: subscription.status === 'active' ? subscription.status : 'pending' });
-    }
-
-    const request = await SubscriptionPayment.create({
-      subscriptionId: subscription.id,
-      ownerType: 'child',
-      schoolCode: req.user.schoolCode || child.schoolCode,
-      parentId: parent.id,
+    // Production-safe behavior: do not silently mark a paid subscription complete unless a real payment has completed.
+    // This endpoint creates/keeps a pending subscription request. M-PESA activation happens through /api/payments/parent/subscription/stk + Daraja callback.
+    const payment = await Payment.create({
       studentId: child.id,
-      planId: plan.id,
-      planCode: plan.code,
-      amount: payAmount,
-      billingCycle,
-      paymentMethod: 'mpesa',
+      parentId: parent.id,
+      amount: Number(amount || prices[selectedPlan]),
+      method: 'mpesa',
+      reference: `SUB-REQ-${Date.now()}`,
+      plan: selectedPlan,
       status: 'pending',
-      metadata: { source: 'subscription-request', requiresStk: true }
+      schoolCode: req.user.schoolCode,
+      paymentType: 'subscription',
+      currency: 'KES',
+      paymentGateway: 'daraja',
+      metadata: { source: 'subscription-upgrade-request', requiresStk: true }
     });
 
-    res.json({ success: true, message: 'Subscription request created. Complete payment to activate.', data: { subscription: serializeSubscription(subscription), paymentRequest: request } });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-exports.getSchoolStatus = async (req, res) => {
-  try {
-    const schoolCode = currentSchoolCode(req);
-    if (!schoolCode) return res.status(400).json({ success: false, message: 'School context not found' });
-    const subscription = await Subscription.findOne({ where: { ownerType: 'school', schoolCode }, order: [['createdAt', 'DESC']] });
-    res.json({ success: true, data: { schoolCode, subscription: serializeSubscription(subscription) } });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-exports.createSchoolSubscriptionRequest = async (req, res) => {
-  try {
-    const { planCode, billingCycle = 'monthly', amount } = req.body || {};
-    if (!planCode) return res.status(400).json({ success: false, message: 'planCode is required' });
-    const schoolCode = currentSchoolCode(req);
-    if (!schoolCode) return res.status(400).json({ success: false, message: 'School context not found' });
-    const school = await School.findOne({ where: { schoolId: schoolCode } });
-    const plan = await subscriptionService.getPlanByCode(planCode, 'school');
-    const payAmount = Number(amount || (billingCycle === 'yearly' ? plan.yearlyPriceKes : plan.price_kes) || 0);
-
-    let subscription = await Subscription.findOne({ where: { ownerType: 'school', schoolCode }, order: [['createdAt', 'DESC']] });
-    if (!subscription) {
-      subscription = await Subscription.create({ ownerType: 'school', schoolId: school?.id || null, schoolCode, planId: plan.id, planCode: plan.code, planName: plan.displayName || plan.name, billingCycle, status: 'pending', featuresSnapshot: plan.features || [], limitsSnapshot: plan.limits || {} });
-    } else {
-      await subscription.update({ planId: plan.id, planCode: plan.code, planName: plan.displayName || plan.name, billingCycle, status: subscription.status === 'active' ? subscription.status : 'pending' });
-    }
-
-    const request = await SubscriptionPayment.create({ subscriptionId: subscription.id, ownerType: 'school', schoolId: school?.id || null, schoolCode, planId: plan.id, planCode: plan.code, amount: payAmount, billingCycle, paymentMethod: 'mpesa', status: 'pending', metadata: { source: 'school-subscription-request', requiresStk: true } });
-    res.json({ success: true, message: 'School subscription request created. Complete payment to activate.', data: { subscription: serializeSubscription(subscription), paymentRequest: request } });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-exports.upgrade = exports.createChildSubscriptionRequest;
-exports.initiatePayment = exports.createChildSubscriptionRequest;
-
-exports.expireNow = async (req, res) => {
-  try {
-    const count = await subscriptionService.expireDueSubscriptions();
-    res.json({ success: true, message: 'Expired subscription check complete', data: { updated: count } });
+    await child.update({ subscriptionPlan: selectedPlan, subscriptionStatus: 'pending' });
+    res.json({
+      success: true,
+      message: 'Subscription request created. Complete M-PESA STK payment to activate it.',
+      data: { studentId: child.id, plan: selectedPlan, status: 'pending', paymentId: payment.id, amount: payment.amount }
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

@@ -188,9 +188,12 @@ app.use('/api/chat-v9', chatV9Routes);
 app.use('/api/scale', scaleRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/tutor', tutorRoutes);
-// National rollout completion routes fill missing school-operations APIs and disable live money collection.
-app.use('/api', nationalRolloutRoutes);
+// Payment routes must be mounted BEFORE nationalRolloutRoutes.
+// nationalRolloutRoutes intentionally disables legacy/fake payment endpoints, but real Daraja STK
+// endpoints such as /api/payments/parent/subscription/stk must remain reachable.
 app.use('/api/payments', paymentRoutes);
+// National rollout completion routes fill missing school-operations APIs and disable old live-money endpoints.
+app.use('/api', nationalRolloutRoutes);
 app.use('/api/fee-structures', feeStructureRoutes);
 app.use('/api/fees/structures', feeStructureRoutes);
 

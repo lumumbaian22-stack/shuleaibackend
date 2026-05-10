@@ -1,5 +1,4 @@
-const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, SubscriptionPayment, SchoolPaymentSetting, PlatformPaymentSetting } = require('../models');
-const subscriptionService = require('../services/subscriptionService');
+const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog } = require('../models');
 const daraja = require('../services/darajaService');
 
 function ref(prefix){ return `${prefix}-${Date.now()}-${Math.floor(Math.random()*100000).toString().padStart(5,'0')}`; }
@@ -49,19 +48,15 @@ exports.getAdminPaymentSettings = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const [row] = await SchoolPaymentSetting.findOrCreate({
-      where: { schoolCode: school.schoolId },
-      defaults: {
-        schoolId: school.id,
-        schoolCode: school.schoolId,
-        paymentMode: 'manual',
-        mpesaType: 'none',
-        bankAccountName: school.name,
-        isActive: true,
-        metadata: { createdFrom: 'admin-payment-settings' }
-      }
-    });
-    res.json({ success:true, data: { schoolName: school.name, schoolCode: school.schoolId, paymentSettings: row, bankDetails: { bankName: row.bankName, bankAccountName: row.bankAccountName, bankAccountNumber: row.bankAccountNumber, bankBranch: row.bankBranch } } });
+    const settings = school.settings || {};
+    res.json({ success:true, data: {
+      schoolName: school.name,
+      schoolCode: school.schoolId,
+      paymentSettings: settings.paymentSettings || {
+        paybill: '', till: '', accountName: school.name, settlementBank: '', settlementAccount: '', supportPhone: school.contact?.phone || '', currency: 'KES', acceptedMethods: ['mpesa'], feeCategories: ['Tuition Fees','Transport','Lunch','Uniform','Activity Fees'], active: false
+      },
+      bankDetails: school.bankDetails || {}
+    }});
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
 
@@ -69,38 +64,40 @@ exports.updateAdminPaymentSettings = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const allowed = [
-      'paymentMode','mpesaType','tillNumber','paybillNumber','businessShortCode','accountReferenceFormat','accountReferencePrefix',
-      'bankName','bankAccountName','bankAccountNumber','bankBranch','darajaEnabled','darajaConsumerKey','darajaConsumerSecret',
-      'darajaPasskey','darajaShortcode','darajaEnvironment','callbackUrl','acceptedMethods','instructions','isActive','metadata'
-    ];
-    const payload = { schoolId: school.id, schoolCode: school.schoolId };
-    for (const key of allowed) if (Object.prototype.hasOwnProperty.call(req.body || {}, key)) payload[key] = req.body[key];
-    const [row] = await SchoolPaymentSetting.findOrCreate({ where: { schoolCode: school.schoolId }, defaults: payload });
-    const before = row.toJSON();
-    await row.update(payload);
-    await writeAudit(req, { module:'payments', action:'school_payment_settings_updated', entityType:'SchoolPaymentSetting', entityId:String(row.id), before, after:row.toJSON() });
-    res.json({ success:true, message:'School payment settings saved', data: row });
+    const incoming = req.body || {};
+    const settings = school.settings || {};
+    settings.paymentSettings = {
+      paybill: incoming.paybill || '', till: incoming.till || '', accountName: incoming.accountName || school.name,
+      settlementBank: incoming.settlementBank || '', settlementAccount: incoming.settlementAccount || '', supportPhone: incoming.supportPhone || '',
+      currency: incoming.currency || 'KES', acceptedMethods: incoming.acceptedMethods || ['mpesa'], feeCategories: incoming.feeCategories || [], active: incoming.active === true,
+      updatedAt: new Date().toISOString(), updatedBy: req.user.id
+    };
+    const bankDetails = { ...(school.bankDetails || {}), ...(incoming.bankDetails || {}) };
+    await school.update({ settings, bankDetails });
+    await writeAudit(req, { module:'payments', action:'school_payment_settings_updated', entityType:'School', entityId:school.schoolId, after:{settings:settings.paymentSettings, bankDetails} });
+    res.json({ success:true, message:'School payment settings saved', data: { paymentSettings: settings.paymentSettings, bankDetails } });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
 
 exports.getPlatformPaymentSettings = async (req, res) => {
   try {
-    const [row] = await PlatformPaymentSetting.findOrCreate({ where: { id: 1 }, defaults: { id: 1, businessName: 'Shule AI', paymentMode: 'daraja', mpesaType: 'till', isActive: true } });
-    res.json({ success:true, data: row });
+    const [row] = await Settings.findOrCreate({
+      where: { key: 'platform_payment_settings' },
+      defaults: { category:'payments', description:'Shule AI platform payment settings', value: {
+        accountName:'Shule AI', paybill:'', till:'', supportPhone:'', currency:'KES', parentPlans:[{id:'basic',name:'Basic',amount:150},{id:'premium',name:'Premium',amount:300},{id:'ultimate',name:'Ultimate',amount:800}], schoolPlans:[{id:'monthly',name:'Monthly',amount:3000},{id:'termly',name:'Termly',amount:8000},{id:'yearly',name:'Yearly',amount:30000}], fees:{ nameChange:500, maintenance:2500, registration:1000 }, darajaMode: process.env.DARAJA_ENV || 'sandbox'
+      }}
+    });
+    res.json({ success:true, data: row.value });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
 
 exports.updatePlatformPaymentSettings = async (req, res) => {
   try {
-    const allowed = ['businessName','paymentMode','mpesaType','tillNumber','paybillNumber','businessShortCode','accountNumber','darajaConsumerKey','darajaConsumerSecret','darajaPasskey','darajaShortcode','darajaEnvironment','callbackUrl','bankName','bankAccountName','bankAccountNumber','bankBranch','isActive','metadata'];
-    const payload = {};
-    for (const key of allowed) if (Object.prototype.hasOwnProperty.call(req.body || {}, key)) payload[key] = req.body[key];
-    const [row] = await PlatformPaymentSetting.findOrCreate({ where: { id: 1 }, defaults: { id: 1, businessName: 'Shule AI', ...payload } });
-    const before = row.toJSON();
-    await row.update(payload);
-    await writeAudit(req, { schoolCode:'platform', module:'payments', action:'platform_payment_settings_updated', entityType:'PlatformPaymentSetting', entityId:String(row.id), before, after:row.toJSON() });
-    res.json({ success:true, message:'Platform payment settings saved', data: row });
+    const [row] = await Settings.findOrCreate({ where:{ key:'platform_payment_settings' }, defaults:{ category:'payments', description:'Shule AI platform payment settings', value:{} } });
+    const value = { ...(row.value || {}), ...(req.body || {}), updatedAt:new Date().toISOString(), updatedBy:req.user.id };
+    await row.update({ value });
+    await writeAudit(req, { schoolCode:'platform', module:'payments', action:'platform_payment_settings_updated', entityType:'Settings', entityId:'platform_payment_settings', after:value });
+    res.json({ success:true, message:'Platform payment settings saved', data:value });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
 
@@ -124,68 +121,17 @@ exports.parentFeeSTK = async (req, res) => {
 
 exports.parentSubscriptionSTK = async (req, res) => {
   try {
-    const { studentId, phone, amount, plan='essential', planCode, billingCycle='monthly' } = req.body;
-    if(!studentId || !phone) return res.status(400).json({ success:false, message:'studentId and phone are required' });
+    const { studentId, phone, amount, plan='basic' } = req.body;
+    if(!studentId || !phone || !amount) return res.status(400).json({ success:false, message:'studentId, phone, and amount are required' });
     const student = await findStudentForParent(req, studentId);
     if(!student) return res.status(404).json({ success:false, message:'Student not found or not linked to this parent' });
     const parent = await currentParent(req);
     if(!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-
-    const resolvedPlanCode = planCode || (String(plan).startsWith('child_') ? String(plan) : `child_${String(plan).toLowerCase()}`);
-    const planRow = await SubscriptionPlan.findOne({ where: { code: resolvedPlanCode, audience: 'child', isActive: true } });
-    if (!planRow) return res.status(400).json({ success:false, message:`Invalid child subscription plan: ${resolvedPlanCode}` });
-
-    const payAmount = cleanAmount(amount || planRow.price_kes);
     const reference = ref(`SUB-${student.id}`);
-    const stk = await daraja.initiateSTKPush({
-      phone,
-      amount: payAmount,
-      accountReference:reference,
-      transactionDesc:`Shule AI ${planRow.displayName || planRow.name} subscription`,
-      metadata:{ type:'subscription', schoolCode:schoolCode(req), studentId:student.id, parentId: parent.id, planCode: planRow.code, billingCycle, reference }
-    });
-
-    const subscriptionPayment = await SubscriptionPayment.create({
-      ownerType: 'child',
-      schoolCode: schoolCode(req) || student.User?.schoolCode || req.user.schoolCode,
-      parentId: parent.id,
-      studentId: student.id,
-      planId: planRow.id,
-      planCode: planRow.code,
-      amount: payAmount,
-      billingCycle,
-      paymentMethod: 'mpesa',
-      checkoutRequestId: stk.CheckoutRequestID,
-      merchantRequestId: stk.MerchantRequestID,
-      phone,
-      status: 'pending',
-      metadata: { reference, source: 'parent-subscription-stk' }
-    });
-
-    const payment = await createPendingPayment(req, {
-      studentId:student.id,
-      parentId:parent.id,
-      amount:payAmount,
-      reference,
-      phone,
-      checkoutRequestId:stk.CheckoutRequestID,
-      merchantRequestId:stk.MerchantRequestID,
-      accountReference:reference,
-      schoolCode:schoolCode(req) || student.User?.schoolCode || req.user.schoolCode,
-      paymentType:'subscription',
-      paidTo:'platform',
-      plan: planRow.name,
-      gatewayResponse:stk,
-      metadata:{ planCode: planRow.code, subscriptionPaymentId: subscriptionPayment.id, billingCycle }
-    });
-
-    await subscriptionPayment.update({ metadata: { ...(subscriptionPayment.metadata || {}), legacyPaymentId: payment.id } });
-
-    res.json({
-      success:true,
-      message:'M-PESA prompt sent. Subscription activates only after Daraja callback confirmation.',
-      data:{ paymentId:payment.id, subscriptionPaymentId: subscriptionPayment.id, reference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment }
-    });
+    const payAmount = cleanAmount(amount);
+    const stk = await daraja.initiateSTKPush({ phone, amount: payAmount, accountReference:reference, transactionDesc:`Shule AI ${plan} subscription`, metadata:{ type:'subscription', schoolCode:schoolCode(req), studentId:student.id, plan, reference } });
+    const payment = await createPendingPayment(req, { studentId:student.id, parentId:parent.id, amount:payAmount, reference, phone, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, accountReference:reference, schoolCode:schoolCode(req), paymentType:'subscription', paidTo:'platform', plan, gatewayResponse:stk, metadata:{ plan } });
+    res.json({ success:true, message:'M-PESA prompt sent. Subscription activates only after Daraja callback confirmation.', data:{ paymentId:payment.id, reference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
 
@@ -246,26 +192,8 @@ exports.darajaCallback = async (req, res) => {
         }
       }
       if (success && payment.paymentType === 'subscription') {
-        let subscriptionPayment = null;
-        if (payment.metadata?.subscriptionPaymentId) {
-          subscriptionPayment = await SubscriptionPayment.findByPk(payment.metadata.subscriptionPaymentId);
-        }
-        if (!subscriptionPayment && payment.checkoutRequestId) {
-          subscriptionPayment = await SubscriptionPayment.findOne({ where: { checkoutRequestId: payment.checkoutRequestId } });
-        }
-        if (subscriptionPayment) {
-          await subscriptionPayment.update({
-            status: 'success',
-            paidAt: new Date(),
-            mpesaReceiptNumber: parsed.mpesaReceiptNumber || subscriptionPayment.mpesaReceiptNumber,
-            rawCallback: parsed.raw || parsed,
-            metadata: { ...(subscriptionPayment.metadata || {}), legacyPaymentId: payment.id, darajaCallback: parsed }
-          });
-          await subscriptionService.renewSubscriptionFromPayment({ subscriptionPayment });
-        } else {
-          const planCode = payment.metadata?.planCode || (payment.plan ? `child_${payment.plan}` : null);
-          await subscriptionService.renewSubscriptionFromPayment({ legacyPayment: { ...payment.toJSON(), planCode } });
-        }
+        const student = await Student.findByPk(payment.studentId);
+        if (student) await student.upgradeSubscription(payment.plan || 'basic', payment.amount);
       }
       await AuditLog?.create({ schoolCode:payment.schoolCode, module:'payments', action:success?'payment_completed':'payment_failed', entityType:'Payment', entityId:String(payment.id), before, after:payment.toJSON(), metadata:{ parsed } });
     }
