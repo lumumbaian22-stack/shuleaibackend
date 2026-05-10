@@ -28,8 +28,6 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     profileImage: DataTypes.STRING,
-    // Alias used by older frontend/components. Keep both columns so includes never crash.
-    profilePicture: DataTypes.STRING,
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true
@@ -77,8 +75,7 @@ module.exports = (sequelize, DataTypes) => {
       email: this.email,
       role: this.role,
       phone: this.phone,
-      profileImage: this.profileImage || this.profilePicture,
-      profilePicture: this.profilePicture || this.profileImage,
+      profileImage: this.profileImage,
       schoolCode: this.schoolCode,
       isActive: this.isActive,
       firstLogin: this.firstLogin
