@@ -22,15 +22,17 @@ async function currentSchool(req){
 }
 
 function normalizePlanInput(plan, ownerType){
-  const raw = String(plan || '').toLowerCase();
+  const raw = String(plan || '').trim().toLowerCase().replace(/\s+/g, '_');
   if (ownerType === 'school') {
-    if (raw.includes('enterprise')) return 'school_enterprise';
-    if (raw.includes('starter')) return 'school_starter';
-    return raw || 'school_growth';
+    if (!raw || raw === 'growth' || raw === 'school_growth') return 'school_growth';
+    if (raw.includes('enterprise') || raw === 'school_enterprise') return 'school_enterprise';
+    if (raw.includes('starter') || raw === 'school_starter') return 'school_starter';
+    return raw.startsWith('school_') ? raw : `school_${raw}`;
   }
-  if (raw.includes('genius') || raw.includes('ultimate')) return 'child_genius';
-  if (raw.includes('smart') || raw.includes('premium')) return 'child_smart';
-  return raw || 'child_essential';
+  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_essential';
+  if (raw.includes('genius') || raw.includes('ultimate') || raw === 'child_genius') return 'child_genius';
+  if (raw.includes('smart') || raw.includes('premium') || raw === 'child_smart') return 'child_smart';
+  return raw.startsWith('child_') ? raw : `child_${raw}`;
 }
 
 function billingCycleFromBody(body){

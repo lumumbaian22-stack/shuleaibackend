@@ -72,14 +72,37 @@ async function getSchoolForUser(user) {
   return School.findOne({ where: { schoolId: user.schoolCode } });
 }
 
+function normalizeLookupCode(code, ownerType) {
+  const raw = String(code || '').trim().toLowerCase().replace(/\s+/g, '_');
+  if (ownerType === 'school') {
+    if (!raw || raw === 'growth' || raw === 'school_growth') return 'school_growth';
+    if (raw.includes('enterprise')) return 'school_enterprise';
+    if (raw.includes('starter')) return 'school_starter';
+    return raw.startsWith('school_') ? raw : `school_${raw}`;
+  }
+  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_essential';
+  if (raw.includes('genius') || raw.includes('ultimate')) return 'child_genius';
+  if (raw.includes('smart') || raw.includes('premium')) return 'child_smart';
+  return raw.startsWith('child_') ? raw : `child_${raw}`;
+}
+
 async function getPlanByCode(code, ownerType) {
-  const planCode = String(code || '').toLowerCase();
+  const canonical = normalizeLookupCode(code, ownerType);
+  const aliases = ownerType === 'school'
+    ? { school_starter: ['school_starter','starter'], school_growth: ['school_growth','growth'], school_enterprise: ['school_enterprise','enterprise'] }
+    : { child_essential: ['child_essential','essential','basic'], child_smart: ['child_smart','smart','premium'], child_genius: ['child_genius','genius','ultimate'] };
+  const values = aliases[canonical] || [canonical, String(code || '').toLowerCase()];
   return SubscriptionPlan.findOne({
     where: {
       isActive: true,
       ownerType,
-      [Op.or]: [{ code: planCode }, { name: planCode }, { displayName: { [Op.iLike]: planCode } }]
-    }
+      [Op.or]: [
+        { code: { [Op.in]: values } },
+        { name: { [Op.in]: values } },
+        ...values.map(v => ({ displayName: { [Op.iLike]: v } }))
+      ]
+    },
+    order: [['sortOrder', 'ASC'], ['id', 'ASC']]
   });
 }
 
