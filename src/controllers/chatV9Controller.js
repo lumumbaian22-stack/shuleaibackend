@@ -15,7 +15,51 @@ async function getTeacherProfile(userId) {
 }
 
 async function getStudentProfile(userId) {
-  return Student.findOne({ where: { userId } });
+  return Student.unscoped ? Student.unscoped().findOne({ where: { userId } }) : Student.findOne({ where: { userId } });
+}
+
+async function getClassStudyParticipants({ schoolCode, classId }) {
+  if (!classId) return [];
+  const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
+    where: { classId, status: 'active' },
+    include: [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }],
+    order: [[User, 'name', 'ASC']],
+    limit: 120
+  });
+  return students.map(s => ({
+    id: s.User?.id,
+    studentId: s.id,
+    name: s.User?.name || s.name || 'Student',
+    role: 'student',
+    profileImage: s.User?.profileImage || null,
+    admissionNumber: s.admissionNumber || null
+  })).filter(x => x.id);
+}
+
+async function buildStudyMeta(req, threads, student) {
+  const schoolCode = schoolCodeOf(req);
+  const classIds = [...new Set([student?.classId, ...threads.map(t => t.classId)].filter(Boolean).map(Number))];
+  const classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds }, schoolCode } }) : [];
+  const classMap = new Map(classes.map(c => [Number(c.id), c]));
+  const participantsByClass = {};
+  for (const classId of classIds) {
+    participantsByClass[classId] = await getClassStudyParticipants({ schoolCode, classId });
+  }
+  const groups = classIds.map(classId => {
+    const c = classMap.get(Number(classId));
+    const participants = participantsByClass[classId] || [];
+    return {
+      id: `class-${classId}`,
+      classId,
+      name: c?.name || c?.grade || 'My Class Study Group',
+      grade: c?.grade || '',
+      stream: c?.stream || '',
+      type: 'class-study-group',
+      participantCount: participants.length,
+      participants
+    };
+  });
+  return { groups, participantsByClass };
 }
 
 function canManageSchool(req) {
@@ -261,12 +305,29 @@ exports.listClassroomThreads = async (req, res) => {
       where,
       include: [
         { model: User, as: 'Creator', attributes: ['id','name','role','profileImage'] },
+        { model: Class, attributes: ['id','name','grade','stream'] },
         { model: ThreadReply, include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }] }
       ],
       order: [['isPinned', 'DESC'], ['updatedAt', 'DESC']],
-      limit: 50
+      limit: 80
     });
-    res.json({ success: true, data: threads });
+
+    const json = threads.map(t => {
+      const row = t.toJSON();
+      row.className = row.Class?.name || row.metadata?.className || 'Class Study Group';
+      row.studentCount = row.metadata?.studentCount || undefined;
+      return row;
+    });
+
+    const meta = await buildStudyMeta(req, threads, student);
+    for (const t of json) {
+      const participants = meta.participantsByClass?.[Number(t.classId)] || [];
+      t.participants = participants;
+      t.studentCount = participants.length || t.studentCount || '—';
+      t.metadata = { ...(t.metadata || {}), participantsCount: participants.length, className: t.className };
+    }
+
+    res.json({ success: true, data: json, meta });
   } catch (error) {
     console.error('listClassroomThreads error:', error);
     res.status(500).json({ success: false, message: error.message });
