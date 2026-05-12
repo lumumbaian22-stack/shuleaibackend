@@ -196,11 +196,23 @@ exports.createTeacherGroup = async (req, res) => {
   }
 };
 
+async function canDirectMessage(req, otherUser) {
+  if (!otherUser || otherUser.schoolCode !== schoolCodeOf(req)) return false;
+  if (req.user.role === 'teacher') return otherUser.role === 'teacher';
+  if (req.user.role === 'student') {
+    if (otherUser.role !== 'student') return false;
+    const meStudent = await getStudentProfile(req.user.id);
+    const otherStudent = await getStudentProfile(otherUser.id);
+    return Boolean(meStudent?.classId && otherStudent?.classId && Number(meStudent.classId) === Number(otherStudent.classId));
+  }
+  return canManageSchool(req);
+}
+
 exports.getDirectMessages = async (req, res) => {
   try {
     const otherId = Number(req.params.userId);
-    const other = await User.findOne({ where: { id: otherId, schoolCode: schoolCodeOf(req), role: 'teacher' } });
-    if (!other) return res.status(404).json({ success: false, message: 'Teacher not found' });
+    const other = await User.findOne({ where: { id: otherId, schoolCode: schoolCodeOf(req), isActive: true } });
+    if (!(await canDirectMessage(req, other))) return res.status(404).json({ success: false, message: 'Contact not found or not allowed' });
 
     const messages = await ChatMessage.findAll({
       where: {
@@ -226,8 +238,8 @@ exports.sendDirectMessage = async (req, res) => {
   try {
     const { receiverId, content, attachmentUrl, attachment } = req.body;
     if (!receiverId || !content) return res.status(400).json({ success: false, message: 'receiverId and content are required' });
-    const other = await User.findOne({ where: { id: receiverId, schoolCode: schoolCodeOf(req), role: 'teacher' } });
-    if (!other) return res.status(404).json({ success: false, message: 'Teacher not found' });
+    const other = await User.findOne({ where: { id: receiverId, schoolCode: schoolCodeOf(req), isActive: true } });
+    if (!(await canDirectMessage(req, other))) return res.status(404).json({ success: false, message: 'Contact not found or not allowed' });
 
     const message = await ChatMessage.create({
       schoolCode: schoolCodeOf(req),
