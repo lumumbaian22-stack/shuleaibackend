@@ -142,8 +142,8 @@ exports.createTeacherGroup = async (req, res) => {
     const group = await ChatGroup.create({ schoolCode: schoolCodeOf(req), name, description, type, createdBy: req.user.id });
     await ChatGroupMember.create({ groupId: group.id, userId: req.user.id, role: 'owner' });
     for (const userId of memberUserIds) {
-      const user = await User.findOne({ where: { id: userId, schoolCode: schoolCodeOf(req), role: 'teacher' } });
-      if (user) await ChatGroupMember.findOrCreate({ where: { groupId: group.id, userId }, defaults: { role: 'member' } });
+      const user = await User.findOne({ where: { id: userId, schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student','parent','admin'] } } });
+      if (user) await ChatGroupMember.findOrCreate({ where: { groupId: group.id, userId }, defaults: { role: user.role === 'teacher' ? 'member' : user.role } });
     }
     res.status(201).json({ success: true, data: group });
   } catch (error) {
@@ -180,7 +180,7 @@ exports.getDirectMessages = async (req, res) => {
 
 exports.sendDirectMessage = async (req, res) => {
   try {
-    const { receiverId, content, attachmentUrl } = req.body;
+    const { receiverId, content, attachmentUrl, attachment } = req.body;
     if (!receiverId || !content) return res.status(400).json({ success: false, message: 'receiverId and content are required' });
     const other = await User.findOne({ where: { id: receiverId, schoolCode: schoolCodeOf(req), role: 'teacher' } });
     if (!other) return res.status(404).json({ success: false, message: 'Teacher not found' });
@@ -191,7 +191,8 @@ exports.sendDirectMessage = async (req, res) => {
       receiverId,
       content,
       attachmentUrl: attachmentUrl || null,
-      messageType: attachmentUrl ? 'file' : 'text'
+      messageType: attachmentUrl ? 'file' : 'text',
+      metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
     });
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -222,7 +223,7 @@ exports.getGroupMessages = async (req, res) => {
 exports.sendGroupMessage = async (req, res) => {
   try {
     const groupId = Number(req.params.groupId);
-    const { content, attachmentUrl } = req.body;
+    const { content, attachmentUrl, attachment } = req.body;
     if (!content) return res.status(400).json({ success: false, message: 'content is required' });
 
     const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
@@ -240,7 +241,8 @@ exports.sendGroupMessage = async (req, res) => {
       groupId,
       content,
       attachmentUrl: attachmentUrl || null,
-      messageType: attachmentUrl ? 'file' : 'text'
+      messageType: attachmentUrl ? 'file' : 'text',
+      metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
     });
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -251,7 +253,7 @@ exports.sendGroupMessage = async (req, res) => {
 
 exports.listClassroomThreads = async (req, res) => {
   try {
-    const where = { schoolCode: schoolCodeOf(req), isClosed: false };
+    const where = { schoolCode: schoolCodeOf(req) };
     const student = req.user.role === 'student' ? await getStudentProfile(req.user.id) : null;
     if (student?.classId) where.classId = student.classId;
 
@@ -274,7 +276,7 @@ exports.listClassroomThreads = async (req, res) => {
 exports.createClassroomThread = async (req, res) => {
   try {
     if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only teachers/admins create classroom threads' });
-    const { classId, subject, topic, content, isPinned = false } = req.body;
+    const { classId, subject, topic, content, isPinned = false, metadata = {} } = req.body;
     if (!subject || !topic || !content) return res.status(400).json({ success: false, message: 'subject, topic and content are required' });
 
     const teacher = req.user.role === 'teacher' ? await getTeacherProfile(req.user.id) : null;
@@ -286,7 +288,8 @@ exports.createClassroomThread = async (req, res) => {
       content,
       teacherId: teacher?.id || null,
       createdBy: req.user.id,
-      isPinned
+      isPinned,
+      metadata: metadata || {}
     });
     res.status(201).json({ success: true, data: thread });
   } catch (error) {
@@ -298,13 +301,13 @@ exports.createClassroomThread = async (req, res) => {
 exports.replyToThread = async (req, res) => {
   try {
     const threadId = Number(req.params.threadId);
-    const { content, parentReplyId } = req.body;
+    const { content, parentReplyId, attachmentUrl, attachment } = req.body;
     if (!content) return res.status(400).json({ success: false, message: 'content is required' });
 
     const thread = await ClassroomThread.findOne({ where: { id: threadId, schoolCode: schoolCodeOf(req), isClosed: false } });
     if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
 
-    const reply = await ThreadReply.create({ threadId, userId: req.user.id, parentReplyId: parentReplyId || null, content });
+    const reply = await ThreadReply.create({ threadId, userId: req.user.id, parentReplyId: parentReplyId || null, content, metadata: attachmentUrl ? { attachmentUrl, attachmentName: attachment?.name, attachmentType: attachment?.mimeType, attachmentSize: attachment?.size } : {} });
     thread.updatedAt = new Date();
     await thread.save();
     res.status(201).json({ success: true, data: reply });
@@ -318,6 +321,11 @@ async function awardToUser({ req, recipientUserId, sourceType, sourceId, points,
   const recipient = await User.findOne({ where: { id: recipientUserId, schoolCode: schoolCodeOf(req) } });
   if (!recipient) throw new Error('Recipient not found');
   const student = recipient.role === 'student' ? await Student.findOne({ where: { userId: recipient.id } }) : null;
+  if (!student) {
+    const error = new Error('Stars and streaks can only be awarded to students. Use emoji reactions for teachers.');
+    error.statusCode = 400;
+    throw error;
+  }
 
   return AchievementEvent.create({
     schoolCode: schoolCodeOf(req),
@@ -367,6 +375,86 @@ exports.awardChatMessage = async (req, res) => {
     res.json({ success: true, data: { message, achievement: event } });
   } catch (error) {
     console.error('awardChatMessage error:', error);
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.reactToMessage = async (req, res) => {
+  try {
+    if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only staff can react to messages' });
+    const message = await ChatMessage.findOne({ where: { id: req.params.messageId, schoolCode: schoolCodeOf(req) }, include: [{ model: User, as: 'Sender', attributes: ['id','name','role'] }] });
+    if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
+    const emoji = String(req.body?.emoji || '👍').slice(0, 8);
+    const metadata = message.metadata || {};
+    const reactions = metadata.reactions || {};
+    const list = Array.isArray(reactions[emoji]) ? reactions[emoji] : [];
+    const uid = Number(req.user.id);
+    reactions[emoji] = list.includes(uid) ? list.filter(id => Number(id) !== uid) : [...list, uid];
+    message.metadata = { ...metadata, reactions };
+    await message.save();
+    res.json({ success: true, data: message });
+  } catch (error) {
+    console.error('reactToMessage error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.listGroupMembers = async (req, res) => {
+  try {
+    const groupId = Number(req.params.groupId);
+    const member = await ChatGroupMember.findOne({ where: { groupId, userId: req.user.id } });
+    if (!member && !canManageSchool(req)) return res.status(403).json({ success: false, message: 'Not a group member' });
+    const members = await ChatGroupMember.findAll({ where: { groupId }, include: [{ model: User, attributes: ['id','name','email','role','profileImage'] }], order: [['role','ASC'], ['createdAt','ASC']] });
+    res.json({ success: true, data: members });
+  } catch (error) {
+    console.error('listGroupMembers error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.listAvailableMembers = async (req, res) => {
+  try {
+    const users = await User.findAll({ where: { schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student','parent','admin'] } }, attributes: ['id','name','email','role','profileImage'], order: [['role','ASC'], ['name','ASC']] });
+    res.json({ success: true, data: users });
+  } catch (error) {
+    console.error('listAvailableMembers error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateGroupMembers = async (req, res) => {
+  try {
+    const groupId = Number(req.params.groupId);
+    const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
+    if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
+    const member = await ChatGroupMember.findOne({ where: { groupId, userId: req.user.id } });
+    if (!canManageSchool(req) && !['owner','admin'].includes(member?.role)) return res.status(403).json({ success: false, message: 'Only group owners/admins can manage members' });
+    const memberUserIds = Array.isArray(req.body?.memberUserIds) ? req.body.memberUserIds.map(Number).filter(Boolean) : [];
+    const keep = new Set([Number(group.createdBy), Number(req.user.id), ...memberUserIds]);
+    const users = await User.findAll({ where: { id: { [Op.in]: [...keep] }, schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student','parent','admin'] } }, attributes: ['id','role'] });
+    await ChatGroupMember.destroy({ where: { groupId, userId: { [Op.notIn]: users.map(u => u.id) } } });
+    for (const u of users) {
+      await ChatGroupMember.findOrCreate({ where: { groupId, userId: u.id }, defaults: { role: u.id === group.createdBy ? 'owner' : u.role } });
+    }
+    const members = await ChatGroupMember.findAll({ where: { groupId }, include: [{ model: User, attributes: ['id','name','email','role','profileImage'] }] });
+    res.json({ success: true, data: members });
+  } catch (error) {
+    console.error('updateGroupMembers error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.uploadAttachment = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+    res.status(201).json({ success: true, data: {
+      url: `/uploads/${req.file.filename}`,
+      name: req.file.originalname,
+      mimeType: req.file.mimetype,
+      size: req.file.size
+    } });
+  } catch (error) {
+    console.error('uploadAttachment error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
