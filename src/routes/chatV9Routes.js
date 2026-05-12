@@ -39,6 +39,7 @@ router.post('/teacher/groups/:groupId/messages', chat.sendGroupMessage);
 
 router.get('/classroom/threads', chat.listClassroomThreads);
 router.post('/classroom/threads', chat.createClassroomThread);
+router.put('/classroom/threads/:threadId', chat.updateClassroomThread);
 router.post('/classroom/threads/:threadId/replies', chat.replyToThread);
 
 router.post('/classroom/replies/:replyId/award', chat.awardThreadReply);

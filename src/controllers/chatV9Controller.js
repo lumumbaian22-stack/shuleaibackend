@@ -275,25 +275,50 @@ exports.listClassroomThreads = async (req, res) => {
 
 exports.createClassroomThread = async (req, res) => {
   try {
-    if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only teachers/admins create classroom threads' });
+    if (!['teacher','student','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Not allowed to create study threads' });
     const { classId, subject, topic, content, isPinned = false, metadata = {} } = req.body;
     if (!subject || !topic || !content) return res.status(400).json({ success: false, message: 'subject, topic and content are required' });
 
     const teacher = req.user.role === 'teacher' ? await getTeacherProfile(req.user.id) : null;
+    const student = req.user.role === 'student' ? await getStudentProfile(req.user.id) : null;
+    const approvalStatus = req.user.role === 'student' ? 'pending' : (metadata.approvalStatus || 'approved');
     const thread = await ClassroomThread.create({
       schoolCode: schoolCodeOf(req),
-      classId: classId || null,
+      classId: classId || student?.classId || null,
       subject,
       topic,
       content,
       teacherId: teacher?.id || null,
       createdBy: req.user.id,
-      isPinned,
-      metadata: metadata || {}
+      isPinned: req.user.role === 'student' ? false : Boolean(isPinned),
+      metadata: { ...(metadata || {}), approvalRequired: true, approvalStatus, createdByRole: req.user.role }
     });
     res.status(201).json({ success: true, data: thread });
   } catch (error) {
     console.error('createClassroomThread error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateClassroomThread = async (req, res) => {
+  try {
+    if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only teachers/admins can update study threads' });
+    const threadId = Number(req.params.threadId);
+    const thread = await ClassroomThread.findOne({ where: { id: threadId, schoolCode: schoolCodeOf(req) } });
+    if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
+
+    const { approvalStatus, isClosed, isPinned, topic, subject, content, metadata = {} } = req.body || {};
+    if (topic !== undefined) thread.topic = topic;
+    if (subject !== undefined) thread.subject = subject;
+    if (content !== undefined) thread.content = content;
+    if (isClosed !== undefined) thread.isClosed = Boolean(isClosed);
+    if (isPinned !== undefined) thread.isPinned = Boolean(isPinned);
+    thread.metadata = { ...(thread.metadata || {}), ...(metadata || {}) };
+    if (approvalStatus) thread.metadata = { ...(thread.metadata || {}), approvalStatus };
+    await thread.save();
+    res.json({ success: true, data: thread });
+  } catch (error) {
+    console.error('updateClassroomThread error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
