@@ -55,51 +55,51 @@ async function getClassStudyParticipants({ schoolCode, classId, classInfo }) {
 
 async function buildStudyMeta(req, threads, student) {
   const schoolCode = schoolCodeOf(req);
-  const rawClassIds = [student?.classId, ...threads.map(t => t.classId)].filter(Boolean).map(Number);
-  const classIds = [...new Set(rawClassIds)];
+  const classIds = [...new Set([student?.classId, ...threads.map(t => t.classId)].filter(Boolean).map(Number))];
   const classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds }, schoolCode } }) : [];
   const classMap = new Map(classes.map(c => [Number(c.id), c]));
   const participantsByClass = {};
-  const groups = [];
-
   for (const classId of classIds) {
     participantsByClass[classId] = await getClassStudyParticipants({ schoolCode, classId, classInfo: classMap.get(Number(classId)) });
+  }
+  let groups = classIds.map(classId => {
     const c = classMap.get(Number(classId));
     const participants = participantsByClass[classId] || [];
-    groups.push({
+    return {
       id: `class-${classId}`,
       classId,
-      name: c?.name || c?.grade || student?.grade || 'My Class Study Group',
-      grade: c?.grade || student?.grade || '',
-      stream: c?.stream || student?.stream || '',
+      name: c?.name || c?.grade || 'My Class Study Group',
+      grade: c?.grade || '',
+      stream: c?.stream || '',
       type: 'class-study-group',
       participantCount: participants.length,
       participants
-    });
-  }
-
-  // If the student does not have classId stored, still build a study group from grade/class label.
-  if (!groups.length && student) {
-    const fallbackInfo = {
-      name: student.className || student.grade || student.class || 'My Class Study Group',
-      grade: student.grade || student.className || student.class || '',
-      stream: student.stream || ''
     };
-    const participants = await getClassStudyParticipants({ schoolCode, classId: null, classInfo: fallbackInfo });
-    participantsByClass.fallback = participants;
-    groups.push({
-      id: 'class-fallback',
-      classId: null,
-      name: fallbackInfo.name || 'My Class Study Group',
-      grade: fallbackInfo.grade || '',
-      stream: fallbackInfo.stream || '',
-      type: 'class-study-group',
-      participantCount: participants.length,
-      participants
-    });
-  }
+  });
 
-  return { groups, participantsByClass, participants: groups[0]?.participants || [] };
+  // v68 fallback: some older student rows have grade/stream but classId is null.
+  // Build a real study group from matching grade labels so students still see classmates.
+  if ((!groups.length || groups.every(g => !g.participantCount)) && student) {
+    const fallbackParticipants = await getClassStudyParticipants({
+      schoolCode,
+      classId: null,
+      classInfo: { name: student.grade, grade: student.grade, stream: student.stream }
+    });
+    if (fallbackParticipants.length) {
+      groups = [{
+        id: `grade-${String(student.grade || 'class').replace(/\s+/g, '-').toLowerCase()}`,
+        classId: student.classId || null,
+        name: student.grade || 'My Class Study Group',
+        grade: student.grade || '',
+        stream: student.stream || '',
+        type: 'class-study-group',
+        participantCount: fallbackParticipants.length,
+        participants: fallbackParticipants
+      }];
+      participantsByClass[student.classId || 'fallback'] = fallbackParticipants;
+    }
+  }
+  return { groups, participantsByClass };
 }
 
 function canManageSchool(req) {
@@ -277,8 +277,8 @@ exports.getDirectMessages = async (req, res) => {
 
 exports.sendDirectMessage = async (req, res) => {
   try {
-    const { receiverId, content, attachmentUrl, attachment, replyTo } = req.body;
-    if (!receiverId || !content) return res.status(400).json({ success: false, message: 'receiverId and content are required' });
+    const { receiverId, content, attachmentUrl, attachment, replyTo, childId } = req.body;
+    if (!receiverId || (!content && !attachmentUrl)) return res.status(400).json({ success: false, message: 'receiverId and content/attachment are required' });
     const other = await User.findOne({ where: { id: receiverId, schoolCode: schoolCodeOf(req), isActive: true } });
     if (!(await canDirectMessage(req, other))) return res.status(404).json({ success: false, message: 'Contact not found or not allowed' });
 
@@ -289,7 +289,7 @@ exports.sendDirectMessage = async (req, res) => {
       content,
       attachmentUrl: attachmentUrl || null,
       messageType: attachmentUrl ? 'file' : 'text',
-      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), ...(replyTo ? { replyTo } : {}) }
+      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), ...(replyTo ? { replyTo } : {}), ...(childId ? { childId: Number(childId) } : {}) }
     });
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -321,7 +321,7 @@ exports.sendGroupMessage = async (req, res) => {
   try {
     const groupId = Number(req.params.groupId);
     const { content, attachmentUrl, attachment, replyTo } = req.body;
-    if (!content) return res.status(400).json({ success: false, message: 'content is required' });
+    if (!content && !attachmentUrl) return res.status(400).json({ success: false, message: 'content or attachment is required' });
 
     const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
     if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
@@ -339,7 +339,7 @@ exports.sendGroupMessage = async (req, res) => {
       content,
       attachmentUrl: attachmentUrl || null,
       messageType: attachmentUrl ? 'file' : 'text',
-      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), ...(replyTo ? { replyTo } : {}) }
+      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), ...(replyTo ? { replyTo } : {}), ...(childId ? { childId: Number(childId) } : {}) }
     });
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -352,9 +352,7 @@ exports.listClassroomThreads = async (req, res) => {
   try {
     const where = { schoolCode: schoolCodeOf(req) };
     const student = req.user.role === 'student' ? await getStudentProfile(req.user.id) : null;
-    if (student?.classId) {
-      where[Op.or] = [{ classId: student.classId }, { classId: null }];
-    }
+    if (student?.classId) where.classId = student.classId;
 
     const threads = await ClassroomThread.findAll({
       where,
@@ -376,7 +374,7 @@ exports.listClassroomThreads = async (req, res) => {
 
     const meta = await buildStudyMeta(req, threads, student);
     for (const t of json) {
-      const participants = (t.classId ? meta.participantsByClass?.[Number(t.classId)] : meta.participantsByClass?.fallback) || meta.participants || [];
+      const participants = meta.participantsByClass?.[Number(t.classId)] || [];
       t.participants = participants;
       t.studentCount = participants.length || t.studentCount || '—';
       t.metadata = { ...(t.metadata || {}), participantsCount: participants.length, className: t.className };
@@ -443,7 +441,7 @@ exports.replyToThread = async (req, res) => {
   try {
     const threadId = Number(req.params.threadId);
     const { content, parentReplyId, attachmentUrl, attachment, replyTo } = req.body;
-    if (!content) return res.status(400).json({ success: false, message: 'content is required' });
+    if (!content && !attachmentUrl) return res.status(400).json({ success: false, message: 'content or attachment is required' });
 
     const thread = await ClassroomThread.findOne({ where: { id: threadId, schoolCode: schoolCodeOf(req), isClosed: false } });
     if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
