@@ -18,38 +18,21 @@ async function getStudentProfile(userId) {
   return Student.unscoped ? Student.unscoped().findOne({ where: { userId } }) : Student.findOne({ where: { userId } });
 }
 
-async function getClassStudyParticipants({ schoolCode, classId, classInfo }) {
-  const StudentModel = Student.unscoped ? Student.unscoped() : Student;
-  const include = [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }];
-  let students = [];
-  if (classId) {
-    students = await StudentModel.findAll({
-      where: { classId, status: 'active' },
-      include,
-      order: [[User, 'name', 'ASC']],
-      limit: 160
-    });
-  }
-  if ((!students || !students.length) && classInfo) {
-    const labels = [classInfo.name, classInfo.grade, `${classInfo.grade || ''} ${classInfo.stream || ''}`.trim()].filter(Boolean);
-    if (labels.length) {
-      students = await StudentModel.findAll({
-        where: { status: 'active', grade: { [Op.in]: labels } },
-        include,
-        order: [[User, 'name', 'ASC']],
-        limit: 160
-      });
-    }
-  }
-  return (students || []).map(s => ({
+async function getClassStudyParticipants({ schoolCode, classId }) {
+  if (!classId) return [];
+  const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
+    where: { classId, status: 'active' },
+    include: [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }],
+    order: [[User, 'name', 'ASC']],
+    limit: 120
+  });
+  return students.map(s => ({
     id: s.User?.id,
     studentId: s.id,
     name: s.User?.name || s.name || 'Student',
     role: 'student',
     profileImage: s.User?.profileImage || null,
-    admissionNumber: s.admissionNumber || null,
-    classId: s.classId || classId || null,
-    grade: s.grade || null
+    admissionNumber: s.admissionNumber || null
   })).filter(x => x.id);
 }
 
@@ -60,9 +43,9 @@ async function buildStudyMeta(req, threads, student) {
   const classMap = new Map(classes.map(c => [Number(c.id), c]));
   const participantsByClass = {};
   for (const classId of classIds) {
-    participantsByClass[classId] = await getClassStudyParticipants({ schoolCode, classId, classInfo: classMap.get(Number(classId)) });
+    participantsByClass[classId] = await getClassStudyParticipants({ schoolCode, classId });
   }
-  let groups = classIds.map(classId => {
+  const groups = classIds.map(classId => {
     const c = classMap.get(Number(classId));
     const participants = participantsByClass[classId] || [];
     return {
@@ -76,29 +59,6 @@ async function buildStudyMeta(req, threads, student) {
       participants
     };
   });
-
-  // v68 fallback: some older student rows have grade/stream but classId is null.
-  // Build a real study group from matching grade labels so students still see classmates.
-  if ((!groups.length || groups.every(g => !g.participantCount)) && student) {
-    const fallbackParticipants = await getClassStudyParticipants({
-      schoolCode,
-      classId: null,
-      classInfo: { name: student.grade, grade: student.grade, stream: student.stream }
-    });
-    if (fallbackParticipants.length) {
-      groups = [{
-        id: `grade-${String(student.grade || 'class').replace(/\s+/g, '-').toLowerCase()}`,
-        classId: student.classId || null,
-        name: student.grade || 'My Class Study Group',
-        grade: student.grade || '',
-        stream: student.stream || '',
-        type: 'class-study-group',
-        participantCount: fallbackParticipants.length,
-        participants: fallbackParticipants
-      }];
-      participantsByClass[student.classId || 'fallback'] = fallbackParticipants;
-    }
-  }
   return { groups, participantsByClass };
 }
 
@@ -238,8 +198,7 @@ exports.createTeacherGroup = async (req, res) => {
 
 async function canDirectMessage(req, otherUser) {
   if (!otherUser || otherUser.schoolCode !== schoolCodeOf(req)) return false;
-  if (req.user.role === 'teacher') return ['teacher','parent','admin'].includes(otherUser.role);
-  if (req.user.role === 'parent') return ['teacher','admin'].includes(otherUser.role);
+  if (req.user.role === 'teacher') return otherUser.role === 'teacher';
   if (req.user.role === 'student') {
     if (otherUser.role !== 'student') return false;
     const meStudent = await getStudentProfile(req.user.id);
@@ -277,8 +236,8 @@ exports.getDirectMessages = async (req, res) => {
 
 exports.sendDirectMessage = async (req, res) => {
   try {
-    const { receiverId, content, attachmentUrl, attachment, replyTo, childId } = req.body;
-    if (!receiverId || (!content && !attachmentUrl)) return res.status(400).json({ success: false, message: 'receiverId and content/attachment are required' });
+    const { receiverId, content, attachmentUrl, attachment } = req.body;
+    if (!receiverId || !content) return res.status(400).json({ success: false, message: 'receiverId and content are required' });
     const other = await User.findOne({ where: { id: receiverId, schoolCode: schoolCodeOf(req), isActive: true } });
     if (!(await canDirectMessage(req, other))) return res.status(404).json({ success: false, message: 'Contact not found or not allowed' });
 
@@ -289,7 +248,7 @@ exports.sendDirectMessage = async (req, res) => {
       content,
       attachmentUrl: attachmentUrl || null,
       messageType: attachmentUrl ? 'file' : 'text',
-      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), ...(replyTo ? { replyTo } : {}), ...(childId ? { childId: Number(childId) } : {}) }
+      metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
     });
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -320,8 +279,8 @@ exports.getGroupMessages = async (req, res) => {
 exports.sendGroupMessage = async (req, res) => {
   try {
     const groupId = Number(req.params.groupId);
-    const { content, attachmentUrl, attachment, replyTo } = req.body;
-    if (!content && !attachmentUrl) return res.status(400).json({ success: false, message: 'content or attachment is required' });
+    const { content, attachmentUrl, attachment } = req.body;
+    if (!content) return res.status(400).json({ success: false, message: 'content is required' });
 
     const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
     if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
@@ -339,7 +298,7 @@ exports.sendGroupMessage = async (req, res) => {
       content,
       attachmentUrl: attachmentUrl || null,
       messageType: attachmentUrl ? 'file' : 'text',
-      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), ...(replyTo ? { replyTo } : {}), ...(childId ? { childId: Number(childId) } : {}) }
+      metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
     });
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -440,13 +399,13 @@ exports.updateClassroomThread = async (req, res) => {
 exports.replyToThread = async (req, res) => {
   try {
     const threadId = Number(req.params.threadId);
-    const { content, parentReplyId, attachmentUrl, attachment, replyTo } = req.body;
-    if (!content && !attachmentUrl) return res.status(400).json({ success: false, message: 'content or attachment is required' });
+    const { content, parentReplyId, attachmentUrl, attachment } = req.body;
+    if (!content) return res.status(400).json({ success: false, message: 'content is required' });
 
     const thread = await ClassroomThread.findOne({ where: { id: threadId, schoolCode: schoolCodeOf(req), isClosed: false } });
     if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
 
-    const reply = await ThreadReply.create({ threadId, userId: req.user.id, parentReplyId: parentReplyId || null, content, metadata: { ...(attachmentUrl ? { attachmentUrl, attachmentName: attachment?.name, attachmentType: attachment?.mimeType, attachmentSize: attachment?.size } : {}), ...(replyTo ? { replyTo } : {}) } });
+    const reply = await ThreadReply.create({ threadId, userId: req.user.id, parentReplyId: parentReplyId || null, content, metadata: attachmentUrl ? { attachmentUrl, attachmentName: attachment?.name, attachmentType: attachment?.mimeType, attachmentSize: attachment?.size } : {} });
     thread.updatedAt = new Date();
     await thread.save();
     res.status(201).json({ success: true, data: reply });
@@ -614,116 +573,6 @@ exports.myAchievements = async (req, res) => {
   } catch (error) {
     console.error('myAchievements error:', error);
     res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-
-exports.listParentContacts = async (req, res) => {
-  try {
-    if (req.user.role !== 'parent') return res.status(403).json({ success:false, message:'Only parents can load parent contacts' });
-    const users = await User.findAll({
-      where: { schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','admin'] } },
-      attributes: ['id','name','email','role','profileImage'],
-      order: [['role','ASC'], ['name','ASC']]
-    });
-    res.json({ success:true, data: users });
-  } catch (error) {
-    console.error('listParentContacts error:', error);
-    res.status(500).json({ success:false, message:error.message });
-  }
-};
-
-exports.markMessageRead = async (req, res) => {
-  try {
-    const message = await ChatMessage.findOne({ where: { id: req.params.messageId, schoolCode: schoolCodeOf(req) } });
-    if (!message) return res.status(404).json({ success:false, message:'Message not found' });
-    if (Number(message.receiverId) !== Number(req.user.id) && !canManageSchool(req)) return res.status(403).json({ success:false, message:'Forbidden' });
-    message.isRead = true;
-    message.metadata = { ...(message.metadata || {}), readBy: [...new Set([...(message.metadata?.readBy || []), Number(req.user.id)])] };
-    await message.save();
-    res.json({ success:true, data: message });
-  } catch (error) {
-    console.error('markMessageRead error:', error);
-    res.status(500).json({ success:false, message:error.message });
-  }
-};
-
-exports.pinMessage = async (req, res) => {
-  try {
-    const message = await ChatMessage.findOne({ where: { id: req.params.messageId, schoolCode: schoolCodeOf(req) } });
-    if (!message) return res.status(404).json({ success:false, message:'Message not found' });
-    const canPin = canManageSchool(req) || Number(message.senderId) === Number(req.user.id);
-    if (!canPin) return res.status(403).json({ success:false, message:'Only sender or admin can pin this message' });
-    message.metadata = { ...(message.metadata || {}), pinned: !message.metadata?.pinned, pinnedBy: req.user.id, pinnedAt: new Date().toISOString() };
-    await message.save();
-    res.json({ success:true, data: message });
-  } catch (error) {
-    console.error('pinMessage error:', error);
-    res.status(500).json({ success:false, message:error.message });
-  }
-};
-
-exports.moderateMessage = async (req, res) => {
-  try {
-    const message = await ChatMessage.findOne({ where: { id: req.params.messageId, schoolCode: schoolCodeOf(req) } });
-    if (!message) return res.status(404).json({ success:false, message:'Message not found' });
-    const isStaff = ['teacher','admin','super_admin'].includes(req.user.role);
-    if (!isStaff && Number(message.senderId) !== Number(req.user.id)) return res.status(403).json({ success:false, message:'Not allowed' });
-    const action = req.body?.action || 'reported';
-    message.metadata = { ...(message.metadata || {}), moderation: { action, reason: req.body?.reason || '', by: req.user.id, at: new Date().toISOString() } };
-    await message.save();
-    res.json({ success:true, data: message });
-  } catch (error) {
-    console.error('moderateMessage error:', error);
-    res.status(500).json({ success:false, message:error.message });
-  }
-};
-
-exports.reactToReply = async (req, res) => {
-  try {
-    const reply = await ThreadReply.findByPk(req.params.replyId);
-    if (!reply) return res.status(404).json({ success:false, message:'Reply not found' });
-    const emoji = String(req.body?.emoji || '👍').slice(0, 8);
-    const metadata = reply.metadata || {};
-    const reactions = metadata.reactions || {};
-    const list = Array.isArray(reactions[emoji]) ? reactions[emoji] : [];
-    const uid = Number(req.user.id);
-    reactions[emoji] = list.includes(uid) ? list.filter(id => Number(id) !== uid) : [...list, uid];
-    reply.metadata = { ...metadata, reactions };
-    await reply.save();
-    res.json({ success:true, data: reply });
-  } catch (error) {
-    console.error('reactToReply error:', error);
-    res.status(500).json({ success:false, message:error.message });
-  }
-};
-
-exports.pinReply = async (req, res) => {
-  try {
-    if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success:false, message:'Only teachers/admins can pin replies' });
-    const reply = await ThreadReply.findByPk(req.params.replyId);
-    if (!reply) return res.status(404).json({ success:false, message:'Reply not found' });
-    reply.metadata = { ...(reply.metadata || {}), pinned: !reply.metadata?.pinned, pinnedBy: req.user.id, pinnedAt: new Date().toISOString() };
-    await reply.save();
-    res.json({ success:true, data: reply });
-  } catch (error) {
-    console.error('pinReply error:', error);
-    res.status(500).json({ success:false, message:error.message });
-  }
-};
-
-exports.moderateReply = async (req, res) => {
-  try {
-    const reply = await ThreadReply.findByPk(req.params.replyId);
-    if (!reply) return res.status(404).json({ success:false, message:'Reply not found' });
-    const isStaff = ['teacher','admin','super_admin'].includes(req.user.role);
-    if (!isStaff && Number(reply.userId) !== Number(req.user.id)) return res.status(403).json({ success:false, message:'Not allowed' });
-    reply.metadata = { ...(reply.metadata || {}), moderation: { action: req.body?.action || 'reported', reason: req.body?.reason || '', by: req.user.id, at: new Date().toISOString() } };
-    await reply.save();
-    res.json({ success:true, data: reply });
-  } catch (error) {
-    console.error('moderateReply error:', error);
-    res.status(500).json({ success:false, message:error.message });
   }
 };
 

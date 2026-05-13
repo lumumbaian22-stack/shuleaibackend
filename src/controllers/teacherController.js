@@ -1326,7 +1326,14 @@ exports.updateMark = async (req, res) => {
     if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (record.teacherId !== teacher.id) return res.status(403).json({ success: false, message: 'Not authorized' });
-    await record.update({ score, assessmentName, assessmentType, date, term, year });
+    if (record.isPublished || record.status === 'locked' || record.lockedAt) {
+      return res.status(423).json({ success:false, message:'This mark is locked after publication. Ask admin to unlock it before editing.' });
+    }
+    const school = await School.findOne({ where:{ schoolId:req.user.schoolCode } });
+    const grade = score !== undefined ? getGradeFromScore(Number(score), school?.system || 'cbc', school?.settings?.schoolLevel || 'secondary', req.body.gradingScale || record.gradingScale || null) : record.grade;
+    const auditTrail = Array.isArray(record.auditTrail) ? record.auditTrail : [];
+    auditTrail.push({ action:'mark_updated', by:req.user.id, teacherId:teacher.id, oldScore:record.score, newScore:score, reason:req.body.reason || 'Teacher correction before publish', at:new Date().toISOString() });
+    await record.update({ score, grade, assessmentName, assessmentType, date, term, year, auditTrail, version:(record.version || 1)+1 });
     res.json({ success: true, data: record });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1342,6 +1349,9 @@ exports.deleteMark = async (req, res) => {
     if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (record.teacherId !== teacher.id) return res.status(403).json({ success: false, message: 'Not authorized' });
+    if (record.isPublished || record.status === 'locked' || record.lockedAt) {
+      return res.status(423).json({ success:false, message:'Published/locked marks cannot be deleted. Ask admin to unlock/correct with audit log.' });
+    }
     await record.destroy();
     res.json({ success: true, message: 'Mark deleted' });
   } catch (error) {
@@ -1490,23 +1500,75 @@ exports.uploadStudentsCSV = async (req,res) => {
 };
 exports.saveBulkMarks = async (req,res) => {
   try {
-    const { classId, subject, assessmentType, assessmentName, date, marks=[], term='Term 1', year=new Date().getFullYear() } = req.body;
-    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
-    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
-    const access = v3Access(teacher, cls, subject); if (!access.allowed) return res.status(403).json({ success:false, message:'You can only enter marks for assigned subjects/classes' });
+    const { classId, subject, assessmentType='CAT', assessmentName, date, marks=[], term='Term 1', year=new Date().getFullYear(), gradingScale=null } = req.body;
+    if (!assessmentName) return res.status(400).json({ success:false, message:'Assessment name is required' });
+    if (!Array.isArray(marks) || !marks.length) return res.status(400).json({ success:false, message:'At least one mark is required' });
+
+    const teacher = await v3Teacher(req.user.id);
+    if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } });
+    if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = v3Access(teacher, cls, subject);
+    if (!access.allowed) return res.status(403).json({ success:false, message:'You can only enter marks for assigned subjects/classes' });
+
+    const school = await School.findOne({ where:{ schoolId:req.user.schoolCode } });
+    const curriculum = (school?.system || school?.settings?.curriculum || 'cbc');
+    const level = school?.settings?.schoolLevel || 'secondary';
+    const studentIdsInClass = (await Student.findAll({ where:{ grade:cls.name }, attributes:['id'] })).map(s => Number(s.id));
+
     let saved=0, failed=0; const results=[];
-    for (const m of marks) { try { const score=Number(m.score); if (!Number.isFinite(score)||score<0||score>100) throw new Error('Score must be 0-100'); const [record,created]=await AcademicRecord.findOrCreate({ where:{ studentId:m.studentId, subject, assessmentType, assessmentName, term, year:Number(year) }, defaults:{ studentId:m.studentId, schoolCode:req.user.schoolCode, term, year:Number(year), subject, assessmentType, assessmentName, score, grade:getGradeFromScore(score, (await School.findOne({ where:{ schoolId:req.user.schoolCode } }))?.system || 'cbc', (await School.findOne({ where:{ schoolId:req.user.schoolCode } }))?.settings?.schoolLevel || 'secondary'), teacherId:teacher.id, date:date||new Date(), isPublished:false } }); if (!created) { if (record.isPublished) throw new Error('Published marks cannot be edited'); await record.update({ score, grade:getGradeFromScore(score, (await School.findOne({ where:{ schoolId:req.user.schoolCode } }))?.system || 'cbc', (await School.findOne({ where:{ schoolId:req.user.schoolCode } }))?.settings?.schoolLevel || 'secondary'), teacherId:teacher.id, date:date||record.date }); } saved++; results.push({ studentId:m.studentId, success:true, recordId:record.id }); } catch(err){ failed++; results.push({ studentId:m.studentId, success:false, error:err.message }); } }
-    res.json({ success:true, message:`Saved ${saved} draft mark(s). Class teacher publishes final report card marks.`, data:{ saved, failed, results } });
-  } catch(error) { console.error('V3 save marks error:', error); res.status(500).json({ success:false, message:error.message }); }
+    for (const m of marks) {
+      try {
+        const studentId = Number(m.studentId);
+        if (!studentIdsInClass.includes(studentId)) throw new Error('Student is not in this class');
+        const score = Number(m.score);
+        if (!Number.isFinite(score) || score < 0 || score > 100) throw new Error('Score must be 0-100');
+        const grade = getGradeFromScore(score, curriculum, level, gradingScale);
+        const where = { studentId, subject, assessmentType, assessmentName, term, year:Number(year), schoolCode:req.user.schoolCode };
+        const existing = await AcademicRecord.findOne({ where });
+        const auditEntry = { action: existing ? 'mark_updated' : 'mark_created', by:req.user.id, teacherId:teacher.id, oldScore:existing?.score ?? null, newScore:score, reason:m.reason || 'Teacher marks entry', at:new Date().toISOString(), term, year:Number(year), subject, assessmentType, assessmentName };
+        if (existing) {
+          const locked = existing.status === 'locked' || existing.isPublished === true || existing.lockedAt;
+          if (locked && !existing.unlockedBy) throw new Error('Published/locked marks cannot be edited. Request admin unlock.');
+          await existing.update({
+            score, grade, remarks:m.remarks || existing.remarks || '', classId:cls.id, curriculum,
+            teacherId:teacher.id, date:date || existing.date, gradingScale,
+            status: existing.status === 'published' ? 'published' : 'draft',
+            version:(existing.version || 1) + 1,
+            auditTrail:[...(Array.isArray(existing.auditTrail)?existing.auditTrail:[]), auditEntry]
+          });
+          results.push({ studentId, success:true, recordId:existing.id, updated:true });
+        } else {
+          const record = await AcademicRecord.create({
+            studentId, schoolCode:req.user.schoolCode, classId:cls.id, curriculum, term, year:Number(year), subject,
+            assessmentType, assessmentName, score, grade, remarks:m.remarks || '', teacherId:teacher.id,
+            date:date || new Date(), isPublished:false, status:'draft', gradingScale,
+            auditTrail:[auditEntry]
+          });
+          results.push({ studentId, success:true, recordId:record.id, created:true });
+        }
+        saved++;
+      } catch(err) { failed++; results.push({ studentId:m.studentId, success:false, error:err.message }); }
+    }
+    res.json({ success:true, message:`Saved ${saved} draft mark(s). Published marks will lock with audit history.`, data:{ saved, failed, results, classId:cls.id, className:cls.name, term, year:Number(year), subject } });
+  } catch(error) { console.error('V66 save marks error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
+
 exports.publishMarks = async (req,res) => {
   try {
-    const { classId, term='Term 1', year=new Date().getFullYear() } = req.body;
+    const { classId, term='Term 1', year=new Date().getFullYear(), subject=null } = req.body;
     const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
     const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
-    if (Number(cls.teacherId) !== Number(teacher.id)) return res.status(403).json({ success:false, message:'Only the class teacher can publish final marks for this class' });
+    if (Number(cls.teacherId) !== Number(teacher.id)) return res.status(403).json({ success:false, message:'Only the class teacher can publish and lock final marks for this class' });
     const students = await Student.findAll({ where:{ grade:cls.name }, attributes:['id'] }); const ids=students.map(s=>s.id);
-    const [count] = await AcademicRecord.update({ isPublished:true }, { where:{ schoolCode:req.user.schoolCode, studentId:{ [Op.in]:ids }, term, year:Number(year) } });
-    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}`, data:{ count, classId:cls.id, term, year:Number(year) } });
-  } catch(error) { console.error('V3 publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
+    const where = { schoolCode:req.user.schoolCode, studentId:{ [Op.in]:ids }, term, year:Number(year), isPublished:false };
+    if (subject) where.subject = subject;
+    const records = await AcademicRecord.findAll({ where });
+    for (const record of records) {
+      const trail = Array.isArray(record.auditTrail) ? record.auditTrail : [];
+      trail.push({ action:'marks_published_locked', by:req.user.id, teacherId:teacher.id, at:new Date().toISOString(), classId:cls.id, term, year:Number(year), subject:record.subject });
+      await record.update({ isPublished:true, status:'locked', publishedAt:new Date(), publishedBy:req.user.id, lockedAt:new Date(), auditTrail:trail });
+    }
+    res.json({ success:true, message:`${records.length} mark(s) published and locked for ${cls.name}`, data:{ count:records.length, classId:cls.id, term, year:Number(year), locked:true } });
+  } catch(error) { console.error('V66 publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
