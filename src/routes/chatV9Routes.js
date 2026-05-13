@@ -24,6 +24,7 @@ router.put('/departments/:departmentId', chat.updateDepartment);
 router.delete('/departments/:departmentId', chat.deleteDepartment);
 
 router.get('/teachers', chat.listTeacherDirectory);
+router.get('/parent/contacts', chat.listParentContacts);
 
 router.get('/teacher/groups', chat.listTeacherGroups);
 router.post('/teacher/groups', chat.createTeacherGroup);
@@ -45,6 +46,12 @@ router.post('/classroom/threads/:threadId/replies', chat.replyToThread);
 router.post('/classroom/replies/:replyId/award', chat.awardThreadReply);
 router.post('/teacher/messages/:messageId/award', chat.awardChatMessage);
 router.post('/teacher/messages/:messageId/react', chat.reactToMessage);
+router.put('/messages/:messageId/read', chat.markMessageRead);
+router.post('/messages/:messageId/pin', chat.pinMessage);
+router.post('/messages/:messageId/moderate', chat.moderateMessage);
+router.post('/classroom/replies/:replyId/react', chat.reactToReply);
+router.post('/classroom/replies/:replyId/pin', chat.pinReply);
+router.post('/classroom/replies/:replyId/moderate', chat.moderateReply);
 router.post('/attachments', attachmentUpload.single('file'), chat.uploadAttachment);
 
 router.get('/achievements/me', chat.myAchievements);
