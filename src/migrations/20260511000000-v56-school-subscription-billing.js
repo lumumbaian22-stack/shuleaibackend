@@ -156,6 +156,8 @@ module.exports = {
     await queryInterface.changeColumn('Payments', 'studentId', { type: Sequelize.INTEGER, allowNull: true }).catch(() => null);
     await queryInterface.changeColumn('Payments', 'parentId', { type: Sequelize.INTEGER, allowNull: true }).catch(() => null);
 
+    await queryInterface.sequelize.query('CREATE UNIQUE INDEX IF NOT EXISTS subscriptionplans_code_unique ON "SubscriptionPlans" ("code") WHERE "code" IS NOT NULL').catch(() => null);
+
     for (const plan of planSeeds) {
       const now = new Date();
       await queryInterface.sequelize.query(`
@@ -173,7 +175,17 @@ module.exports = {
           "limits" = EXCLUDED."limits",
           "sortOrder" = EXCLUDED."sortOrder",
           "updatedAt" = EXCLUDED."updatedAt";
-      `, { replacements: { ...plan, features: JSON.stringify(plan.features||[]), lockedFeatures: JSON.stringify(plan.lockedFeatures||[]), limits: JSON.stringify(plan.limits||{}), now } });
+      `, { replacements: {
+        ...plan,
+        termlyPriceKes: plan.termlyPriceKes || 0,
+        yearlyPriceKes: plan.yearlyPriceKes || 0,
+        setupFeeMinKes: plan.setupFeeMinKes || 0,
+        setupFeeMaxKes: plan.setupFeeMaxKes || 0,
+        features: JSON.stringify(plan.features || []),
+        lockedFeatures: JSON.stringify(plan.lockedFeatures || []),
+        limits: JSON.stringify(plan.limits || {}),
+        now
+      } });
     }
   },
 

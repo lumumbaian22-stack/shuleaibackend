@@ -53,11 +53,6 @@ router.get('/classes/:classId/subjects', adminController.getClassSubjectAssignme
 router.post('/classes/subject-assign', adminController.assignTeacherToSubject);
 router.delete('/classes/subject-assign/:assignmentId', adminController.removeSubjectAssignment);
 
-
-// V66 Academic Audit
-router.get('/academics/audit-log', adminController.getMarksAuditLog);
-router.post('/academics/marks/:recordId/unlock', adminController.unlockAcademicRecord);
-
 // Analytics & Stats
 router.get('/grades/stats', adminController.getStudentGrades);
 router.get('/attendance/stats', adminController.getAttendanceStats);

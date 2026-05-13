@@ -18,48 +18,88 @@ async function getStudentProfile(userId) {
   return Student.unscoped ? Student.unscoped().findOne({ where: { userId } }) : Student.findOne({ where: { userId } });
 }
 
-async function getClassStudyParticipants({ schoolCode, classId }) {
-  if (!classId) return [];
-  const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
-    where: { classId, status: 'active' },
-    include: [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }],
-    order: [[User, 'name', 'ASC']],
-    limit: 120
-  });
-  return students.map(s => ({
+async function getClassStudyParticipants({ schoolCode, classId, classInfo }) {
+  const StudentModel = Student.unscoped ? Student.unscoped() : Student;
+  const include = [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }];
+  let students = [];
+  if (classId) {
+    students = await StudentModel.findAll({
+      where: { classId, status: 'active' },
+      include,
+      order: [[User, 'name', 'ASC']],
+      limit: 160
+    });
+  }
+  if ((!students || !students.length) && classInfo) {
+    const labels = [classInfo.name, classInfo.grade, `${classInfo.grade || ''} ${classInfo.stream || ''}`.trim()].filter(Boolean);
+    if (labels.length) {
+      students = await StudentModel.findAll({
+        where: { status: 'active', grade: { [Op.in]: labels } },
+        include,
+        order: [[User, 'name', 'ASC']],
+        limit: 160
+      });
+    }
+  }
+  return (students || []).map(s => ({
     id: s.User?.id,
     studentId: s.id,
     name: s.User?.name || s.name || 'Student',
     role: 'student',
     profileImage: s.User?.profileImage || null,
-    admissionNumber: s.admissionNumber || null
+    admissionNumber: s.admissionNumber || null,
+    classId: s.classId || classId || null,
+    grade: s.grade || null
   })).filter(x => x.id);
 }
 
 async function buildStudyMeta(req, threads, student) {
   const schoolCode = schoolCodeOf(req);
-  const classIds = [...new Set([student?.classId, ...threads.map(t => t.classId)].filter(Boolean).map(Number))];
+  const rawClassIds = [student?.classId, ...threads.map(t => t.classId)].filter(Boolean).map(Number);
+  const classIds = [...new Set(rawClassIds)];
   const classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds }, schoolCode } }) : [];
   const classMap = new Map(classes.map(c => [Number(c.id), c]));
   const participantsByClass = {};
+  const groups = [];
+
   for (const classId of classIds) {
-    participantsByClass[classId] = await getClassStudyParticipants({ schoolCode, classId });
-  }
-  const groups = classIds.map(classId => {
+    participantsByClass[classId] = await getClassStudyParticipants({ schoolCode, classId, classInfo: classMap.get(Number(classId)) });
     const c = classMap.get(Number(classId));
     const participants = participantsByClass[classId] || [];
-    return {
+    groups.push({
       id: `class-${classId}`,
       classId,
-      name: c?.name || c?.grade || 'My Class Study Group',
-      grade: c?.grade || '',
-      stream: c?.stream || '',
+      name: c?.name || c?.grade || student?.grade || 'My Class Study Group',
+      grade: c?.grade || student?.grade || '',
+      stream: c?.stream || student?.stream || '',
       type: 'class-study-group',
       participantCount: participants.length,
       participants
+    });
+  }
+
+  // If the student does not have classId stored, still build a study group from grade/class label.
+  if (!groups.length && student) {
+    const fallbackInfo = {
+      name: student.className || student.grade || student.class || 'My Class Study Group',
+      grade: student.grade || student.className || student.class || '',
+      stream: student.stream || ''
     };
-  });
-  return { groups, participantsByClass };
+    const participants = await getClassStudyParticipants({ schoolCode, classId: null, classInfo: fallbackInfo });
+    participantsByClass.fallback = participants;
+    groups.push({
+      id: 'class-fallback',
+      classId: null,
+      name: fallbackInfo.name || 'My Class Study Group',
+      grade: fallbackInfo.grade || '',
+      stream: fallbackInfo.stream || '',
+      type: 'class-study-group',
+      participantCount: participants.length,
+      participants
+    });
+  }
+
+  return { groups, participantsByClass, participants: groups[0]?.participants || [] };
 }
 
 function canManageSchool(req) {
@@ -198,7 +238,8 @@ exports.createTeacherGroup = async (req, res) => {
 
 async function canDirectMessage(req, otherUser) {
   if (!otherUser || otherUser.schoolCode !== schoolCodeOf(req)) return false;
-  if (req.user.role === 'teacher') return otherUser.role === 'teacher';
+  if (req.user.role === 'teacher') return ['teacher','parent','admin'].includes(otherUser.role);
+  if (req.user.role === 'parent') return ['teacher','admin'].includes(otherUser.role);
   if (req.user.role === 'student') {
     if (otherUser.role !== 'student') return false;
     const meStudent = await getStudentProfile(req.user.id);
@@ -236,7 +277,7 @@ exports.getDirectMessages = async (req, res) => {
 
 exports.sendDirectMessage = async (req, res) => {
   try {
-    const { receiverId, content, attachmentUrl, attachment } = req.body;
+    const { receiverId, content, attachmentUrl, attachment, replyTo } = req.body;
     if (!receiverId || !content) return res.status(400).json({ success: false, message: 'receiverId and content are required' });
     const other = await User.findOne({ where: { id: receiverId, schoolCode: schoolCodeOf(req), isActive: true } });
     if (!(await canDirectMessage(req, other))) return res.status(404).json({ success: false, message: 'Contact not found or not allowed' });
@@ -248,7 +289,7 @@ exports.sendDirectMessage = async (req, res) => {
       content,
       attachmentUrl: attachmentUrl || null,
       messageType: attachmentUrl ? 'file' : 'text',
-      metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
+      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), ...(replyTo ? { replyTo } : {}) }
     });
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -279,7 +320,7 @@ exports.getGroupMessages = async (req, res) => {
 exports.sendGroupMessage = async (req, res) => {
   try {
     const groupId = Number(req.params.groupId);
-    const { content, attachmentUrl, attachment } = req.body;
+    const { content, attachmentUrl, attachment, replyTo } = req.body;
     if (!content) return res.status(400).json({ success: false, message: 'content is required' });
 
     const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
@@ -298,7 +339,7 @@ exports.sendGroupMessage = async (req, res) => {
       content,
       attachmentUrl: attachmentUrl || null,
       messageType: attachmentUrl ? 'file' : 'text',
-      metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
+      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), ...(replyTo ? { replyTo } : {}) }
     });
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -311,7 +352,9 @@ exports.listClassroomThreads = async (req, res) => {
   try {
     const where = { schoolCode: schoolCodeOf(req) };
     const student = req.user.role === 'student' ? await getStudentProfile(req.user.id) : null;
-    if (student?.classId) where.classId = student.classId;
+    if (student?.classId) {
+      where[Op.or] = [{ classId: student.classId }, { classId: null }];
+    }
 
     const threads = await ClassroomThread.findAll({
       where,
@@ -333,7 +376,7 @@ exports.listClassroomThreads = async (req, res) => {
 
     const meta = await buildStudyMeta(req, threads, student);
     for (const t of json) {
-      const participants = meta.participantsByClass?.[Number(t.classId)] || [];
+      const participants = (t.classId ? meta.participantsByClass?.[Number(t.classId)] : meta.participantsByClass?.fallback) || meta.participants || [];
       t.participants = participants;
       t.studentCount = participants.length || t.studentCount || '—';
       t.metadata = { ...(t.metadata || {}), participantsCount: participants.length, className: t.className };
@@ -399,13 +442,13 @@ exports.updateClassroomThread = async (req, res) => {
 exports.replyToThread = async (req, res) => {
   try {
     const threadId = Number(req.params.threadId);
-    const { content, parentReplyId, attachmentUrl, attachment } = req.body;
+    const { content, parentReplyId, attachmentUrl, attachment, replyTo } = req.body;
     if (!content) return res.status(400).json({ success: false, message: 'content is required' });
 
     const thread = await ClassroomThread.findOne({ where: { id: threadId, schoolCode: schoolCodeOf(req), isClosed: false } });
     if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
 
-    const reply = await ThreadReply.create({ threadId, userId: req.user.id, parentReplyId: parentReplyId || null, content, metadata: attachmentUrl ? { attachmentUrl, attachmentName: attachment?.name, attachmentType: attachment?.mimeType, attachmentSize: attachment?.size } : {} });
+    const reply = await ThreadReply.create({ threadId, userId: req.user.id, parentReplyId: parentReplyId || null, content, metadata: { ...(attachmentUrl ? { attachmentUrl, attachmentName: attachment?.name, attachmentType: attachment?.mimeType, attachmentSize: attachment?.size } : {}), ...(replyTo ? { replyTo } : {}) } });
     thread.updatedAt = new Date();
     await thread.save();
     res.status(201).json({ success: true, data: reply });
@@ -573,6 +616,116 @@ exports.myAchievements = async (req, res) => {
   } catch (error) {
     console.error('myAchievements error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+exports.listParentContacts = async (req, res) => {
+  try {
+    if (req.user.role !== 'parent') return res.status(403).json({ success:false, message:'Only parents can load parent contacts' });
+    const users = await User.findAll({
+      where: { schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','admin'] } },
+      attributes: ['id','name','email','role','profileImage'],
+      order: [['role','ASC'], ['name','ASC']]
+    });
+    res.json({ success:true, data: users });
+  } catch (error) {
+    console.error('listParentContacts error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
+};
+
+exports.markMessageRead = async (req, res) => {
+  try {
+    const message = await ChatMessage.findOne({ where: { id: req.params.messageId, schoolCode: schoolCodeOf(req) } });
+    if (!message) return res.status(404).json({ success:false, message:'Message not found' });
+    if (Number(message.receiverId) !== Number(req.user.id) && !canManageSchool(req)) return res.status(403).json({ success:false, message:'Forbidden' });
+    message.isRead = true;
+    message.metadata = { ...(message.metadata || {}), readBy: [...new Set([...(message.metadata?.readBy || []), Number(req.user.id)])] };
+    await message.save();
+    res.json({ success:true, data: message });
+  } catch (error) {
+    console.error('markMessageRead error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
+};
+
+exports.pinMessage = async (req, res) => {
+  try {
+    const message = await ChatMessage.findOne({ where: { id: req.params.messageId, schoolCode: schoolCodeOf(req) } });
+    if (!message) return res.status(404).json({ success:false, message:'Message not found' });
+    const canPin = canManageSchool(req) || Number(message.senderId) === Number(req.user.id);
+    if (!canPin) return res.status(403).json({ success:false, message:'Only sender or admin can pin this message' });
+    message.metadata = { ...(message.metadata || {}), pinned: !message.metadata?.pinned, pinnedBy: req.user.id, pinnedAt: new Date().toISOString() };
+    await message.save();
+    res.json({ success:true, data: message });
+  } catch (error) {
+    console.error('pinMessage error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
+};
+
+exports.moderateMessage = async (req, res) => {
+  try {
+    const message = await ChatMessage.findOne({ where: { id: req.params.messageId, schoolCode: schoolCodeOf(req) } });
+    if (!message) return res.status(404).json({ success:false, message:'Message not found' });
+    const isStaff = ['teacher','admin','super_admin'].includes(req.user.role);
+    if (!isStaff && Number(message.senderId) !== Number(req.user.id)) return res.status(403).json({ success:false, message:'Not allowed' });
+    const action = req.body?.action || 'reported';
+    message.metadata = { ...(message.metadata || {}), moderation: { action, reason: req.body?.reason || '', by: req.user.id, at: new Date().toISOString() } };
+    await message.save();
+    res.json({ success:true, data: message });
+  } catch (error) {
+    console.error('moderateMessage error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
+};
+
+exports.reactToReply = async (req, res) => {
+  try {
+    const reply = await ThreadReply.findByPk(req.params.replyId);
+    if (!reply) return res.status(404).json({ success:false, message:'Reply not found' });
+    const emoji = String(req.body?.emoji || '👍').slice(0, 8);
+    const metadata = reply.metadata || {};
+    const reactions = metadata.reactions || {};
+    const list = Array.isArray(reactions[emoji]) ? reactions[emoji] : [];
+    const uid = Number(req.user.id);
+    reactions[emoji] = list.includes(uid) ? list.filter(id => Number(id) !== uid) : [...list, uid];
+    reply.metadata = { ...metadata, reactions };
+    await reply.save();
+    res.json({ success:true, data: reply });
+  } catch (error) {
+    console.error('reactToReply error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
+};
+
+exports.pinReply = async (req, res) => {
+  try {
+    if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success:false, message:'Only teachers/admins can pin replies' });
+    const reply = await ThreadReply.findByPk(req.params.replyId);
+    if (!reply) return res.status(404).json({ success:false, message:'Reply not found' });
+    reply.metadata = { ...(reply.metadata || {}), pinned: !reply.metadata?.pinned, pinnedBy: req.user.id, pinnedAt: new Date().toISOString() };
+    await reply.save();
+    res.json({ success:true, data: reply });
+  } catch (error) {
+    console.error('pinReply error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
+};
+
+exports.moderateReply = async (req, res) => {
+  try {
+    const reply = await ThreadReply.findByPk(req.params.replyId);
+    if (!reply) return res.status(404).json({ success:false, message:'Reply not found' });
+    const isStaff = ['teacher','admin','super_admin'].includes(req.user.role);
+    if (!isStaff && Number(reply.userId) !== Number(req.user.id)) return res.status(403).json({ success:false, message:'Not allowed' });
+    reply.metadata = { ...(reply.metadata || {}), moderation: { action: req.body?.action || 'reported', reason: req.body?.reason || '', by: req.user.id, at: new Date().toISOString() } };
+    await reply.save();
+    res.json({ success:true, data: reply });
+  } catch (error) {
+    console.error('moderateReply error:', error);
+    res.status(500).json({ success:false, message:error.message });
   }
 };
 
