@@ -6,6 +6,9 @@ const homeworkCtrl = require('../controllers/homeworkController');
 router.use(protect);
 router.post('/assign', authorize('teacher'), homeworkCtrl.createAssignment);
 router.get('/teacher', authorize('teacher'), homeworkCtrl.getTeacherAssignments);
+router.get('/teacher/:taskId', authorize('teacher'), homeworkCtrl.getTeacherAssignment);
+router.put('/teacher/:taskId', authorize('teacher'), homeworkCtrl.updateTeacherAssignment);
+router.delete('/teacher/:taskId', authorize('teacher'), homeworkCtrl.deleteTeacherAssignment);
 router.get('/student', authorize('student'), homeworkCtrl.getStudentAssignments);
 router.post('/submit/:assignmentId', authorize('student'), homeworkCtrl.submitAssignment);
 

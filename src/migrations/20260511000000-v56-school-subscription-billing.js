@@ -156,46 +156,24 @@ module.exports = {
     await queryInterface.changeColumn('Payments', 'studentId', { type: Sequelize.INTEGER, allowNull: true }).catch(() => null);
     await queryInterface.changeColumn('Payments', 'parentId', { type: Sequelize.INTEGER, allowNull: true }).catch(() => null);
 
-    await queryInterface.sequelize.query('CREATE UNIQUE INDEX IF NOT EXISTS subscriptionplans_code_unique ON "SubscriptionPlans" ("code") WHERE "code" IS NOT NULL').catch(() => null);
-
     for (const plan of planSeeds) {
       const now = new Date();
-      const replacements = {
-        ...plan,
-        monthlyPriceKes: plan.monthlyPriceKes || plan.price_kes || 0,
-        termlyPriceKes: plan.termlyPriceKes || 0,
-        yearlyPriceKes: plan.yearlyPriceKes || 0,
-        setupFeeMinKes: plan.setupFeeMinKes || 0,
-        setupFeeMaxKes: plan.setupFeeMaxKes || 0,
-        features: JSON.stringify(plan.features || []),
-        lockedFeatures: JSON.stringify(plan.lockedFeatures || []),
-        limits: JSON.stringify(plan.limits || {}),
-        now
-      };
-      await queryInterface.sequelize.query(`
-        UPDATE "SubscriptionPlans"
-        SET "name" = :name,
-            "displayName" = :displayName,
-            "ownerType" = :ownerType,
-            "price_kes" = :price_kes,
-            "monthlyPriceKes" = :monthlyPriceKes,
-            "termlyPriceKes" = :termlyPriceKes,
-            "yearlyPriceKes" = :yearlyPriceKes,
-            "setupFeeMinKes" = :setupFeeMinKes,
-            "setupFeeMaxKes" = :setupFeeMaxKes,
-            "features" = CAST(:features AS JSONB),
-            "lockedFeatures" = CAST(:lockedFeatures AS JSONB),
-            "limits" = CAST(:limits AS JSONB),
-            "sortOrder" = :sortOrder,
-            "isActive" = true,
-            "updatedAt" = :now
-        WHERE "code" = :code OR LOWER("name") = LOWER(:name);
-      `, { replacements });
       await queryInterface.sequelize.query(`
         INSERT INTO "SubscriptionPlans" ("code","name","displayName","ownerType","price_kes","monthlyPriceKes","termlyPriceKes","yearlyPriceKes","setupFeeMinKes","setupFeeMaxKes","features","lockedFeatures","limits","sortOrder","isActive","createdAt","updatedAt")
-        SELECT :code,:name,:displayName,:ownerType,:price_kes,:monthlyPriceKes,:termlyPriceKes,:yearlyPriceKes,:setupFeeMinKes,:setupFeeMaxKes,CAST(:features AS JSONB),CAST(:lockedFeatures AS JSONB),CAST(:limits AS JSONB),:sortOrder,true,:now,:now
-        WHERE NOT EXISTS (SELECT 1 FROM "SubscriptionPlans" WHERE "code" = :code);
-      `, { replacements });
+        VALUES (:code,:name,:displayName,:ownerType,:price_kes,:monthlyPriceKes,:termlyPriceKes,:yearlyPriceKes,:setupFeeMinKes,:setupFeeMaxKes,CAST(:features AS JSONB),CAST(:lockedFeatures AS JSONB),CAST(:limits AS JSONB),:sortOrder,true,:now,:now)
+        ON CONFLICT ("code") DO UPDATE SET
+          "displayName" = EXCLUDED."displayName",
+          "ownerType" = EXCLUDED."ownerType",
+          "price_kes" = EXCLUDED."price_kes",
+          "monthlyPriceKes" = EXCLUDED."monthlyPriceKes",
+          "termlyPriceKes" = EXCLUDED."termlyPriceKes",
+          "yearlyPriceKes" = EXCLUDED."yearlyPriceKes",
+          "features" = EXCLUDED."features",
+          "lockedFeatures" = EXCLUDED."lockedFeatures",
+          "limits" = EXCLUDED."limits",
+          "sortOrder" = EXCLUDED."sortOrder",
+          "updatedAt" = EXCLUDED."updatedAt";
+      `, { replacements: { ...plan, features: JSON.stringify(plan.features||[]), lockedFeatures: JSON.stringify(plan.lockedFeatures||[]), limits: JSON.stringify(plan.limits||{}), now } });
     }
   },
 
