@@ -7,25 +7,6 @@ function rolloutMoneyDisabled(res) {
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
-async function findClassTeacherForStudent(student, schoolCode) {
-  const { Class } = require('../models');
-  let classItem = null;
-  if (student.classId) classItem = await Class.findOne({ where: { id: student.classId, schoolCode, isActive: true }, include: [{ model: Teacher, include: [{ model: User, attributes: ['id','name','email','phone'] }] }] });
-  if (!classItem) classItem = await Class.findOne({ where: { schoolCode, isActive: true, [Op.or]: [{ name: student.grade }, { grade: student.grade }] }, include: [{ model: Teacher, include: [{ model: User, attributes: ['id','name','email','phone'] }] }] });
-  if (classItem?.Teacher?.User) return classItem.Teacher;
-  return Teacher.findOne({ where: { classTeacher: student.grade }, include: [{ model: User, attributes: ['id','name','email','phone'] }] });
-}
-
-async function parentAllowedStaffForStudent(req, student) {
-  const classTeacher = await findClassTeacherForStudent(student, req.user.schoolCode);
-  const admin = await User.findOne({ where: { role: 'admin', schoolCode: req.user.schoolCode, isActive: true } });
-  return {
-    classTeacher,
-    admin,
-    allowedUserIds: [classTeacher?.User?.id, admin?.id].filter(Boolean).map(Number)
-  };
-}
-
 // @desc    Get parent's children
 // @route   GET /api/parent/children
 // @access  Private/Parent
@@ -69,8 +50,11 @@ exports.getChildSummary = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
-    // Get child's class teacher from the child's active class first, then legacy classTeacher fallback
-    const classTeacher = await findClassTeacherForStudent(student, req.user.schoolCode);
+    // Get child's class teacher
+    const classTeacher = await Teacher.findOne({
+      where: { classTeacher: student.grade },
+      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+    });
 
     // Fetch only PUBLISHED academic records
     const records = await AcademicRecord.findAll({ 
@@ -472,9 +456,12 @@ exports.sendMessage = async (req, res) => {
     let recipientName = '';
 
     if (recipientType === 'teacher') {
-      const classTeacher = await findClassTeacherForStudent(student, req.user.schoolCode);
+      const classTeacher = await Teacher.findOne({
+        where: { classTeacher: student.grade },
+        include: [{ model: User, attributes: ['id', 'name'] }]
+      });
 
-      if (!classTeacher?.User) {
+      if (!classTeacher) {
         return res.status(404).json({ success: false, message: 'Class teacher not found' });
       }
 
@@ -503,10 +490,7 @@ exports.sendMessage = async (req, res) => {
       metadata: {
         studentId: student.id,
         studentName: student.User.name,
-        studentGrade: student.grade,
-        parentName: req.user.name,
-        recipientType,
-        conversationType: 'parent-to-staff'
+        parentName: req.user.name
       }
     });
 
@@ -556,21 +540,10 @@ exports.sendMessage = async (req, res) => {
 exports.getMessages = async (req, res) => {
   try {
     const { otherUserId } = req.params;
-    const { studentId } = req.query;
     const { Message } = require('../models');
-    const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    let childFilter = {};
-    if (studentId) {
-      const student = await Student.findByPk(studentId);
-      if (!parent || !student || !(await parent.hasStudent(student))) return res.status(403).json({ success: false, message: 'Child not linked to this parent' });
-      const allowed = await parentAllowedStaffForStudent(req, student);
-      if (!allowed.allowedUserIds.includes(Number(otherUserId))) return res.status(403).json({ success: false, message: 'Parents can only message the school admin and this child’s class teacher' });
-      childFilter = { metadata: { studentId: Number(studentId) } };
-    }
 
     const messages = await Message.findAll({
       where: {
-        ...childFilter,
         [Op.or]: [
           { senderId: req.user.id, receiverId: otherUserId },
           { senderId: otherUserId, receiverId: req.user.id }
@@ -750,21 +723,8 @@ exports.getChildTodayAttendance = async (req, res) => {
 exports.getConversations = async (req, res) => {
   try {
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    if (!parent) return res.status(404).json({ success: false, message: 'Parent not found' });
-    const { studentId } = req.query;
-    let allowedUserIds = [];
-    let studentWhere = {};
-    if (studentId) {
-      const student = await Student.findByPk(studentId);
-      if (!student || !(await parent.hasStudent(student))) return res.status(403).json({ success: false, message: 'Child not linked to this parent' });
-      const allowed = await parentAllowedStaffForStudent(req, student);
-      allowedUserIds = allowed.allowedUserIds;
-      studentWhere = { metadata: { studentId: Number(studentId) } };
-    }
-
     const messages = await Message.findAll({
       where: {
-        ...studentWhere,
         [Op.or]: [{ senderId: req.user.id }, { receiverId: req.user.id }]
       },
       include: [
@@ -775,15 +735,11 @@ exports.getConversations = async (req, res) => {
     });
     const conversations = {};
     messages.forEach(msg => {
-      const otherId = Number(msg.senderId === req.user.id ? msg.receiverId : msg.senderId);
-      if (allowedUserIds.length && !allowedUserIds.includes(otherId)) return;
-      const other = msg.senderId === req.user.id ? msg.Receiver : msg.Sender;
-      if (!other || !['teacher','admin'].includes(other.role)) return;
+      const otherId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
       if (!conversations[otherId]) {
         conversations[otherId] = {
           userId: otherId,
-          userName: other.name,
-          userRole: other.role,
+          userName: msg.senderId === req.user.id ? msg.Receiver?.name : msg.Sender?.name,
           lastMessage: msg.content,
           lastMessageTime: msg.createdAt,
           unreadCount: msg.receiverId === req.user.id && !msg.isRead ? 1 : 0

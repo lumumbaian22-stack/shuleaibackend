@@ -3,7 +3,7 @@ const {
   User, Teacher, Student, Class,
   Department, DepartmentMember,
   ChatGroup, ChatGroupMember, ChatMessage,
-  ClassroomThread, ThreadReply, AchievementEvent, TeacherSubjectAssignment
+  ClassroomThread, ThreadReply, AchievementEvent
 } = require('../models');
 
 const v9Presence = new Map();
@@ -28,14 +28,8 @@ async function getStudentProfile(userId) {
 
 async function getClassStudyParticipants({ schoolCode, classId }) {
   if (!classId) return [];
-  const classItem = await Class.findOne({ where: { id: classId, schoolCode } });
-  const names = classLookupNames(classItem, null);
-  const where = names.length
-    ? { [Op.or]: [{ classId }, { grade: { [Op.in]: names } }] }
-    : { classId };
-  where.status = { [Op.ne]: 'inactive' };
   const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
-    where,
+    where: { classId, [Op.or]: [{ status: 'active' }, { status: null }] },
     include: [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }],
     order: [[User, 'name', 'ASC']],
     limit: 120
@@ -48,119 +42,6 @@ async function getClassStudyParticipants({ schoolCode, classId }) {
     profileImage: s.User?.profileImage || null,
     admissionNumber: s.admissionNumber || null
   })).filter(x => x.id);
-}
-
-
-async function getClassRecordForTeacher(teacher, schoolCode) {
-  if (!teacher) return null;
-  if (teacher.classId) {
-    const byId = await Class.findOne({ where: { id: teacher.classId, schoolCode, isActive: true } });
-    if (byId) return byId;
-  }
-  if (teacher.classTeacher) {
-    return Class.findOne({
-      where: {
-        schoolCode,
-        isActive: true,
-        [Op.or]: [
-          { name: teacher.classTeacher },
-          { grade: teacher.classTeacher },
-          { name: { [Op.iLike]: `%${teacher.classTeacher}%` } },
-          { grade: { [Op.iLike]: `%${teacher.classTeacher}%` } }
-        ]
-      }
-    });
-  }
-  return null;
-}
-
-function classLookupNames(classItem, teacher) {
-  return [...new Set([
-    classItem?.name,
-    classItem?.grade,
-    classItem?.stream ? `${classItem?.grade || ''} ${classItem.stream}`.trim() : '',
-    classItem?.stream ? `${classItem?.name || ''} ${classItem.stream}`.trim() : '',
-    teacher?.classTeacher
-  ].filter(Boolean))];
-}
-
-async function getTeacherClassStudents(teacher, schoolCode) {
-  const classItem = await getClassRecordForTeacher(teacher, schoolCode);
-  const names = classLookupNames(classItem, teacher);
-  const where = { status: { [Op.ne]: 'inactive' } };
-  if (classItem?.id && names.length) {
-    where[Op.or] = [{ classId: classItem.id }, { grade: { [Op.in]: names } }];
-  } else if (classItem?.id) {
-    where.classId = classItem.id;
-  } else if (names.length) {
-    where.grade = { [Op.in]: names };
-  } else {
-    return [];
-  }
-  return (Student.unscoped ? Student.unscoped() : Student).findAll({
-    where,
-    include: [{ model: User, attributes: ['id','name','email','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }],
-    limit: 1000
-  });
-}
-
-async function getAllowedTeacherGroupUsers(req) {
-  const schoolCode = schoolCodeOf(req);
-  if (canManageSchool(req)) {
-    return User.findAll({
-      where: { schoolCode, isActive: true, role: { [Op.in]: ['teacher','student'] } },
-      attributes: ['id','name','email','role','profileImage'],
-      include: [
-        { model: Teacher, required: false, attributes: ['id','classId','subjects','classTeacher'] },
-        { model: Student, required: false, attributes: ['id','classId','grade'] }
-      ],
-      order: [['role','ASC'], ['name','ASC']]
-    });
-  }
-
-  if (req.user.role !== 'teacher') return [];
-  const teacher = await getTeacherProfile(req.user.id);
-  if (!teacher) return [];
-  const classItem = await getClassRecordForTeacher(teacher, schoolCode);
-  const students = await getTeacherClassStudents(teacher, schoolCode);
-
-  const subjectList = Array.isArray(teacher.subjects) ? teacher.subjects.map(s => String(s).toLowerCase()) : [];
-  const assignmentWhere = {};
-  if (classItem?.id) assignmentWhere.classId = classItem.id;
-  const assignments = classItem?.id ? await TeacherSubjectAssignment.findAll({ where: assignmentWhere }) : [];
-  const peerTeacherIds = new Set();
-  assignments.forEach(a => {
-    if (!subjectList.length || subjectList.includes(String(a.subject || '').toLowerCase())) peerTeacherIds.add(Number(a.teacherId));
-  });
-  peerTeacherIds.add(Number(teacher.id));
-
-  let peerTeachers = [];
-  if (peerTeacherIds.size) {
-    peerTeachers = await Teacher.findAll({
-      where: { id: { [Op.in]: [...peerTeacherIds] } },
-      include: [{ model: User, attributes: ['id','name','email','role','profileImage'], where: { schoolCode, role: 'teacher', isActive: true } }]
-    });
-  }
-
-  const users = [];
-  for (const t of peerTeachers) if (t.User) users.push({ ...t.User.toJSON(), className: classItem?.name || teacher.classTeacher || '', subjectScope: subjectList.join(', ') });
-  for (const st of students) if (st.User) users.push({ ...st.User.toJSON(), className: classItem?.name || st.grade || '', studentId: st.id });
-  const seen = new Set();
-  return users.filter(u => { if (seen.has(Number(u.id))) return false; seen.add(Number(u.id)); return true; });
-}
-
-async function allowedTeacherGroupUserIds(req) {
-  const users = await getAllowedTeacherGroupUsers(req);
-  return new Set(users.map(u => Number(u.id)));
-}
-
-async function ensureCreatorMembership(group, userId) {
-  if (!group || !userId) return null;
-  let member = await ChatGroupMember.findOne({ where: { groupId: group.id, userId } });
-  if (!member && Number(group.createdBy) === Number(userId)) {
-    member = await ChatGroupMember.create({ groupId: group.id, userId, role: 'owner' });
-  }
-  return member;
 }
 
 async function buildStudyMeta(req, threads, student) {
@@ -277,8 +158,6 @@ exports.listTeacherDirectory = async (req, res) => {
 exports.listTeacherGroups = async (req, res) => {
   try {
     await ensureStaffRoom(req);
-    const ownedGroups = await ChatGroup.findAll({ where: { schoolCode: schoolCodeOf(req), createdBy: req.user.id, isActive: true } });
-    for (const group of ownedGroups) await ensureCreatorMembership(group, req.user.id);
 
     const memberships = await ChatGroupMember.findAll({
       where: { userId: req.user.id },
@@ -314,11 +193,9 @@ exports.createTeacherGroup = async (req, res) => {
 
     const group = await ChatGroup.create({ schoolCode: schoolCodeOf(req), name, description, type, createdBy: req.user.id });
     await ChatGroupMember.create({ groupId: group.id, userId: req.user.id, role: 'owner' });
-    const allowedIds = await allowedTeacherGroupUserIds(req);
-    for (const userId of memberUserIds.map(Number).filter(Boolean)) {
-      if (!allowedIds.has(Number(userId))) continue;
-      const user = await User.findOne({ where: { id: userId, schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student'] } } });
-      if (user) await ChatGroupMember.findOrCreate({ where: { groupId: group.id, userId }, defaults: { role: user.role === 'teacher' ? 'member' : 'student' } });
+    for (const userId of memberUserIds) {
+      const user = await User.findOne({ where: { id: userId, schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student','parent','admin'] } } });
+      if (user) await ChatGroupMember.findOrCreate({ where: { groupId: group.id, userId }, defaults: { role: user.role === 'teacher' ? 'member' : user.role } });
     }
     res.status(201).json({ success: true, data: group });
   } catch (error) {
@@ -400,9 +277,7 @@ exports.sendDirectMessage = async (req, res) => {
 exports.getGroupMessages = async (req, res) => {
   try {
     const groupId = Number(req.params.groupId);
-    const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
-    if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
-    const member = await ensureCreatorMembership(group, req.user.id);
+    const member = await ChatGroupMember.findOne({ where: { groupId, userId: req.user.id } });
     if (!member && !canManageSchool(req)) return res.status(403).json({ success: false, message: 'Not a group member' });
 
     const messages = await ChatMessage.findAll({
@@ -436,7 +311,7 @@ exports.sendGroupMessage = async (req, res) => {
     const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
     if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
 
-    const member = await ensureCreatorMembership(group, req.user.id);
+    const member = await ChatGroupMember.findOne({ where: { groupId, userId: req.user.id } });
     if (!member && !canManageSchool(req)) return res.status(403).json({ success: false, message: 'Not a group member' });
     if (group.onlyAdminsCanSend && !['owner','admin'].includes(member?.role) && !canManageSchool(req)) {
       return res.status(403).json({ success: false, message: 'Only group admins can send messages' });
@@ -449,7 +324,7 @@ exports.sendGroupMessage = async (req, res) => {
       content,
       attachmentUrl: attachmentUrl || null,
       messageType: messageType || (attachment?.mimeType?.startsWith?.('audio/') ? 'voice' : (attachmentUrl ? 'file' : 'text')),
-      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), ...(replyToMessageId ? { replyToMessageId:Number(replyToMessageId) } : {}), deliveredTo: {} }
+      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), ...(replyToMessageId ? { replyToMessageId:Number(replyToMessageId) } : {}), deliveredTo: { [receiverId]: null } }
     });
     res.status(201).json({ success: true, data: message });
   } catch (error) {
@@ -651,11 +526,9 @@ exports.reactToMessage = async (req, res) => {
 exports.listGroupMembers = async (req, res) => {
   try {
     const groupId = Number(req.params.groupId);
-    const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
-    if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
-    const member = await ensureCreatorMembership(group, req.user.id);
+    const member = await ChatGroupMember.findOne({ where: { groupId, userId: req.user.id } });
     if (!member && !canManageSchool(req)) return res.status(403).json({ success: false, message: 'Not a group member' });
-    const members = await ChatGroupMember.findAll({ where: { groupId }, include: [{ model: User, where: { role: { [Op.in]: ['teacher','student'] } }, attributes: ['id','name','email','role','profileImage'] }], order: [['role','ASC'], ['createdAt','ASC']] });
+    const members = await ChatGroupMember.findAll({ where: { groupId }, include: [{ model: User, attributes: ['id','name','email','role','profileImage'] }], order: [['role','ASC'], ['createdAt','ASC']] });
     res.json({ success: true, data: members });
   } catch (error) {
     console.error('listGroupMembers error:', error);
@@ -665,7 +538,7 @@ exports.listGroupMembers = async (req, res) => {
 
 exports.listAvailableMembers = async (req, res) => {
   try {
-    const users = await getAllowedTeacherGroupUsers(req);
+    const users = await User.findAll({ where: { schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student','parent','admin'] } }, attributes: ['id','name','email','role','profileImage'], order: [['role','ASC'], ['name','ASC']] });
     res.json({ success: true, data: users });
   } catch (error) {
     console.error('listAvailableMembers error:', error);
@@ -678,15 +551,14 @@ exports.updateGroupMembers = async (req, res) => {
     const groupId = Number(req.params.groupId);
     const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
     if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
-    const member = await ensureCreatorMembership(group, req.user.id);
+    const member = await ChatGroupMember.findOne({ where: { groupId, userId: req.user.id } });
     if (!canManageSchool(req) && !['owner','admin'].includes(member?.role)) return res.status(403).json({ success: false, message: 'Only group owners/admins can manage members' });
-    const requestedUserIds = Array.isArray(req.body?.memberUserIds) ? req.body.memberUserIds.map(Number).filter(Boolean) : [];
-    const allowedIds = await allowedTeacherGroupUserIds(req);
-    const keep = new Set([Number(group.createdBy), Number(req.user.id), ...requestedUserIds.filter(id => allowedIds.has(Number(id)))]);
-    const users = await User.findAll({ where: { id: { [Op.in]: [...keep] }, schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student'] } }, attributes: ['id','role'] });
+    const memberUserIds = Array.isArray(req.body?.memberUserIds) ? req.body.memberUserIds.map(Number).filter(Boolean) : [];
+    const keep = new Set([Number(group.createdBy), Number(req.user.id), ...memberUserIds]);
+    const users = await User.findAll({ where: { id: { [Op.in]: [...keep] }, schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student','parent','admin'] } }, attributes: ['id','role'] });
     await ChatGroupMember.destroy({ where: { groupId, userId: { [Op.notIn]: users.map(u => u.id) } } });
     for (const u of users) {
-      await ChatGroupMember.findOrCreate({ where: { groupId, userId: u.id }, defaults: { role: u.id === group.createdBy ? 'owner' : (u.role === 'teacher' ? 'member' : 'student') } });
+      await ChatGroupMember.findOrCreate({ where: { groupId, userId: u.id }, defaults: { role: u.id === group.createdBy ? 'owner' : u.role } });
     }
     const members = await ChatGroupMember.findAll({ where: { groupId }, include: [{ model: User, attributes: ['id','name','email','role','profileImage'] }] });
     res.json({ success: true, data: members });

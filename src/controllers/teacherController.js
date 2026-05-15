@@ -1491,40 +1491,12 @@ exports.uploadStudentsCSV = async (req,res) => {
 exports.saveBulkMarks = async (req,res) => {
   try {
     const { classId, subject, assessmentType, assessmentName, date, marks=[], term='Term 1', year=new Date().getFullYear() } = req.body;
-    const teacher = await v3Teacher(req.user.id);
-    if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
-    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } });
-    if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
-    const access = v3Access(teacher, cls, subject);
-    if (!access.allowed) return res.status(403).json({ success:false, message:'You can only enter marks for assigned subjects/classes' });
-
-    const school = await School.findOne({ where:{ schoolId:req.user.schoolCode } });
-    const curriculum = school?.system || school?.curriculum || 'cbc';
-    const schoolLevel = school?.settings?.schoolLevel || school?.level || 'secondary';
-    let saved=0, failed=0;
-    const results=[];
-
-    for (const m of marks) {
-      try {
-        const score = Number(m.score);
-        if (!Number.isFinite(score) || score < 0 || score > 100) throw new Error('Score must be 0-100');
-        const grade = getGradeFromScore(score, curriculum, schoolLevel);
-        const [record, created] = await AcademicRecord.findOrCreate({
-          where:{ studentId:m.studentId, subject, assessmentType, assessmentName, term, year:Number(year) },
-          defaults:{ studentId:m.studentId, schoolCode:req.user.schoolCode, term, year:Number(year), subject, assessmentType, assessmentName, score, grade, teacherId:teacher.id, date:date||new Date(), isPublished:false }
-        });
-        if (!created) {
-          if (record.isPublished) throw new Error('Published marks cannot be edited');
-          await record.update({ score, grade, teacherId:teacher.id, date:date||record.date });
-        }
-        saved++;
-        results.push({ studentId:m.studentId, success:true, recordId:record.id, score, grade, curriculum, schoolLevel });
-      } catch(err) {
-        failed++;
-        results.push({ studentId:m.studentId, success:false, error:err.message });
-      }
-    }
-    res.json({ success:true, message:`Saved ${saved} draft mark(s). Grades were auto-calculated from the ${curriculum} grading range.`, data:{ saved, failed, results, curriculum, schoolLevel } });
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = v3Access(teacher, cls, subject); if (!access.allowed) return res.status(403).json({ success:false, message:'You can only enter marks for assigned subjects/classes' });
+    let saved=0, failed=0; const results=[];
+    for (const m of marks) { try { const score=Number(m.score); if (!Number.isFinite(score)||score<0||score>100) throw new Error('Score must be 0-100'); const [record,created]=await AcademicRecord.findOrCreate({ where:{ studentId:m.studentId, subject, assessmentType, assessmentName, term, year:Number(year) }, defaults:{ studentId:m.studentId, schoolCode:req.user.schoolCode, term, year:Number(year), subject, assessmentType, assessmentName, score, grade:getGradeFromScore(score, (await School.findOne({ where:{ schoolId:req.user.schoolCode } }))?.system || 'cbc', (await School.findOne({ where:{ schoolId:req.user.schoolCode } }))?.settings?.schoolLevel || 'secondary'), teacherId:teacher.id, date:date||new Date(), isPublished:false } }); if (!created) { if (record.isPublished) throw new Error('Published marks cannot be edited'); await record.update({ score, grade:getGradeFromScore(score, (await School.findOne({ where:{ schoolId:req.user.schoolCode } }))?.system || 'cbc', (await School.findOne({ where:{ schoolId:req.user.schoolCode } }))?.settings?.schoolLevel || 'secondary'), teacherId:teacher.id, date:date||record.date }); } saved++; results.push({ studentId:m.studentId, success:true, recordId:record.id }); } catch(err){ failed++; results.push({ studentId:m.studentId, success:false, error:err.message }); } }
+    res.json({ success:true, message:`Saved ${saved} draft mark(s). Class teacher publishes final report card marks.`, data:{ saved, failed, results } });
   } catch(error) { console.error('V3 save marks error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 exports.publishMarks = async (req,res) => {

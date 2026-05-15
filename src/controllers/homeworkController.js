@@ -1,28 +1,9 @@
 const { Op } = require('sequelize');
-const { HomeTask, HomeTaskAssignment, Student, Teacher, Class, User, TeacherSubjectAssignment, ClassroomThread } = require('../models');
+const { HomeTask, HomeTaskAssignment, Student, Teacher, Class, User, TeacherSubjectAssignment } = require('../models');
 
 function cleanString(value, fallback = '') {
   const s = String(value ?? '').trim();
   return s || fallback;
-}
-
-function parseTaskMaterials(value) {
-  if (!value) return { text: '', discussionThreadId: null };
-  try {
-    const parsed = JSON.parse(value);
-    if (parsed && typeof parsed === 'object') return { text: parsed.text || '', discussionThreadId: parsed.discussionThreadId || null };
-  } catch (_) {}
-  return { text: String(value), discussionThreadId: null };
-}
-
-function serializeTaskMaterials({ text = '', discussionThreadId = null } = {}) {
-  return JSON.stringify({ text, discussionThreadId });
-}
-
-function decorateHomeworkTask(task) {
-  const json = typeof task.toJSON === 'function' ? task.toJSON() : { ...task };
-  const meta = parseTaskMaterials(json.materials);
-  return { ...json, materials: meta.text, discussionThreadId: meta.discussionThreadId };
 }
 
 async function getTeacherFromUser(userId) {
@@ -101,9 +82,7 @@ exports.createAssignment = async (req, res) => {
       studentIds,
       estimatedMinutes,
       points,
-      difficulty,
-      openDiscussion = false,
-      materials = ''
+      difficulty
     } = req.body || {};
 
     const teacher = await getTeacherFromUser(req.user.id);
@@ -143,30 +122,12 @@ exports.createAssignment = async (req, res) => {
       classId: resolvedClassId,
       className: resolvedClassName,
       dueDate: dueDate || null,
-      materials: serializeTaskMaterials({ text: materials || '', discussionThreadId: null })
+      materials: ''
     });
-
-    let discussionThread = null;
-    if (openDiscussion) {
-      discussionThread = await ClassroomThread.create({
-        schoolCode: req.user.schoolCode,
-        classId: resolvedClassId,
-        subject: safeSubject,
-        topic: safeTitle,
-        content: `Homework discussion: ${safeInstructions}`,
-        teacherId: teacher.id,
-        createdBy: req.user.id,
-        isPinned: false,
-        metadata: { source: 'homework', homeworkId: task.id, homeworkTitle: safeTitle, homeworkDueDate: dueDate || null, className: resolvedClassName, approvalStatus: 'approved', createdByRole: 'teacher' }
-      });
-      task.materials = serializeTaskMaterials({ text: materials || '', discussionThreadId: discussionThread.id });
-      await task.save();
-    }
 
     const assignments = targetStudentIds.map(sid => ({
       studentId: sid,
       taskId: task.id,
-        discussionThreadId: discussionThread?.id || null,
       classId: resolvedClassId,
       schoolCode: req.user.schoolCode,
       assignedAt: new Date(),
@@ -178,10 +139,9 @@ exports.createAssignment = async (req, res) => {
       success: true,
       message: assignments.length ? 'Homework assigned successfully' : 'Homework saved, but no matching students were found for the selected class',
       data: {
-        task: decorateHomeworkTask(task),
+        task: task.toJSON(),
         assignedCount: assignments.length,
         taskId: task.id,
-        discussionThreadId: discussionThread?.id || null,
         classId: resolvedClassId || null,
         className: resolvedClassName || null
       }
@@ -215,7 +175,7 @@ exports.getTeacherAssignments = async (req, res) => {
       const json = t.toJSON();
       const assignments = json.HomeTaskAssignments || json.HomeTaskAssignments || [];
       return {
-        ...decorateHomeworkTask(json),
+        ...json,
         assignedCount: assignments.length,
         submittedCount: assignments.filter(a => a.status === 'submitted').length,
         pendingCount: assignments.filter(a => a.status !== 'submitted').length
@@ -232,98 +192,14 @@ exports.getStudentAssignments = async (req, res) => {
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(403).json({ success: false, message: 'Not a student' });
 
-    let assignments = await HomeTaskAssignment.findAll({
+    const assignments = await HomeTaskAssignment.findAll({
       where: { studentId: student.id },
       include: [{ model: HomeTask }],
       order: [['assignedAt', 'DESC']]
     });
-
-    if (!assignments.length && student.classId) {
-      const classTasks = await HomeTask.findAll({
-        where: {
-          schoolCode: req.user.schoolCode,
-          isActive: true,
-          classId: student.classId
-        },
-        order: [['createdAt', 'DESC']]
-      });
-      for (const task of classTasks) {
-        const [assignment] = await HomeTaskAssignment.findOrCreate({
-          where: { studentId: student.id, taskId: task.id },
-          defaults: { classId: student.classId, schoolCode: req.user.schoolCode, assignedAt: new Date(), status: 'pending' }
-        });
-        assignment.HomeTask = task;
-      }
-      assignments = await HomeTaskAssignment.findAll({
-        where: { studentId: student.id },
-        include: [{ model: HomeTask }],
-        order: [['assignedAt', 'DESC']]
-      });
-    }
-
-    res.json({ success: true, data: assignments.map(a => {
-      const json = a.toJSON();
-      if (json.HomeTask) json.HomeTask = decorateHomeworkTask(json.HomeTask);
-      return json;
-    }) });
+    res.json({ success: true, data: assignments });
   } catch (error) {
     console.error('Get student assignments error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-
-exports.getTeacherAssignment = async (req, res) => {
-  try {
-    const teacher = await getTeacherFromUser(req.user.id);
-    if (!teacher) return res.status(403).json({ success: false, message: 'Not a teacher' });
-    const task = await HomeTask.findOne({
-      where: {
-        id: req.params.taskId,
-        [Op.or]: [{ createdBy: teacher.id }, { createdByUserId: req.user.id }],
-        [Op.and]: [{ [Op.or]: [{ schoolCode: req.user.schoolCode }, { schoolCode: null }] }]
-      },
-      include: [{ model: HomeTaskAssignment, required: false, include: [{ model: Student, include: [{ model: User, attributes: ['id','name','email'] }] }] }]
-    });
-    if (!task) return res.status(404).json({ success: false, message: 'Homework not found' });
-    const json = decorateHomeworkTask(task);
-    const assignments = task.HomeTaskAssignments || [];
-    res.json({ success: true, data: { ...json, HomeTaskAssignments: assignments, assignedCount: assignments.length, submittedCount: assignments.filter(a => a.status === 'submitted').length, pendingCount: assignments.filter(a => a.status !== 'submitted').length } });
-  } catch (error) {
-    console.error('Get teacher homework error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-exports.updateTeacherAssignment = async (req, res) => {
-  try {
-    const teacher = await getTeacherFromUser(req.user.id);
-    if (!teacher) return res.status(403).json({ success: false, message: 'Not a teacher' });
-    const task = await HomeTask.findOne({ where: { id: req.params.taskId, [Op.or]: [{ createdBy: teacher.id }, { createdByUserId: req.user.id }] } });
-    if (!task) return res.status(404).json({ success: false, message: 'Homework not found' });
-    const currentMeta = parseTaskMaterials(task.materials);
-    const allowed = ['title','instructions','subject','dueDate','difficulty','estimatedMinutes','points'];
-    for (const key of allowed) if (req.body[key] !== undefined) task[key] = req.body[key];
-    if (req.body.materials !== undefined) task.materials = serializeTaskMaterials({ text: req.body.materials, discussionThreadId: currentMeta.discussionThreadId });
-    await task.save();
-    res.json({ success: true, data: decorateHomeworkTask(task) });
-  } catch (error) {
-    console.error('Update teacher homework error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-exports.deleteTeacherAssignment = async (req, res) => {
-  try {
-    const teacher = await getTeacherFromUser(req.user.id);
-    if (!teacher) return res.status(403).json({ success: false, message: 'Not a teacher' });
-    const task = await HomeTask.findOne({ where: { id: req.params.taskId, [Op.or]: [{ createdBy: teacher.id }, { createdByUserId: req.user.id }] } });
-    if (!task) return res.status(404).json({ success: false, message: 'Homework not found' });
-    await HomeTaskAssignment.destroy({ where: { taskId: task.id } });
-    await task.destroy();
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Delete teacher homework error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
