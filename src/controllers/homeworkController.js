@@ -192,62 +192,11 @@ exports.getStudentAssignments = async (req, res) => {
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(403).json({ success: false, message: 'Not a student' });
 
-    let assignments = await HomeTaskAssignment.findAll({
-      where: {
-        [Op.or]: [
-          { studentId: student.id },
-          ...(student.classId ? [{ classId: student.classId }] : []),
-          ...(student.grade ? [{ classId: null }] : [])
-        ],
-        [Op.or]: [{ schoolCode: req.user.schoolCode }, { schoolCode: null }]
-      },
-      include: [{
-        model: HomeTask,
-        required: true,
-        where: {
-          isActive: true,
-          [Op.or]: [
-            { schoolCode: req.user.schoolCode },
-            { schoolCode: null },
-            ...(student.classId ? [{ classId: student.classId }] : []),
-            ...(student.grade ? [{ gradeLevel: student.grade }, { className: student.grade }] : [])
-          ]
-        }
-      }],
+    const assignments = await HomeTaskAssignment.findAll({
+      where: { studentId: student.id },
+      include: [{ model: HomeTask }],
       order: [['assignedAt', 'DESC']]
     });
-
-    const taskFallbacks = await HomeTask.findAll({
-      where: {
-        isActive: true,
-        [Op.or]: [{ schoolCode: req.user.schoolCode }, { schoolCode: null }],
-        [Op.and]: [{ [Op.or]: [
-          ...(student.classId ? [{ classId: student.classId }] : []),
-          ...(student.grade ? [{ gradeLevel: student.grade }, { className: student.grade }] : []),
-          { classId: null }
-        ] }]
-      },
-      order: [['createdAt', 'DESC']],
-      limit: 100
-    });
-
-    const existingTaskIds = new Set(assignments.map(a => Number(a.taskId)));
-    for (const task of taskFallbacks) {
-      if (existingTaskIds.has(Number(task.id))) continue;
-      const fake = HomeTaskAssignment.build({
-        studentId: student.id,
-        taskId: task.id,
-        classId: task.classId || student.classId || null,
-        schoolCode: req.user.schoolCode,
-        assignedAt: task.createdAt || new Date(),
-        status: 'pending'
-      });
-      fake.setDataValue('HomeTask', task);
-      assignments.push(fake);
-      existingTaskIds.add(Number(task.id));
-    }
-
-    assignments.sort((a,b) => new Date(b.assignedAt || b.createdAt || 0) - new Date(a.assignedAt || a.createdAt || 0));
     res.json({ success: true, data: assignments });
   } catch (error) {
     console.error('Get student assignments error:', error);

@@ -124,7 +124,7 @@ function getGradeFromScore(score, curriculum, level) {
 exports.getDashboard = async (req, res) => {
   try {
     await ensureRuntimeSchema().catch(() => null);
-    const student = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where: { userId: req.user.id } });
+    const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
 
     // Only show published marks
@@ -157,9 +157,7 @@ exports.getDashboard = async (req, res) => {
         averageScore: parseFloat(avg),
         stats: {
             averageScore: parseFloat(avg),
-            attendanceRate: attendance.length ? Math.round((attendance.filter(a => a.status === 'present').length / attendance.length) * 100) : 0,
-            points: student.points || 0,
-            homeworkCount: 0
+            attendanceRate: attendance.length ? Math.round((attendance.filter(a => a.status === 'present').length / attendance.length) * 100) : 0
         },
         recentRecords: records.map(r => ({
             ...r.toJSON(),
@@ -167,8 +165,7 @@ exports.getDashboard = async (req, res) => {
         })),
         recentAttendance: attendance,
         paymentStatus: student.paymentStatus,
-        points: student.points || 0,
-        classId: student.classId || classItem?.id || null,
+        classId: classItem?.id || null,
         school: {
             curriculum,
             schoolLevel

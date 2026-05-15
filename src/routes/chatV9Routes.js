@@ -45,16 +45,6 @@ router.post('/classroom/threads/:threadId/replies', chat.replyToThread);
 router.post('/classroom/replies/:replyId/award', chat.awardThreadReply);
 router.post('/teacher/messages/:messageId/award', chat.awardChatMessage);
 router.post('/teacher/messages/:messageId/react', chat.reactToMessage);
-router.post('/messages/:messageId/read', chat.markMessageRead);
-router.post('/messages/:messageId/react', chat.reactToMessage);
-router.post('/messages/:messageId/report', chat.reportMessage);
-router.post('/classroom/replies/:replyId/react', chat.reactToReply);
-router.post('/classroom/replies/:replyId/report', chat.reportReply);
-router.post('/presence', chat.updatePresence);
-router.get('/presence', chat.getPresence);
-router.post('/typing', chat.updateTyping);
-router.get('/typing', chat.getTyping);
-router.get('/search', chat.searchMessages);
 router.post('/attachments', attachmentUpload.single('file'), chat.uploadAttachment);
 
 router.get('/achievements/me', chat.myAchievements);
