@@ -217,14 +217,37 @@ exports.getStudentAssignments = async (req, res) => {
       order: [['assignedAt', 'DESC']]
     });
 
-    const seen = new Set();
-    assignments = assignments.filter(a => {
-      const key = `${a.taskId}-${a.studentId || student.id}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+    const taskFallbacks = await HomeTask.findAll({
+      where: {
+        isActive: true,
+        [Op.or]: [{ schoolCode: req.user.schoolCode }, { schoolCode: null }],
+        [Op.and]: [{ [Op.or]: [
+          ...(student.classId ? [{ classId: student.classId }] : []),
+          ...(student.grade ? [{ gradeLevel: student.grade }, { className: student.grade }] : []),
+          { classId: null }
+        ] }]
+      },
+      order: [['createdAt', 'DESC']],
+      limit: 100
     });
 
+    const existingTaskIds = new Set(assignments.map(a => Number(a.taskId)));
+    for (const task of taskFallbacks) {
+      if (existingTaskIds.has(Number(task.id))) continue;
+      const fake = HomeTaskAssignment.build({
+        studentId: student.id,
+        taskId: task.id,
+        classId: task.classId || student.classId || null,
+        schoolCode: req.user.schoolCode,
+        assignedAt: task.createdAt || new Date(),
+        status: 'pending'
+      });
+      fake.setDataValue('HomeTask', task);
+      assignments.push(fake);
+      existingTaskIds.add(Number(task.id));
+    }
+
+    assignments.sort((a,b) => new Date(b.assignedAt || b.createdAt || 0) - new Date(a.assignedAt || a.createdAt || 0));
     res.json({ success: true, data: assignments });
   } catch (error) {
     console.error('Get student assignments error:', error);

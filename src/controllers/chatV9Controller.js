@@ -26,10 +26,15 @@ async function getStudentProfile(userId) {
   return Student.unscoped ? Student.unscoped().findOne({ where: { userId } }) : Student.findOne({ where: { userId } });
 }
 
-async function getClassStudyParticipants({ schoolCode, classId }) {
-  if (!classId) return [];
+async function getClassStudyParticipants({ schoolCode, classId, grade }) {
+  if (!classId && !grade) return [];
+  const where = { [Op.or]: [{ status: 'active' }, { status: null }] };
+  const classOrGrade = [];
+  if (classId) classOrGrade.push({ classId });
+  if (grade) classOrGrade.push({ grade });
+  if (classOrGrade.length) where[Op.and] = [{ [Op.or]: classOrGrade }];
   const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
-    where: { classId, [Op.or]: [{ status: 'active' }, { status: null }] },
+    where,
     include: [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }],
     order: [[User, 'name', 'ASC']],
     limit: 120
@@ -46,12 +51,17 @@ async function getClassStudyParticipants({ schoolCode, classId }) {
 
 async function buildStudyMeta(req, threads, student) {
   const schoolCode = schoolCodeOf(req);
-  const classIds = [...new Set([student?.classId, ...threads.map(t => t.classId)].filter(Boolean).map(Number))];
-  const classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds }, schoolCode } }) : [];
+  let classIds = [...new Set([student?.classId, ...threads.map(t => t.classId)].filter(Boolean).map(Number))];
+  let classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds }, schoolCode } }) : [];
+  if (!classes.length && student?.grade) {
+    const cls = await Class.findOne({ where: { schoolCode, [Op.or]: [{ name: student.grade }, { grade: student.grade }] } });
+    if (cls) { classes = [cls]; classIds = [Number(cls.id)]; }
+  }
   const classMap = new Map(classes.map(c => [Number(c.id), c]));
   const participantsByClass = {};
   for (const classId of classIds) {
-    participantsByClass[classId] = await getClassStudyParticipants({ schoolCode, classId });
+    const cls = classMap.get(Number(classId));
+    participantsByClass[classId] = await getClassStudyParticipants({ schoolCode, classId, grade: cls?.grade || student?.grade });
   }
   const groups = classIds.map(classId => {
     const c = classMap.get(Number(classId));
@@ -197,6 +207,24 @@ exports.createDepartment = async (req, res) => {
 
 exports.listTeacherDirectory = async (req, res) => {
   try {
+    if (req.user.role === 'student') {
+      const me = await getStudentProfile(req.user.id);
+      if (!me) return res.json({ success: true, data: [] });
+      const classWhere = { schoolCode: schoolCodeOf(req), role: 'student', isActive: true };
+      const studentWhere = { [Op.or]: [{ status: 'active' }, { status: null }] };
+      const classOrGrade = [];
+      if (me.classId) classOrGrade.push({ classId: me.classId });
+      if (me.grade) classOrGrade.push({ grade: me.grade });
+      if (classOrGrade.length) studentWhere[Op.and] = [{ [Op.or]: classOrGrade }];
+      const classmates = await User.findAll({
+        where: classWhere,
+        attributes: ['id','name','email','phone','role','profileImage'],
+        include: [{ model: Student, required: true, where: studentWhere, attributes: ['id','classId','grade'] }],
+        order: [['name','ASC']],
+        limit: 120
+      });
+      return res.json({ success: true, data: classmates.filter(u => Number(u.id) !== Number(req.user.id)) });
+    }
     const teachers = await User.findAll({
       where: { schoolCode: schoolCodeOf(req), role: 'teacher', isActive: true },
       attributes: ['id','name','email','phone','role','profileImage'],
@@ -265,7 +293,10 @@ async function canDirectMessage(req, otherUser) {
     if (otherUser.role !== 'student') return false;
     const meStudent = await getStudentProfile(req.user.id);
     const otherStudent = await getStudentProfile(otherUser.id);
-    return Boolean(meStudent?.classId && otherStudent?.classId && Number(meStudent.classId) === Number(otherStudent.classId));
+    return Boolean(
+      (meStudent?.classId && otherStudent?.classId && Number(meStudent.classId) === Number(otherStudent.classId)) ||
+      (meStudent?.grade && otherStudent?.grade && String(meStudent.grade).trim().toLowerCase() === String(otherStudent.grade).trim().toLowerCase())
+    );
   }
   return canManageSchool(req);
 }
@@ -790,5 +821,95 @@ exports.getDepartmentGroup = async (req, res) => {
   } catch (error) {
     console.error('getDepartmentGroup error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Emergency-safe chat utility handlers required by chatV9Routes.js
+// These are real handlers, not frontend patches. They keep the backend bootable and support read/reaction/report actions.
+exports.markMessageRead = async (req, res) => {
+  try {
+    const messageId = Number(req.params.messageId);
+    const userId = Number(req.user.id);
+    const message = await ChatMessage.findOne({
+      where: {
+        id: messageId,
+        schoolCode: schoolCodeOf(req),
+        [Op.or]: [{ senderId: userId }, { receiverId: userId }, { groupId: { [Op.ne]: null } }]
+      }
+    });
+    if (!message) return res.status(404).json({ success: false, message: 'Message not found or not allowed' });
+
+    const meta = readMeta(message.metadata);
+    message.isRead = true;
+    message.metadata = { ...meta, readBy: { ...(meta.readBy || {}), [userId]: nowIso() } };
+    await message.save();
+    res.json({ success: true, data: message });
+  } catch (error) {
+    console.error('markMessageRead error:', error);
+    res.status(500).json({ success: false, message: 'Failed to mark message as read' });
+  }
+};
+
+exports.reportMessage = async (req, res) => {
+  try {
+    const messageId = Number(req.params.messageId);
+    const userId = Number(req.user.id);
+    const reason = String(req.body?.reason || 'Reported by user').trim();
+    const message = await ChatMessage.findOne({ where: { id: messageId, schoolCode: schoolCodeOf(req) } });
+    if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
+
+    const meta = readMeta(message.metadata);
+    message.metadata = { ...meta, reports: [...(meta.reports || []), { userId, reason, at: nowIso() }] };
+    await message.save();
+    res.json({ success: true, message: 'Message reported' });
+  } catch (error) {
+    console.error('reportMessage error:', error);
+    res.status(500).json({ success: false, message: 'Failed to report message' });
+  }
+};
+
+exports.reactToReply = async (req, res) => {
+  try {
+    const replyId = Number(req.params.replyId);
+    const userId = Number(req.user.id);
+    const reaction = String(req.body?.reaction || req.body?.emoji || '👍').trim();
+    const reply = await ThreadReply.findOne({
+      where: { id: replyId },
+      include: [{ model: ClassroomThread }]
+    });
+    if (!reply || reply.ClassroomThread?.schoolCode !== schoolCodeOf(req)) {
+      return res.status(404).json({ success: false, message: 'Reply not found' });
+    }
+
+    const meta = readMeta(reply.metadata);
+    reply.metadata = { ...meta, reactions: { ...(meta.reactions || {}), [userId]: { reaction, at: nowIso() } } };
+    await reply.save();
+    res.json({ success: true, data: reply });
+  } catch (error) {
+    console.error('reactToReply error:', error);
+    res.status(500).json({ success: false, message: 'Failed to react to reply' });
+  }
+};
+
+exports.reportReply = async (req, res) => {
+  try {
+    const replyId = Number(req.params.replyId);
+    const userId = Number(req.user.id);
+    const reason = String(req.body?.reason || 'Reported by user').trim();
+    const reply = await ThreadReply.findOne({
+      where: { id: replyId },
+      include: [{ model: ClassroomThread }]
+    });
+    if (!reply || reply.ClassroomThread?.schoolCode !== schoolCodeOf(req)) {
+      return res.status(404).json({ success: false, message: 'Reply not found' });
+    }
+
+    const meta = readMeta(reply.metadata);
+    reply.metadata = { ...meta, reports: [...(meta.reports || []), { userId, reason, at: nowIso() }] };
+    await reply.save();
+    res.json({ success: true, message: 'Reply reported' });
+  } catch (error) {
+    console.error('reportReply error:', error);
+    res.status(500).json({ success: false, message: 'Failed to report reply' });
   }
 };

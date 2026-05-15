@@ -53,8 +53,13 @@ exports.generate = async (req,res) => { try { const schoolId=req.user.schoolCode
 exports.getClasses = async (req,res) => { try { const classes=await Class.findAll({ where:{ schoolCode:req.user.schoolCode, isActive:true }, order:[['grade','ASC'],['name','ASC']] }); res.json({ success:true, data:classes }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
 exports.manualUpdate = async (req,res) => { try { await Timetable.update({ slots:req.body.slots, classes:req.body.classes, warnings:req.body.warnings }, { where:{ id:req.params.id, schoolId:req.user.schoolCode } }); res.json({ success:true }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
 exports.publish = async (req,res) => { try { await Timetable.update({ isPublished:true }, { where:{ id:req.params.id, schoolId:req.user.schoolCode } }); res.json({ success:true }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
-exports.getForClass = async (req,res) => { try { const tt=await Timetable.findOne({ where:{ schoolId:req.user.schoolCode, weekStartDate:req.query.weekStart||moment().startOf('isoWeek').format('YYYY-MM-DD') } }); if(!tt) return res.json({ success:true, data:[] }); const found=(tt.classes||[]).find(c=>Number(c.classId)===Number(req.params.classId)); res.json({ success:true, data:found?found.timetable:[] }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
-exports.getForTeacher = async (req,res) => { try { const tt=await Timetable.findOne({ where:{ schoolId:req.user.schoolCode, weekStartDate:req.query.weekStart||moment().startOf('isoWeek').format('YYYY-MM-DD') } }); if(!tt) return res.json({ success:true, data:[] }); const data=(tt.slots||[]).map(d=>({ day:d.day, periods:(d.periods||[]).map(p=>({ ...p, classes:(p.classes||[]).filter(c=>Number(c.teacherId)===Number(req.params.teacherId)) })).filter(p=>p.break||p.classes.length) })).filter(d=>d.periods.length); res.json({ success:true, data }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
+async function findTimetableForRequest(req) {
+  const week = req.query.weekStart || req.query.weekStartDate || moment().startOf('isoWeek').format('YYYY-MM-DD');
+  return await Timetable.findOne({ where:{ schoolId:req.user.schoolCode, weekStartDate:week }, order:[['updatedAt','DESC']] })
+      || await Timetable.findOne({ where:{ schoolId:req.user.schoolCode }, order:[['updatedAt','DESC']] });
+}
+exports.getForClass = async (req,res) => { try { const tt=await findTimetableForRequest(req); if(!tt) return res.json({ success:true, data:[] }); const found=(tt.classes||[]).find(c=>Number(c.classId)===Number(req.params.classId)); res.json({ success:true, data:found?found.timetable:[] }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
+exports.getForTeacher = async (req,res) => { try { const tt=await findTimetableForRequest(req); if(!tt) return res.json({ success:true, data:[] }); const data=(tt.slots||[]).map(d=>({ day:d.day, periods:(d.periods||[]).map(p=>({ ...p, classes:(p.classes||[]).filter(c=>Number(c.teacherId)===Number(req.params.teacherId)) })).filter(p=>p.break||p.classes.length) })).filter(d=>d.periods.length); res.json({ success:true, data }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
 exports.getByWeek = async (req,res) => { try { const where={ schoolId:req.user.schoolCode, weekStartDate:req.query.weekStartDate||moment().startOf('isoWeek').format('YYYY-MM-DD') }; if(req.query.term) where.term=req.query.term; if(req.query.year) where.year=Number(req.query.year); const tt=await Timetable.findOne({ where, order:[['updatedAt','DESC']] }); res.json({ success:true, data:tt||null }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
 
 
@@ -75,7 +80,7 @@ exports.getForStudentMe = async (req,res)=>{ try{
   const student=await Student.findOne({where:{userId:req.user.id},include:[{model:User,attributes:['id','name','email','phone']}]});
   if(!student) return res.status(404).json({success:false,message:'Student profile not found'});
   const classes=await Class.findAll({where:{schoolCode:req.user.schoolCode,isActive:true}}); const cls=v12ResolveClassForStudent(student,classes);
-  const week=req.query.weekStart||moment().startOf('isoWeek').format('YYYY-MM-DD'); const tt=await Timetable.findOne({where:{schoolId:req.user.schoolCode,weekStartDate:week}});
+  const week=req.query.weekStart||moment().startOf('isoWeek').format('YYYY-MM-DD'); const tt=await findTimetableForRequest(req);
   const block=v12FindClassBlock(tt,cls); const slots=block?block.timetable:[];
   res.json({success:true,data:{student,classInfo:cls,timetable:slots,updates:v12StudyUpdates(slots),weekStart:week,published:!!tt?.isPublished}});
 }catch(error){res.status(500).json({success:false,message:error.message});}};
@@ -84,7 +89,7 @@ exports.getForParentChild = async (req,res)=>{ try{
   const student=await Student.findOne({where:{id:req.params.studentId},include:[{model:User,attributes:['id','name','email','phone']} ]}); if(!student) return res.status(404).json({success:false,message:'Student not found'});
   if(parent.hasStudent){ const ok=await parent.hasStudent(student); if(!ok) return res.status(403).json({success:false,message:'Child not linked to this parent'}); }
   const classes=await Class.findAll({where:{schoolCode:req.user.schoolCode,isActive:true}}); const cls=v12ResolveClassForStudent(student,classes);
-  const week=req.query.weekStart||moment().startOf('isoWeek').format('YYYY-MM-DD'); const tt=await Timetable.findOne({where:{schoolId:req.user.schoolCode,weekStartDate:week}});
+  const week=req.query.weekStart||moment().startOf('isoWeek').format('YYYY-MM-DD'); const tt=await findTimetableForRequest(req);
   const block=v12FindClassBlock(tt,cls); const slots=block?block.timetable:[];
   res.json({success:true,data:{child:student,classInfo:cls,timetable:slots,updates:v12StudyUpdates(slots),weekStart:week,published:!!tt?.isPublished}});
 }catch(error){res.status(500).json({success:false,message:error.message});}};
