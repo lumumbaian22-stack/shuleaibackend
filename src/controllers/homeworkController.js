@@ -192,11 +192,39 @@ exports.getStudentAssignments = async (req, res) => {
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(403).json({ success: false, message: 'Not a student' });
 
-    const assignments = await HomeTaskAssignment.findAll({
-      where: { studentId: student.id },
-      include: [{ model: HomeTask }],
+    let assignments = await HomeTaskAssignment.findAll({
+      where: {
+        [Op.or]: [
+          { studentId: student.id },
+          ...(student.classId ? [{ classId: student.classId }] : []),
+          ...(student.grade ? [{ classId: null }] : [])
+        ],
+        [Op.or]: [{ schoolCode: req.user.schoolCode }, { schoolCode: null }]
+      },
+      include: [{
+        model: HomeTask,
+        required: true,
+        where: {
+          isActive: true,
+          [Op.or]: [
+            { schoolCode: req.user.schoolCode },
+            { schoolCode: null },
+            ...(student.classId ? [{ classId: student.classId }] : []),
+            ...(student.grade ? [{ gradeLevel: student.grade }, { className: student.grade }] : [])
+          ]
+        }
+      }],
       order: [['assignedAt', 'DESC']]
     });
+
+    const seen = new Set();
+    assignments = assignments.filter(a => {
+      const key = `${a.taskId}-${a.studentId || student.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
     res.json({ success: true, data: assignments });
   } catch (error) {
     console.error('Get student assignments error:', error);

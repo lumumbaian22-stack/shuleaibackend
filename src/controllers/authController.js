@@ -4,28 +4,6 @@ const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 const sequelize = require('../config/database');
 
-// Add this helper at top
-const setTokenCookie = (res, token) => {
-  res.cookie('token', token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
-  });
-};
-
-// In login methods, instead of returning token in JSON, set cookie:
-// replace: data: { token, user: ... }
-// with:
-setTokenCookie(res, token);
-res.json({ success: true, data: { user: user.getPublicProfile(), ... } });
-
-// Also add logout to clear cookie
-exports.logout = (req, res) => {
-  res.clearCookie('token');
-  res.json({ success: true });
-};
-
 const authController = {
   // Diagnostic endpoint
   superAdminDiagnostic: async (req, res) => {
