@@ -30,13 +30,19 @@ function normalizeAttachments(value) {
   if (Array.isArray(value)) return value.filter(Boolean).map((item) => {
     if (typeof item === 'string') return { url: item, name: item.split('/').pop() || 'Attachment' };
     return {
-      url: item.url || item.secureUrl || item.path || '',
-      secureUrl: item.secureUrl || item.url || '',
+      url: item.url || item.secureUrl || item.path || item.viewUrl || item.downloadUrl || '',
+      secureUrl: item.secureUrl || item.url || item.viewUrl || item.downloadUrl || '',
+      downloadUrl: item.downloadUrl || item.secureUrl || item.url || '',
+      viewUrl: item.viewUrl || item.secureUrl || item.url || '',
       name: item.name || item.originalName || item.filename || 'Attachment',
+      filename: item.filename || path.basename(String(item.url || item.secureUrl || item.path || item.viewUrl || item.downloadUrl || '')),
       mimeType: item.mimeType || item.type || 'application/octet-stream',
-      size: item.size || 0
+      size: item.size || 0,
+      // Durable fallback for Render/local-disk restarts. Kept only when upload endpoint supplies it.
+      dataBase64: item.dataBase64 || item.base64 || '',
+      storedInDb: Boolean(item.storedInDb || item.dataBase64 || item.base64)
     };
-  }).filter(item => item.url || item.secureUrl);
+  }).filter(item => item.url || item.secureUrl || item.dataBase64);
   if (typeof value === 'string') {
     try { return normalizeAttachments(JSON.parse(value)); } catch (_) { return value ? [{ url: value, name: value.split('/').pop() || 'Attachment' }] : []; }
   }
@@ -76,10 +82,42 @@ function safeHomeworkDownloadUrl(req, relativeUrl) {
 
 function normalizeAttachmentUrlsForResponse(req, attachments = []) {
   return normalizeAttachments(attachments).map(file => {
-    const raw = file.secureUrl || file.url || '';
+    const raw = file.secureUrl || file.url || file.viewUrl || file.downloadUrl || file.filename || '';
     const secureUrl = safeHomeworkDownloadUrl(req, raw);
-    return { ...file, url: secureUrl, secureUrl, downloadUrl: secureUrl, viewUrl: secureUrl };
+    return {
+      url: secureUrl,
+      secureUrl,
+      downloadUrl: secureUrl,
+      viewUrl: secureUrl,
+      name: file.name || file.filename || 'Attachment',
+      filename: file.filename || path.basename(String(raw || '')),
+      mimeType: file.mimeType || 'application/octet-stream',
+      size: file.size || 0,
+      storedInDb: Boolean(file.storedInDb || file.dataBase64)
+    };
   });
+}
+
+async function findHomeworkAttachmentInDatabase(filename) {
+  const wanted = path.basename(String(filename || ''));
+  if (!wanted) return null;
+  const tasks = await HomeTask.findAll({
+    attributes: ['id', 'attachments'],
+    where: { attachments: { [Op.ne]: null } },
+    order: [['updatedAt', 'DESC']],
+    limit: 3000
+  }).catch(() => []);
+  for (const task of tasks) {
+    const files = normalizeAttachments(task.attachments);
+    const found = files.find(file => {
+      const names = [file.filename, file.name, file.url, file.secureUrl, file.viewUrl, file.downloadUrl]
+        .filter(Boolean)
+        .map(v => path.basename(String(v)));
+      return names.includes(wanted);
+    });
+    if (found?.dataBase64) return found;
+  }
+  return null;
 }
 
 function homeworkUploadRoot() {
@@ -90,16 +128,45 @@ exports.serveHomeworkAttachment = async (req, res) => {
   try {
     const filename = path.basename(String(req.params.filename || ''));
     if (!filename) return res.status(400).send('Invalid homework file');
-    const fullPath = path.join(homeworkUploadRoot(), filename);
-    if (!fullPath.startsWith(homeworkUploadRoot())) return res.status(400).send('Invalid homework file');
-    if (!fs.existsSync(fullPath)) return res.status(404).send('Homework file not found. Please re-upload the assignment file.');
+
+    const uploadRoot = homeworkUploadRoot();
+    const candidateRoots = [
+      uploadRoot,
+      path.join(__dirname, '../uploads/homework'),
+      path.join(__dirname, '../../src/uploads/homework'),
+      path.join(process.cwd(), 'uploads/homework'),
+      path.join(process.cwd(), 'backend/uploads/homework')
+    ];
+    let fullPath = '';
+    for (const root of candidateRoots) {
+      const candidate = path.join(root, filename);
+      const safeRoot = path.resolve(root);
+      const safeCandidate = path.resolve(candidate);
+      if (safeCandidate.startsWith(safeRoot) && fs.existsSync(safeCandidate)) {
+        fullPath = safeCandidate;
+        break;
+      }
+    }
 
     const originalName = filename.replace(/^homework-\d+-\d+-\d+-/, '') || filename;
     const disposition = req.query.download === '1' ? 'attachment' : 'inline';
     res.setHeader('Content-Security-Policy', "default-src 'self' blob: data:; img-src 'self' blob: data:; media-src 'self' blob: data:; object-src 'self' blob: data:; script-src 'none'; style-src 'self' 'unsafe-inline'");
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Content-Disposition', `${disposition}; filename="${originalName.replace(/"/g, '')}"`);
-    return res.sendFile(fullPath);
+
+    if (fullPath) return res.sendFile(fullPath);
+
+    // Render/local disks can be wiped on deploy/restart. For files uploaded on this build,
+    // fall back to the base64 copy stored inside the HomeTask attachments JSON.
+    const dbFile = await findHomeworkAttachmentInDatabase(filename);
+    if (dbFile?.dataBase64) {
+      const buffer = Buffer.from(String(dbFile.dataBase64), 'base64');
+      res.setHeader('Content-Type', dbFile.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Length', buffer.length);
+      return res.end(buffer);
+    }
+
+    return res.status(404).send('Homework file not found. Please re-upload the assignment file. Files uploaded before the durable homework-file fix may need re-uploading after redeploy.');
   } catch (error) {
     console.error('Serve homework attachment error:', error);
     return res.status(500).send('Could not open homework file');
@@ -244,13 +311,20 @@ exports.uploadHomeworkAttachment = async (req, res) => {
     else return res.status(400).json({ success: false, message: 'Homework file could not be read' });
 
     const relativeUrl = `/uploads/homework/${filename}`;
+    const actualSize = file.size || (fs.statSync(dest).size || 0);
+    const maxDbBytes = Number(process.env.HOMEWORK_DB_FILE_MAX_BYTES || 10 * 1024 * 1024);
     const payload = {
       url: relativeUrl,
       secureUrl: homeTaskAttachmentUrl(req, relativeUrl),
+      viewUrl: homeTaskAttachmentUrl(req, `/homework-files/${filename}`),
+      downloadUrl: homeTaskAttachmentUrl(req, `/homework-files/${filename}`),
+      filename,
       name: originalName,
       mimeType: file.mimetype || file.type || 'application/octet-stream',
-      size: file.size || (fs.statSync(dest).size || 0)
+      size: actualSize,
+      storedInDb: actualSize <= maxDbBytes
     };
+    if (payload.storedInDb) payload.dataBase64 = fs.readFileSync(dest).toString('base64');
     res.status(201).json({ success: true, data: payload });
   } catch (error) {
     console.error('Upload homework attachment error:', error);
