@@ -51,27 +51,75 @@ function homeTaskAttachmentUrl(req, relativeUrl) {
   return `${safeProto}://${req.get('host')}${relativeUrl}`;
 }
 
+function homeworkFileApiUrl(req, rawUrl) {
+  if (!rawUrl) return '';
+  let filename = '';
+  const raw = String(rawUrl || '').trim();
+  try {
+    if (/^https?:\/\//i.test(raw)) filename = path.basename(new URL(raw).pathname || '');
+    else filename = path.basename(raw);
+  } catch (_) {
+    filename = path.basename(raw);
+  }
+  if (!filename || filename === '.' || filename === '..') return '';
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+  const safeProto = req.get('host')?.includes('onrender.com') ? 'https' : proto;
+  return `${safeProto}://${req.get('host')}/api/homework/files/${encodeURIComponent(filename)}`;
+}
+
 function safeHomeworkDownloadUrl(req, relativeUrl) {
   if (!relativeUrl) return '';
-  const raw = String(relativeUrl || '');
-  if (/^https?:\/\//i.test(raw)) {
-    try {
-      const parsed = new URL(raw);
-      const pathname = parsed.pathname || '';
-      if (pathname.startsWith('/uploads/homework/')) return homeTaskAttachmentUrl(req, pathname);
-      return raw;
-    } catch (_) { return raw; }
-  }
-  if (raw.startsWith('/uploads/homework/')) return homeTaskAttachmentUrl(req, raw);
-  return homeTaskAttachmentUrl(req, raw.startsWith('/') ? raw : `/uploads/homework/${path.basename(raw)}`);
+  // Use the dedicated homework file route instead of raw /uploads links.
+  // This avoids CSP/inline-script browser previews and keeps view/download stable across dashboards.
+  return homeworkFileApiUrl(req, relativeUrl);
 }
 
 function normalizeAttachmentUrlsForResponse(req, attachments = []) {
   return normalizeAttachments(attachments).map(file => {
     const raw = file.secureUrl || file.url || '';
     const secureUrl = safeHomeworkDownloadUrl(req, raw);
-    return { ...file, url: secureUrl, secureUrl, downloadUrl: secureUrl };
+    return { ...file, url: secureUrl, secureUrl, downloadUrl: secureUrl, viewUrl: secureUrl };
   });
+}
+
+function homeworkUploadRoot() {
+  return path.join(__dirname, '../../uploads/homework');
+}
+
+exports.serveHomeworkAttachment = async (req, res) => {
+  try {
+    const filename = path.basename(String(req.params.filename || ''));
+    if (!filename) return res.status(400).send('Invalid homework file');
+    const fullPath = path.join(homeworkUploadRoot(), filename);
+    if (!fullPath.startsWith(homeworkUploadRoot())) return res.status(400).send('Invalid homework file');
+    if (!fs.existsSync(fullPath)) return res.status(404).send('Homework file not found. Please re-upload the assignment file.');
+
+    const originalName = filename.replace(/^homework-\d+-\d+-\d+-/, '') || filename;
+    const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+    res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self' data:; style-src 'self'; sandbox");
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Content-Disposition', `${disposition}; filename="${originalName.replace(/"/g, '')}"`);
+    return res.sendFile(fullPath);
+  } catch (error) {
+    console.error('Serve homework attachment error:', error);
+    return res.status(500).send('Could not open homework file');
+  }
+};
+
+function deriveAssignmentTiming(assignment, task) {
+  const due = task?.dueDate ? new Date(task.dueDate) : null;
+  const submittedAt = assignment?.completedAt ? new Date(assignment.completedAt) : null;
+  const now = new Date();
+  const status = String(assignment?.status || 'pending').toLowerCase();
+  const isSubmitted = ['submitted', 'graded', 'completed'].includes(status) || Boolean(submittedAt);
+  const isGraded = status === 'graded';
+  const isLate = Boolean(due && !isSubmitted && now > due);
+  const submittedLate = Boolean(due && submittedAt && submittedAt > due);
+  let displayStatus = 'Pending';
+  if (isGraded) displayStatus = submittedLate ? 'Graded late' : 'Graded';
+  else if (isSubmitted) displayStatus = submittedLate ? 'Submitted late' : 'Submitted';
+  else if (isLate) displayStatus = 'Late';
+  return { isSubmitted, isGraded, isLate, submittedLate, displayStatus };
 }
 
 async function getTeacherFromUser(userId) {
@@ -172,7 +220,7 @@ exports.uploadHomeworkAttachment = async (req, res) => {
     const teacher = await getTeacherFromUser(req.user.id);
     if (!teacher) return res.status(403).json({ success: false, message: 'Teacher account not found' });
 
-    const uploadRoot = path.join(__dirname, '../../uploads/homework');
+    const uploadRoot = homeworkUploadRoot();
     if (!fs.existsSync(uploadRoot)) fs.mkdirSync(uploadRoot, { recursive: true });
 
     let file = req.file || null;
@@ -435,7 +483,19 @@ exports.getTeacherAssignmentDetails = async (req, res) => {
       include: [{ model: Student, required: false, include: [{ model: User, attributes: ['id','name','email','profileImage','schoolCode'], required: false }] }],
       order: [['updatedAt', 'DESC']]
     });
-    res.json({ success: true, data: { task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments) }, assignments } });
+    const maxPoints = Number(task.points || 0);
+    const enrichedAssignments = assignments.map(row => {
+      const json = row.toJSON();
+      const timing = deriveAssignmentTiming(json, task);
+      return {
+        ...json,
+        ...timing,
+        displayStatus: timing.displayStatus,
+        maxPoints,
+        scoreText: json.pointsEarned !== null && json.pointsEarned !== undefined ? `${json.pointsEarned}/${maxPoints || ''}`.replace(/\/$/, '') : 'Not graded'
+      };
+    });
+    res.json({ success: true, data: { task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments) }, assignments: enrichedAssignments } });
   } catch (error) {
     console.error('Get homework details error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -563,17 +623,24 @@ exports.getStudentAssignments = async (req, res) => {
     const data = assignments.map(a => {
       const row = a.toJSON();
       const task = row.HomeTask || {};
+      const timing = deriveAssignmentTiming(row, task);
+      const maxPoints = Number(task.points || 0);
       return {
         id: row.id,
         assignmentId: row.id,
         studentId: row.studentId,
         taskId: row.taskId,
         status: row.status || 'pending',
+        displayStatus: timing.displayStatus,
+        isLate: timing.isLate,
+        submittedLate: timing.submittedLate,
         assignedAt: row.assignedAt,
         submittedAt: row.completedAt || null,
         studentFeedback: row.studentFeedback || {},
         parentFeedback: row.parentFeedback || {},
-        pointsEarned: row.pointsEarned || null,
+        pointsEarned: row.pointsEarned ?? null,
+        maxPoints,
+        scoreText: row.pointsEarned !== null && row.pointsEarned !== undefined ? `${row.pointsEarned}/${maxPoints || ''}`.replace(/\/$/, '') : 'Not graded',
         schoolCode: row.schoolCode || task.schoolCode || null,
         HomeTask: {
           id: task.id,
@@ -612,12 +679,16 @@ exports.submitAssignment = async (req, res) => {
     const assignment = await HomeTaskAssignment.findOne({ where: { id: assignmentId, studentId: student.id } });
     if (!assignment) return res.status(404).json({ success: false, message: 'Assignment not found' });
 
+    const task = await HomeTask.findByPk(assignment.taskId);
+    const submittedAt = new Date();
+    const due = task?.dueDate ? new Date(task.dueDate) : null;
+    const submittedLate = Boolean(due && submittedAt > due);
     await assignment.update({
       status: 'submitted',
-      completedAt: new Date(),
-      studentFeedback: { fileUrl, comment }
+      completedAt: submittedAt,
+      studentFeedback: { fileUrl, comment, submittedLate }
     });
-    res.json({ success: true });
+    res.json({ success: true, data: { submittedLate, displayStatus: submittedLate ? 'Submitted late' : 'Submitted' } });
   } catch (error) {
     console.error('Submit assignment error:', error);
     res.status(500).json({ success: false, message: error.message });
