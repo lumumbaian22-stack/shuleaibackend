@@ -48,6 +48,7 @@ module.exports = {
         studentId: { type: Sequelize.INTEGER, allowNull: false },
         userId: { type: Sequelize.INTEGER, allowNull: true },
         grade: { type: Sequelize.STRING, allowNull: true },
+        gradeLevel: { type: Sequelize.STRING, allowNull: true, defaultValue: 'Grade 5' },
         level: { type: Sequelize.STRING, allowNull: true },
         subject: { type: Sequelize.STRING, allowNull: true },
         mode: { type: Sequelize.STRING, allowNull: false, defaultValue: 'learn' },
@@ -83,6 +84,7 @@ module.exports = {
         schoolId: { type: Sequelize.STRING, allowNull: false, defaultValue: 'default-school' },
         studentId: { type: Sequelize.INTEGER, allowNull: false },
         grade: { type: Sequelize.STRING, allowNull: true },
+        gradeLevel: { type: Sequelize.STRING, allowNull: true, defaultValue: 'Grade 5' },
         level: { type: Sequelize.STRING, allowNull: true },
         subject: { type: Sequelize.STRING, allowNull: false },
         topic: { type: Sequelize.STRING, allowNull: false, defaultValue: 'General' },
@@ -115,6 +117,7 @@ module.exports = {
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'studentId', { type: Sequelize.INTEGER, allowNull: false, defaultValue: 0 });
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'userId', { type: Sequelize.INTEGER, allowNull: true });
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'grade', { type: Sequelize.STRING, allowNull: true });
+    await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'gradeLevel', { type: Sequelize.STRING, allowNull: true, defaultValue: 'Grade 5' });
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'level', { type: Sequelize.STRING, allowNull: true });
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'subject', { type: Sequelize.STRING, allowNull: true });
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'mode', { type: Sequelize.STRING, allowNull: false, defaultValue: 'learn' });

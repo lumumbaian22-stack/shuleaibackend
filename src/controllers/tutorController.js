@@ -24,14 +24,15 @@ exports.getTutorConfig = async (req, res) => {
 
 exports.askTutor = async (req, res) => {
   try {
-    const { question = '', studentId, grade, subject, mode, curriculum } = req.body;
+    const { question = '', studentId, grade, gradeLevel, level: requestedLevel, subject, mode, curriculum } = req.body;
     if (!String(question).trim()) return res.status(400).json({ success: false, message: 'Question is required' });
 
     const schoolId = req.user.schoolCode || req.body.schoolId || 'default';
     const student = await resolveStudent(req, studentId);
     const realStudentId = student?.id || studentId || req.user.id;
-    const realGrade = normalizeGrade(grade || student?.grade || 'Grade 5');
-    const level = getLevelByGrade(realGrade);
+    const rawGrade = grade || gradeLevel || student?.grade || student?.className || student?.Class?.name || 'Grade 5';
+    const realGrade = normalizeGrade(rawGrade || 'Grade 5');
+    const level = getLevelByGrade(realGrade) || getLevelByGrade('Grade 5');
     const realSubject = subject || detectSubject(question, realGrade);
     const command = req.body.command || detectCommand(question);
     const topic = detectTopic(question, realSubject);
@@ -43,7 +44,19 @@ exports.askTutor = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Daily tutor limit reached', data: { locked: true, dailyLimit } });
     }
 
-    const session = await TutorSession.create({ schoolId, schoolCode: schoolId, studentId: realStudentId, userId: req.user.id, grade: realGrade, level: level.id, subject: realSubject, mode: mode || command, lastCommand: command });
+    const session = await TutorSession.create({
+      schoolId,
+      schoolCode: schoolId,
+      studentId: realStudentId,
+      userId: req.user.id,
+      grade: realGrade,
+      gradeLevel: realGrade,
+      level: level.id || requestedLevel || 'upper_primary',
+      subject: realSubject,
+      mode: mode || command || 'ask',
+      lastCommand: command || 'ask',
+      metadata: { source: 'student-dashboard', rawGrade }
+    });
     await TutorMessage.create({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'student', message: question, subject: realSubject, topic, command, source: 'student' });
 
     const localAnswer = buildTutorAnswer({ question, command, subject: realSubject, topic, grade: realGrade, level });
