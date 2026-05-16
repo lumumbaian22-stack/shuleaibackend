@@ -1,10 +1,54 @@
 const { Op } = require('sequelize');
+const path = require('path');
+const fs = require('fs');
 const { HomeTask, HomeTaskAssignment, Student, Teacher, Class, User, TeacherSubjectAssignment } = require('../models');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 function cleanString(value, fallback = '') {
   const s = String(value ?? '').trim();
   return s || fallback;
+}
+
+
+function normalizeClassText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function classTextsMatch(a, b) {
+  const left = normalizeClassText(a);
+  const right = normalizeClassText(b);
+  if (!left || !right) return false;
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+function normalizeAttachments(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean).map((item) => {
+    if (typeof item === 'string') return { url: item, name: item.split('/').pop() || 'Attachment' };
+    return {
+      url: item.url || item.secureUrl || item.path || '',
+      secureUrl: item.secureUrl || item.url || '',
+      name: item.name || item.originalName || item.filename || 'Attachment',
+      mimeType: item.mimeType || item.type || 'application/octet-stream',
+      size: item.size || 0
+    };
+  }).filter(item => item.url || item.secureUrl);
+  if (typeof value === 'string') {
+    try { return normalizeAttachments(JSON.parse(value)); } catch (_) { return value ? [{ url: value, name: value.split('/').pop() || 'Attachment' }] : []; }
+  }
+  return [];
+}
+
+function homeTaskAttachmentUrl(req, relativeUrl) {
+  if (!relativeUrl) return '';
+  if (/^https?:\/\//i.test(relativeUrl)) return relativeUrl;
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+  const safeProto = req.get('host')?.includes('onrender.com') ? 'https' : proto;
+  return `${safeProto}://${req.get('host')}${relativeUrl}`;
 }
 
 async function getTeacherFromUser(userId) {
@@ -24,25 +68,44 @@ async function getStudentsForClass(classItem, schoolCode) {
   if (!classItem) return [];
   const names = classNamesForStudentLookup(classItem);
   const userInclude = { model: User, attributes: ['id', 'name', 'schoolCode'], where: { schoolCode }, required: true };
+  const seen = new Set();
+  const results = [];
+  const addMany = (rows = []) => rows.forEach((student) => {
+    if (!student || seen.has(student.id)) return;
+    seen.add(student.id);
+    results.push(student);
+  });
 
-  let students = [];
   if (classItem.id) {
-    students = await Student.findAll({
-      where: { [Op.or]: [{ classId: classItem.id }, { grade: { [Op.in]: names.length ? names : ['__none__'] } }], status: { [Op.ne]: 'inactive' } },
+    addMany(await Student.findAll({
+      where: { classId: classItem.id, status: { [Op.ne]: 'inactive' } },
       include: [userInclude],
       attributes: ['id', 'userId', 'grade', 'classId', 'status'],
       limit: 3000
-    });
+    }));
   }
-  if (!students.length && names.length) {
-    students = await Student.findAll({
+
+  if (names.length) {
+    addMany(await Student.findAll({
       where: { grade: { [Op.in]: names }, status: { [Op.ne]: 'inactive' } },
       include: [userInclude],
       attributes: ['id', 'userId', 'grade', 'classId', 'status'],
       limit: 3000
-    });
+    }));
   }
-  return students;
+
+  // Safety net for older records where class text was saved in slightly different formats.
+  if (results.length === 0 && names.length) {
+    const schoolStudents = await Student.findAll({
+      where: { status: { [Op.ne]: 'inactive' } },
+      include: [userInclude],
+      attributes: ['id', 'userId', 'grade', 'classId', 'status'],
+      limit: 5000
+    });
+    addMany(schoolStudents.filter(student => names.some(name => classTextsMatch(student.grade, name))));
+  }
+
+  return results;
 }
 
 async function resolveClass({ classId, className, grade, schoolCode }) {
@@ -68,6 +131,50 @@ async function resolveClass({ classId, className, grade, schoolCode }) {
   return classItem;
 }
 
+exports.uploadHomeworkAttachment = async (req, res) => {
+  try {
+    await ensureRuntimeSchema().catch(() => null);
+    const teacher = await getTeacherFromUser(req.user.id);
+    if (!teacher) return res.status(403).json({ success: false, message: 'Teacher account not found' });
+
+    const uploadRoot = path.join(__dirname, '../../uploads/homework');
+    if (!fs.existsSync(uploadRoot)) fs.mkdirSync(uploadRoot, { recursive: true });
+
+    let file = req.file || null;
+    if (!file && req.files) {
+      file = req.files.file || req.files.attachment || req.files.upload || null;
+      if (Array.isArray(file)) file = file[0];
+    }
+    if (Array.isArray(req.files) && req.files.length) file = req.files[0];
+    if (!file) return res.status(400).json({ success: false, message: 'No homework file uploaded' });
+
+    const originalName = file.originalname || file.name || file.filename || 'homework-file';
+    const safeExt = path.extname(originalName).toLowerCase().replace(/[^.a-z0-9]/g, '') || '';
+    const safeBase = path.basename(originalName, safeExt).replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60) || 'homework-file';
+    const filename = `homework-${req.user.id}-${Date.now()}-${Math.round(Math.random() * 1e9)}-${safeBase}${safeExt}`;
+    const dest = path.join(uploadRoot, filename);
+
+    if (file.mv) await file.mv(dest);
+    else if (file.path && fs.existsSync(file.path)) fs.copyFileSync(file.path, dest);
+    else if (file.tempFilePath && fs.existsSync(file.tempFilePath)) fs.copyFileSync(file.tempFilePath, dest);
+    else if (file.buffer) fs.writeFileSync(dest, file.buffer);
+    else return res.status(400).json({ success: false, message: 'Homework file could not be read' });
+
+    const relativeUrl = `/uploads/homework/${filename}`;
+    const payload = {
+      url: relativeUrl,
+      secureUrl: homeTaskAttachmentUrl(req, relativeUrl),
+      name: originalName,
+      mimeType: file.mimetype || file.type || 'application/octet-stream',
+      size: file.size || (fs.statSync(dest).size || 0)
+    };
+    res.status(201).json({ success: true, data: payload });
+  } catch (error) {
+    console.error('Upload homework attachment error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Homework upload failed' });
+  }
+};
+
 exports.createAssignment = async (req, res) => {
   try {
     await ensureRuntimeSchema().catch(() => null);
@@ -84,7 +191,9 @@ exports.createAssignment = async (req, res) => {
       studentIds,
       estimatedMinutes,
       points,
-      difficulty
+      difficulty,
+      attachments,
+      teacherNote
     } = req.body || {};
 
     const teacher = await getTeacherFromUser(req.user.id);
@@ -124,7 +233,9 @@ exports.createAssignment = async (req, res) => {
       classId: resolvedClassId,
       className: resolvedClassName,
       dueDate: dueDate || null,
-      materials: ''
+      materials: '',
+      attachments: normalizeAttachments(attachments),
+      teacherNote: cleanString(teacherNote || '')
     });
 
     const assignments = targetStudentIds.map(sid => ({
@@ -235,6 +346,7 @@ exports.updateTeacherAssignment = async (req, res) => {
     if (updates.title !== undefined) updates.title = cleanString(updates.title, task.title);
     if (updates.instructions !== undefined) updates.instructions = cleanString(updates.instructions, task.instructions);
     if (updates.subject !== undefined) updates.subject = cleanString(updates.subject, task.subject || 'General');
+    if (updates.attachments !== undefined) updates.attachments = normalizeAttachments(updates.attachments);
     await task.update(updates);
     res.json({ success: true, message: 'Homework updated successfully', data: task });
   } catch (error) {
@@ -260,11 +372,70 @@ exports.reviewSubmission = async (req, res) => {
   }
 };
 
+async function ensureHomeworkAssignmentsForStudent(student, schoolCode) {
+  const studentClass = student.classId ? await Class.findOne({ where: { id: student.classId, schoolCode, isActive: true } }).catch(() => null) : null;
+  const classNames = [...new Set([
+    student.grade,
+    studentClass?.name,
+    studentClass?.grade,
+    `${studentClass?.grade || ''} ${studentClass?.stream || ''}`.trim(),
+    `${studentClass?.name || ''} ${studentClass?.stream || ''}`.trim()
+  ].filter(Boolean))];
+
+  const orRules = [];
+  if (student.classId) orRules.push({ classId: student.classId });
+  if (classNames.length) {
+    orRules.push({ className: { [Op.in]: classNames } });
+    orRules.push({ gradeLevel: { [Op.in]: classNames } });
+  }
+  if (!orRules.length) return;
+
+  let tasks = await HomeTask.findAll({
+    where: {
+      isActive: { [Op.ne]: false },
+      [Op.and]: [
+        { [Op.or]: [{ schoolCode }, { schoolCode: null }] },
+        { [Op.or]: orRules }
+      ]
+    },
+    attributes: ['id', 'classId', 'className', 'gradeLevel', 'schoolCode'],
+    limit: 500
+  });
+
+  if (!tasks.length && classNames.length) {
+    const candidates = await HomeTask.findAll({
+      where: { isActive: { [Op.ne]: false }, [Op.or]: [{ schoolCode }, { schoolCode: null }] },
+      attributes: ['id', 'classId', 'className', 'gradeLevel', 'schoolCode'],
+      limit: 1000
+    });
+    tasks = candidates.filter(task => classNames.some(name => classTextsMatch(task.className, name) || classTextsMatch(task.gradeLevel, name)) || (student.classId && Number(task.classId) === Number(student.classId)));
+  }
+
+  for (const task of tasks) {
+    await HomeTaskAssignment.findOrCreate({
+      where: { taskId: task.id, studentId: student.id },
+      defaults: {
+        studentId: student.id,
+        taskId: task.id,
+        classId: task.classId || student.classId || null,
+        schoolCode: schoolCode || task.schoolCode || null,
+        assignedAt: new Date(),
+        status: 'pending'
+      }
+    }).catch(() => null);
+  }
+}
+
 exports.getStudentAssignments = async (req, res) => {
   try {
     await ensureRuntimeSchema().catch(() => null);
-    const student = await Student.findOne({ where: { userId: req.user.id } });
+    const student = await Student.findOne({
+      where: { userId: req.user.id },
+      attributes: ['id', 'userId', 'grade', 'classId', 'status']
+    });
     if (!student) return res.status(403).json({ success: false, message: 'Not a student' });
+
+    await ensureHomeworkAssignmentsForStudent(student, req.user.schoolCode);
 
     const assignments = await HomeTaskAssignment.findAll({
       where: {
@@ -307,7 +478,7 @@ exports.getStudentAssignments = async (req, res) => {
           estimatedMinutes: task.estimatedMinutes || null,
           points: task.points || 0,
           difficulty: task.difficulty || null,
-          attachments: task.attachments || [],
+          attachments: normalizeAttachments(task.attachments).map(file => ({ ...file, secureUrl: homeTaskAttachmentUrl(req, file.secureUrl || file.url) })),
           teacherNote: task.teacherNote || '',
           teacherName: task.Teacher?.User?.name || 'Not assigned',
           createdAt: task.createdAt

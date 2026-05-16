@@ -4,6 +4,7 @@ const { protect, authorize } = require('../middleware/auth');
 const homeworkCtrl = require('../controllers/homeworkController');
 
 router.use(protect);
+router.post('/attachments', authorize('teacher'), homeworkCtrl.uploadHomeworkAttachment);
 router.post('/assign', authorize('teacher'), homeworkCtrl.createAssignment);
 router.get('/teacher', authorize('teacher'), homeworkCtrl.getTeacherAssignments);
 router.get('/teacher/:taskId', authorize('teacher'), homeworkCtrl.getTeacherAssignmentDetails);
