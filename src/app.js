@@ -142,6 +142,8 @@ async function ensureCriticalDashboardColumns(req, res, next) {
     await sequelize.query('ALTER TABLE IF EXISTS "FeeStructures" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
     await sequelize.query('ALTER TABLE IF EXISTS "TutorSessions" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
     await sequelize.query('ALTER TABLE IF EXISTS "TutorMessages" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+    await sequelize.query(`ALTER TABLE IF EXISTS "TutorMessages" ADD COLUMN IF NOT EXISTS "content" TEXT NOT NULL DEFAULT ''`).catch(() => null);
+    await sequelize.query(`UPDATE "TutorMessages" SET "content" = COALESCE(NULLIF("content", ''), "message", 'Tutor message') WHERE "content" IS NULL OR "content" = ''`).catch(() => null);
     await sequelize.query("UPDATE \"TutorSessions\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
     await sequelize.query("UPDATE \"TutorMessages\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
   } catch (err) {

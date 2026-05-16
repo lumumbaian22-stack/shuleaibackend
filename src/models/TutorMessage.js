@@ -6,7 +6,10 @@ module.exports = (sequelize, DataTypes) => {
     studentId: { type: DataTypes.INTEGER, allowNull: false },
     userId: { type: DataTypes.INTEGER, allowNull: true },
     role: { type: DataTypes.STRING, allowNull: false },
-    message: { type: DataTypes.TEXT, allowNull: false },
+    message: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
+    // Keep content for older/live databases that still have a NOT NULL content column.
+    // New code writes both message and content so TutorMessages never fails on legacy schema.
+    content: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
     subject: { type: DataTypes.STRING, allowNull: true },
     topic: { type: DataTypes.STRING, allowNull: true },
     command: { type: DataTypes.STRING, allowNull: true },

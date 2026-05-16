@@ -18,6 +18,31 @@ async function resolveStudent(req, requestedStudentId) {
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
+function safeTutorText(value, fallback = 'Tutor message') {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text || fallback;
+}
+
+async function createTutorMessage({ schoolId, schoolCode, sessionId, studentId, userId, role, text, subject, topic, command, source, metadata }) {
+  const safeText = safeTutorText(text, role === 'tutor' ? 'I am ready to help you learn. Ask me any question.' : 'Student question');
+  return TutorMessage.create({
+    schoolId,
+    schoolCode,
+    sessionId,
+    studentId,
+    userId,
+    role,
+    message: safeText,
+    content: safeText,
+    subject,
+    topic,
+    command,
+    source,
+    metadata: metadata || {}
+  });
+}
+
+
 function buildTutorSessionTitle(question, subject, topic, command) {
   const clean = String(question || '').replace(/\s+/g, ' ').trim();
   const safeSubject = String(subject || '').replace(/\s+/g, ' ').trim();
@@ -75,7 +100,7 @@ exports.askTutor = async (req, res) => {
       lastCommand: command || 'ask',
       metadata: { source: 'student-dashboard', rawGrade, title: sessionTitle }
     });
-    await TutorMessage.create({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'student', message: question, subject: realSubject, topic, command, source: 'student' });
+    await createTutorMessage({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'student', text: question, subject: realSubject, topic, command, source: 'student' });
 
     const localAnswer = buildTutorAnswer({ question, command, subject: realSubject, topic, grade: realGrade, level });
 
@@ -89,7 +114,7 @@ exports.askTutor = async (req, res) => {
     }
     const answer = { ...localAnswer, explanation: aiText || localAnswer.explanation, source: aiText ? 'claude-haiku' : localAnswer.source };
 
-    await TutorMessage.create({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'tutor', message: answer.explanation, subject: realSubject, topic, command, source: answer.source, metadata: answer });
+    await createTutorMessage({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'tutor', text: answer.explanation, subject: realSubject, topic, command, source: answer.source, metadata: answer });
     const [progress] = await TutorProgress.findOrCreate({ where: { schoolId, studentId: realStudentId, subject: realSubject, topic }, defaults: { schoolId, schoolCode: schoolId, studentId: realStudentId, grade: realGrade, level: level.id, subject: realSubject, topic, attempts: 0, correct: 0 } });
     await progress.update({ attempts: progress.attempts + 1, lastCommand: command, lastSource: answer.source, lastStudiedAt: new Date() });
     await usage.update({ totalQuestions: usage.totalQuestions + 1 });

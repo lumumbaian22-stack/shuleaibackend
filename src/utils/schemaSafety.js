@@ -105,7 +105,8 @@ async function ensureTutorTables() {
       "studentId" INTEGER NOT NULL,
       "userId" INTEGER,
       "role" VARCHAR(255) NOT NULL,
-      "message" TEXT NOT NULL,
+      "message" TEXT NOT NULL DEFAULT '',
+      "content" TEXT NOT NULL DEFAULT '',
       "subject" VARCHAR(255),
       "topic" VARCHAR(255),
       "command" VARCHAR(255),
@@ -167,6 +168,7 @@ async function ensureTutorTables() {
   await addColumnIfMissing('TutorMessages', 'userId', 'INTEGER');
   await addColumnIfMissing('TutorMessages', 'role', "VARCHAR(255) NOT NULL DEFAULT 'student'");
   await addColumnIfMissing('TutorMessages', 'message', "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing('TutorMessages', 'content', "TEXT NOT NULL DEFAULT ''");
   await addColumnIfMissing('TutorMessages', 'subject', 'VARCHAR(255)');
   await addColumnIfMissing('TutorMessages', 'topic', 'VARCHAR(255)');
   await addColumnIfMissing('TutorMessages', 'command', 'VARCHAR(255)');
@@ -197,6 +199,10 @@ async function ensureTutorTables() {
   await addColumnIfMissing('TutorUsages', 'aiCalls', 'INTEGER DEFAULT 0');
   await addColumnIfMissing('TutorUsages', 'createdAt', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()');
   await addColumnIfMissing('TutorUsages', 'updatedAt', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+
+  // Sync TutorMessages message/content for live databases that have both columns.
+  await sequelize.query('UPDATE \"TutorMessages\" SET \"content\" = COALESCE(NULLIF(\"content\", \'\'), \"message\", \'Tutor message\') WHERE \"content\" IS NULL OR \"content\" = \'\'').catch(() => null);
+  await sequelize.query('UPDATE \"TutorMessages\" SET \"message\" = COALESCE(NULLIF(\"message\", \'\'), \"content\", \'Tutor message\') WHERE \"message\" IS NULL OR \"message\" = \'\'').catch(() => null);
 
   await addIndexIfMissing('idx_tutor_messages_school_student_created', 'CREATE INDEX idx_tutor_messages_school_student_created ON "TutorMessages" ("schoolId", "studentId", "createdAt")', { table: 'TutorMessages', columns: ['schoolId', 'studentId', 'createdAt'] });
   await addIndexIfMissing('idx_tutor_progress_unique_school_student_subject_topic', 'CREATE UNIQUE INDEX idx_tutor_progress_unique_school_student_subject_topic ON "TutorProgresses" ("schoolId", "studentId", "subject", "topic")', { table: 'TutorProgresses', columns: ['schoolId', 'studentId', 'subject', 'topic'] });

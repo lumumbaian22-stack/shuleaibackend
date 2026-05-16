@@ -69,7 +69,8 @@ module.exports = {
         userId: { type: Sequelize.INTEGER, allowNull: true },
         title: { type: Sequelize.STRING, allowNull: false, defaultValue: 'AI Tutor Session' },
         role: { type: Sequelize.STRING, allowNull: false },
-        message: { type: Sequelize.TEXT, allowNull: false },
+        message: { type: Sequelize.TEXT, allowNull: false, defaultValue: '' },
+        content: { type: Sequelize.TEXT, allowNull: false, defaultValue: '' },
         subject: { type: Sequelize.STRING, allowNull: true },
         topic: { type: Sequelize.STRING, allowNull: true },
         command: { type: Sequelize.STRING, allowNull: true },
@@ -135,6 +136,7 @@ module.exports = {
     await ensureColumn(queryInterface, Sequelize, 'TutorMessages', 'userId', { type: Sequelize.INTEGER, allowNull: true });
     await ensureColumn(queryInterface, Sequelize, 'TutorMessages', 'role', { type: Sequelize.STRING, allowNull: false, defaultValue: 'student' });
     await ensureColumn(queryInterface, Sequelize, 'TutorMessages', 'message', { type: Sequelize.TEXT, allowNull: false, defaultValue: '' });
+    await ensureColumn(queryInterface, Sequelize, 'TutorMessages', 'content', { type: Sequelize.TEXT, allowNull: false, defaultValue: '' });
     await ensureColumn(queryInterface, Sequelize, 'TutorMessages', 'subject', { type: Sequelize.STRING, allowNull: true });
     await ensureColumn(queryInterface, Sequelize, 'TutorMessages', 'topic', { type: Sequelize.STRING, allowNull: true });
     await ensureColumn(queryInterface, Sequelize, 'TutorMessages', 'command', { type: Sequelize.STRING, allowNull: true });
