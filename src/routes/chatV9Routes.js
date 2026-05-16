@@ -20,6 +20,8 @@ router.put('/teacher/groups/:groupId/members', chat.updateGroupMembers);
 
 router.get('/teacher/direct/:userId', chat.getDirectMessages);
 router.post('/teacher/direct', chat.sendDirectMessage);
+router.get('/student/direct/:userId', chat.getStudentDirectMessages);
+router.post('/student/direct', chat.sendStudentDirectMessage);
 
 router.get('/teacher/groups/:groupId/messages', chat.getGroupMessages);
 router.post('/teacher/groups/:groupId/messages', chat.sendGroupMessage);

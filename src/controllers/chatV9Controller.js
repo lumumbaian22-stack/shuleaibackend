@@ -277,6 +277,34 @@ exports.listTeacherDirectory = async (req, res) => {
       if (ctx.classId) {
         classmates = await getClassStudyParticipants({ schoolCode: schoolCodeOf(req), classId: ctx.classId });
       }
+
+      // Some older student rows are linked by grade/className instead of classId.
+      // Use a same-grade fallback so the student private participant list does not go empty.
+      if (!classmates.length) {
+        const grade = ctx.grade || ctx.student?.grade || ctx.student?.className || req.user?.grade || req.user?.className || null;
+        if (grade) {
+          const cleanGrade = String(grade).trim();
+          const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
+            where: {
+              schoolCode: schoolCodeOf(req),
+              status: 'active',
+              [Op.or]: [{ grade: cleanGrade }, { className: cleanGrade }]
+            },
+            include: [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode: schoolCodeOf(req), role: 'student', isActive: true } }],
+            order: [[User, 'name', 'ASC']],
+            limit: 120
+          }).catch(() => []);
+          classmates = students.map(st => ({
+            id: st.User?.id,
+            studentId: st.id,
+            name: st.User?.name || st.name || 'Student',
+            role: 'student',
+            profileImage: st.User?.profileImage || null,
+            admissionNumber: st.admissionNumber || null
+          })).filter(x => x.id);
+        }
+      }
+
       classmates = classmates.filter(p => Number(p.id) !== Number(req.user.id));
       return res.json({ success: true, data: classmates });
     }
@@ -359,6 +387,23 @@ exports.createTeacherGroup = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+async function canStudentDirectMessage(req, otherUser) {
+  if (!otherUser || req.user.role !== 'student') return false;
+  if (otherUser.schoolCode !== schoolCodeOf(req)) return false;
+  if (otherUser.role !== 'student') return false;
+  if (Number(otherUser.id) === Number(req.user.id)) return false;
+
+  const meStudent = await getStudentProfile(req.user.id);
+  const otherStudent = await getStudentProfile(otherUser.id);
+  if (!meStudent || !otherStudent) return false;
+
+  if (meStudent.classId && otherStudent.classId && Number(meStudent.classId) === Number(otherStudent.classId)) return true;
+
+  const meGrade = String(meStudent.grade || meStudent.className || req.user?.grade || req.user?.className || '').trim().toLowerCase();
+  const otherGrade = String(otherStudent.grade || otherStudent.className || '').trim().toLowerCase();
+  return Boolean(meGrade && otherGrade && meGrade === otherGrade);
+}
 
 async function canDirectMessage(req, otherUser) {
   if (!otherUser || otherUser.schoolCode !== schoolCodeOf(req)) return false;
@@ -962,6 +1007,69 @@ exports.getDepartmentGroup = async (req, res) => {
     res.json({ success: true, data: { department, group: { ...group.toJSON(), headName: head?.Teacher?.User?.name || 'Not assigned' }, members, messages } });
   } catch (error) {
     console.error('getDepartmentGroup error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+exports.getStudentDirectMessages = async (req, res) => {
+  try {
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ success: false, message: 'Student private chat is only for students' });
+    }
+    const otherId = Number(req.params.userId);
+    const other = await User.findOne({ where: { id: otherId, schoolCode: schoolCodeOf(req), isActive: true, role: 'student' } });
+    if (!(await canStudentDirectMessage(req, other))) {
+      return res.status(404).json({ success: false, message: 'Classmate not found or not allowed' });
+    }
+
+    const messages = await ChatMessage.findAll({
+      where: {
+        schoolCode: schoolCodeOf(req),
+        groupId: null,
+        [Op.or]: [
+          { senderId: req.user.id, receiverId: otherId },
+          { senderId: otherId, receiverId: req.user.id }
+        ]
+      },
+      include: [{ model: User, as: 'Sender', attributes: ['id','name','role','profileImage'] }],
+      order: [['createdAt', 'ASC']],
+      limit: 100
+    });
+    res.json({ success: true, data: messages });
+  } catch (error) {
+    console.error('getStudentDirectMessages error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.sendStudentDirectMessage = async (req, res) => {
+  try {
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ success: false, message: 'Student private chat is only for students' });
+    }
+    const { receiverId, content, attachmentUrl, attachment } = req.body;
+    const cleanContent = String(content || '').trim();
+    if (!receiverId || !cleanContent) return res.status(400).json({ success: false, message: 'receiverId and content are required' });
+
+    const other = await User.findOne({ where: { id: receiverId, schoolCode: schoolCodeOf(req), isActive: true, role: 'student' } });
+    if (!(await canStudentDirectMessage(req, other))) {
+      return res.status(404).json({ success: false, message: 'Classmate not found or not allowed' });
+    }
+
+    const message = await ChatMessage.create({
+      schoolCode: schoolCodeOf(req),
+      senderId: req.user.id,
+      receiverId,
+      content: cleanContent,
+      attachmentUrl: attachmentUrl || null,
+      messageType: attachmentUrl ? 'file' : 'text',
+      metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
+    });
+    const hydrated = await hydrateChatMessage(message);
+    res.status(201).json({ success: true, data: hydrated || message });
+  } catch (error) {
+    console.error('sendStudentDirectMessage error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
