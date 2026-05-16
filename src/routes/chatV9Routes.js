@@ -31,6 +31,11 @@ router.post('/classroom/threads', chat.createClassroomThread);
 router.put('/classroom/threads/:threadId', chat.updateClassroomThread);
 router.post('/classroom/threads/:threadId/replies', chat.replyToThread);
 
+router.put('/messages/:messageId', chat.editChatMessage);
+router.delete('/messages/:messageId', chat.deleteChatMessage);
+router.put('/classroom/replies/:replyId', chat.editThreadReply);
+router.delete('/classroom/replies/:replyId', chat.deleteThreadReply);
+
 router.post('/classroom/replies/:replyId/award', chat.awardThreadReply);
 router.post('/classroom/replies/:replyId/pin', chat.pinThreadReply);
 router.post('/teacher/messages/:messageId/award', chat.awardChatMessage);

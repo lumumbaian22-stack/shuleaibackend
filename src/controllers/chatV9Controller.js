@@ -158,6 +158,77 @@ async function hydrateChatMessage(message) {
   });
 }
 
+function chatMessageVisibleToUser(message, userId) {
+  const metadata = message?.metadata || {};
+  const deletedFor = Array.isArray(metadata.deletedFor) ? metadata.deletedFor.map(Number) : [];
+  return !deletedFor.includes(Number(userId));
+}
+
+function presentChatMessage(message, userId) {
+  if (!message) return message;
+  const row = typeof message.toJSON === 'function' ? message.toJSON() : { ...message };
+  const metadata = row.metadata || {};
+  if (metadata.deletedForEveryone) {
+    row.content = 'This message was deleted';
+    row.attachmentUrl = null;
+    row.messageType = 'deleted';
+    row.metadata = { ...metadata, reactions: metadata.reactions || {}, deletedForEveryone: true };
+  }
+  return row;
+}
+
+function presentThreadReply(reply, userId) {
+  if (!reply) return reply;
+  const row = typeof reply.toJSON === 'function' ? reply.toJSON() : { ...reply };
+  const metadata = row.metadata || {};
+  const deletedFor = Array.isArray(metadata.deletedFor) ? metadata.deletedFor.map(Number) : [];
+  if (deletedFor.includes(Number(userId))) return null;
+  if (metadata.deletedForEveryone) {
+    row.content = 'This reply was deleted';
+    row.metadata = { ...metadata, attachmentUrl: null, deletedForEveryone: true };
+  }
+  return row;
+}
+
+async function buildReplyPreview(messageId, schoolCode) {
+  if (!messageId) return null;
+  const original = await ChatMessage.findOne({
+    where: { id: Number(messageId), schoolCode },
+    include: [{ model: User, as: 'Sender', attributes: ['id','name','role','profileImage'] }]
+  }).catch(() => null);
+  if (!original) return null;
+  const metadata = original.metadata || {};
+  return {
+    id: original.id,
+    senderId: original.senderId,
+    senderName: original.Sender?.name || 'User',
+    content: metadata.deletedForEveryone ? 'This message was deleted' : String(original.content || '').slice(0, 160)
+  };
+}
+
+async function buildThreadReplyPreview(replyId) {
+  if (!replyId) return null;
+  const original = await ThreadReply.findByPk(Number(replyId), {
+    include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }]
+  }).catch(() => null);
+  if (!original) return null;
+  const metadata = original.metadata || {};
+  return {
+    id: original.id,
+    userId: original.userId,
+    authorName: original.Author?.name || 'User',
+    content: metadata.deletedForEveryone ? 'This reply was deleted' : String(original.content || '').slice(0, 160)
+  };
+}
+
+function canEditOrDeleteOwn(user, ownerId) {
+  return Number(user?.id) === Number(ownerId);
+}
+
+function canDeleteForEveryone(user, ownerId) {
+  return Number(user?.id) === Number(ownerId) || ['admin', 'super_admin'].includes(user?.role);
+}
+
 async function ensureChatGroupManager(req, groupId) {
   const member = await ChatGroupMember.findOne({ where: { groupId, userId: req.user.id } });
   if (canManageSchool(req)) return member || true;
@@ -453,7 +524,7 @@ exports.getDirectMessages = async (req, res) => {
       order: [['createdAt', 'ASC']],
       limit: 100
     });
-    res.json({ success: true, data: messages });
+    res.json({ success: true, data: messages.filter(m => chatMessageVisibleToUser(m, req.user.id)).map(m => presentChatMessage(m, req.user.id)) });
   } catch (error) {
     console.error('getDirectMessages error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -462,7 +533,7 @@ exports.getDirectMessages = async (req, res) => {
 
 exports.sendDirectMessage = async (req, res) => {
   try {
-    const { receiverId, content, attachmentUrl, attachment } = req.body;
+    const { receiverId, content, attachmentUrl, attachment, replyToMessageId } = req.body;
     if (!receiverId || !content) return res.status(400).json({ success: false, message: 'receiverId and content are required' });
     const other = await User.findOne({ where: { id: receiverId, schoolCode: schoolCodeOf(req), isActive: true } });
     if (!(await canDirectMessage(req, other))) return res.status(404).json({ success: false, message: 'Contact not found or not allowed' });
@@ -474,7 +545,7 @@ exports.sendDirectMessage = async (req, res) => {
       content,
       attachmentUrl: attachmentUrl || null,
       messageType: attachmentUrl ? 'file' : 'text',
-      metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
+      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), replyTo: await buildReplyPreview(replyToMessageId, schoolCodeOf(req)) }
     });
     const hydrated = await hydrateChatMessage(message);
     res.status(201).json({ success: true, data: hydrated || message });
@@ -496,7 +567,7 @@ exports.getGroupMessages = async (req, res) => {
       order: [['createdAt', 'ASC']],
       limit: 100
     });
-    res.json({ success: true, data: messages });
+    res.json({ success: true, data: messages.filter(m => chatMessageVisibleToUser(m, req.user.id)).map(m => presentChatMessage(m, req.user.id)) });
   } catch (error) {
     console.error('getGroupMessages error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -506,7 +577,7 @@ exports.getGroupMessages = async (req, res) => {
 exports.sendGroupMessage = async (req, res) => {
   try {
     const groupId = Number(req.params.groupId);
-    const { content, attachmentUrl, attachment } = req.body;
+    const { content, attachmentUrl, attachment, replyToMessageId } = req.body;
     if (!content) return res.status(400).json({ success: false, message: 'content is required' });
 
     const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
@@ -525,7 +596,7 @@ exports.sendGroupMessage = async (req, res) => {
       content,
       attachmentUrl: attachmentUrl || null,
       messageType: attachmentUrl ? 'file' : 'text',
-      metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
+      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), replyTo: await buildReplyPreview(replyToMessageId, schoolCodeOf(req)) }
     });
     const hydrated = await hydrateChatMessage(message);
     res.status(201).json({ success: true, data: hydrated || message });
@@ -579,6 +650,8 @@ exports.listClassroomThreads = async (req, res) => {
       const participants = meta.participantsByClass?.[Number(effectiveClassId)] || meta.participantsByClass?.[0] || [];
       row.participants = participants;
       row.studentCount = participants.length || row.studentCount || '—';
+      row.ThreadReplies = (row.ThreadReplies || []).map(r => presentThreadReply(r, req.user.id)).filter(Boolean);
+      row.replies = row.ThreadReplies;
       row.metadata = { ...(row.metadata || {}), participantsCount: participants.length, className: row.className, legacyClassResolved: !t.classId && Boolean(defaultClassId) };
       return row;
     });
@@ -655,7 +728,16 @@ exports.replyToThread = async (req, res) => {
     if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
     if (!(await ensureUserMayUseThread(req, thread))) return res.status(403).json({ success: false, message: 'Not allowed in this study room' });
 
-    const reply = await ThreadReply.create({ threadId, userId: req.user.id, parentReplyId: parentReplyId || null, content, metadata: attachmentUrl ? { attachmentUrl, attachmentName: attachment?.name, attachmentType: attachment?.mimeType, attachmentSize: attachment?.size } : {} });
+    const reply = await ThreadReply.create({
+      threadId,
+      userId: req.user.id,
+      parentReplyId: parentReplyId || null,
+      content,
+      metadata: {
+        ...(attachmentUrl ? { attachmentUrl, attachmentName: attachment?.name, attachmentType: attachment?.mimeType, attachmentSize: attachment?.size } : {}),
+        replyTo: await buildThreadReplyPreview(parentReplyId)
+      }
+    });
     thread.updatedAt = new Date();
     await thread.save();
     const hydrated = await ThreadReply.findByPk(reply.id, { include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }] });
@@ -833,6 +915,102 @@ exports.updateGroupMembers = async (req, res) => {
   }
 };
 
+
+
+exports.editChatMessage = async (req, res) => {
+  try {
+    const message = await ChatMessage.findOne({ where: { id: Number(req.params.messageId), schoolCode: schoolCodeOf(req) } });
+    if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
+    if (!canEditOrDeleteOwn(req.user, message.senderId)) return res.status(403).json({ success: false, message: 'You can only edit your own message' });
+    const content = String(req.body?.content || '').trim();
+    if (!content) return res.status(400).json({ success: false, message: 'content is required' });
+    const metadata = message.metadata || {};
+    if (metadata.deletedForEveryone) return res.status(400).json({ success: false, message: 'Deleted messages cannot be edited' });
+    const previousContent = message.content;
+    message.content = content;
+    message.metadata = {
+      ...metadata,
+      edited: true,
+      editedAt: new Date().toISOString(),
+      editHistory: [...(Array.isArray(metadata.editHistory) ? metadata.editHistory : []), { content: previousContent, editedAt: new Date().toISOString(), editedBy: req.user.id }].slice(-10)
+    };
+    await message.save();
+    const hydrated = await hydrateChatMessage(message);
+    res.json({ success: true, data: presentChatMessage(hydrated || message, req.user.id) });
+  } catch (error) {
+    console.error('editChatMessage error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteChatMessage = async (req, res) => {
+  try {
+    const message = await ChatMessage.findOne({ where: { id: Number(req.params.messageId), schoolCode: schoolCodeOf(req) } });
+    if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
+    const mode = String(req.body?.mode || 'me').toLowerCase();
+    const metadata = message.metadata || {};
+    if (mode === 'everyone') {
+      if (!canDeleteForEveryone(req.user, message.senderId)) return res.status(403).json({ success: false, message: 'You can only delete your own message for everyone' });
+      message.content = 'This message was deleted';
+      message.attachmentUrl = null;
+      message.messageType = 'deleted';
+      message.metadata = { ...metadata, deletedForEveryone: true, deletedBy: req.user.id, deletedAt: new Date().toISOString(), attachmentName: null, attachmentType: null, attachmentSize: null };
+    } else {
+      const deletedFor = new Set([...(Array.isArray(metadata.deletedFor) ? metadata.deletedFor : []), req.user.id].map(Number));
+      message.metadata = { ...metadata, deletedFor: [...deletedFor], deletedForMeAt: new Date().toISOString() };
+    }
+    await message.save();
+    res.json({ success: true, data: presentChatMessage(message, req.user.id), mode });
+  } catch (error) {
+    console.error('deleteChatMessage error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.editThreadReply = async (req, res) => {
+  try {
+    const reply = await ThreadReply.findByPk(Number(req.params.replyId), { include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }] });
+    if (!reply) return res.status(404).json({ success: false, message: 'Reply not found' });
+    const thread = await ClassroomThread.findOne({ where: { id: reply.threadId, schoolCode: schoolCodeOf(req) } });
+    if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
+    if (!canEditOrDeleteOwn(req.user, reply.userId)) return res.status(403).json({ success: false, message: 'You can only edit your own reply' });
+    const content = String(req.body?.content || '').trim();
+    if (!content) return res.status(400).json({ success: false, message: 'content is required' });
+    const metadata = reply.metadata || {};
+    if (metadata.deletedForEveryone) return res.status(400).json({ success: false, message: 'Deleted replies cannot be edited' });
+    reply.content = content;
+    reply.metadata = { ...metadata, edited: true, editedAt: new Date().toISOString() };
+    await reply.save();
+    res.json({ success: true, data: presentThreadReply(reply, req.user.id) });
+  } catch (error) {
+    console.error('editThreadReply error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteThreadReply = async (req, res) => {
+  try {
+    const reply = await ThreadReply.findByPk(Number(req.params.replyId), { include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }] });
+    if (!reply) return res.status(404).json({ success: false, message: 'Reply not found' });
+    const thread = await ClassroomThread.findOne({ where: { id: reply.threadId, schoolCode: schoolCodeOf(req) } });
+    if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
+    const mode = String(req.body?.mode || 'me').toLowerCase();
+    const metadata = reply.metadata || {};
+    if (mode === 'everyone') {
+      if (!canDeleteForEveryone(req.user, reply.userId)) return res.status(403).json({ success: false, message: 'You can only delete your own reply for everyone' });
+      reply.content = 'This reply was deleted';
+      reply.metadata = { ...metadata, attachmentUrl: null, attachmentName: null, attachmentType: null, attachmentSize: null, deletedForEveryone: true, deletedBy: req.user.id, deletedAt: new Date().toISOString() };
+    } else {
+      const deletedFor = new Set([...(Array.isArray(metadata.deletedFor) ? metadata.deletedFor : []), req.user.id].map(Number));
+      reply.metadata = { ...metadata, deletedFor: [...deletedFor], deletedForMeAt: new Date().toISOString() };
+    }
+    await reply.save();
+    res.json({ success: true, data: mode === 'me' ? null : presentThreadReply(reply, req.user.id), mode, replyId: reply.id, threadId: reply.threadId });
+  } catch (error) {
+    console.error('deleteThreadReply error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 exports.pinThreadReply = async (req, res) => {
   try {
@@ -1036,7 +1214,7 @@ exports.getStudentDirectMessages = async (req, res) => {
       order: [['createdAt', 'ASC']],
       limit: 100
     });
-    res.json({ success: true, data: messages });
+    res.json({ success: true, data: messages.filter(m => chatMessageVisibleToUser(m, req.user.id)).map(m => presentChatMessage(m, req.user.id)) });
   } catch (error) {
     console.error('getStudentDirectMessages error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -1048,7 +1226,7 @@ exports.sendStudentDirectMessage = async (req, res) => {
     if (req.user.role !== 'student') {
       return res.status(403).json({ success: false, message: 'Student private chat is only for students' });
     }
-    const { receiverId, content, attachmentUrl, attachment } = req.body;
+    const { receiverId, content, attachmentUrl, attachment, replyToMessageId } = req.body;
     const cleanContent = String(content || '').trim();
     if (!receiverId || !cleanContent) return res.status(400).json({ success: false, message: 'receiverId and content are required' });
 
@@ -1064,7 +1242,7 @@ exports.sendStudentDirectMessage = async (req, res) => {
       content: cleanContent,
       attachmentUrl: attachmentUrl || null,
       messageType: attachmentUrl ? 'file' : 'text',
-      metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
+      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), replyTo: await buildReplyPreview(replyToMessageId, schoolCodeOf(req)) }
     });
     const hydrated = await hydrateChatMessage(message);
     res.status(201).json({ success: true, data: hydrated || message });
