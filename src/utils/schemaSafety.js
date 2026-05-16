@@ -354,6 +354,9 @@ async function ensureRuntimeSchema() {
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "createdByUserId" INTEGER').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "className" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "dueDate" TIMESTAMP WITH TIME ZONE').catch(() => null);
+  await sequelize.query("ALTER TABLE IF EXISTS \"HomeTasks\" ADD COLUMN IF NOT EXISTS \"attachments\" JSONB DEFAULT '[]'::jsonb").catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "teacherNote" TEXT').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTaskAssignments" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTaskAssignments" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
 

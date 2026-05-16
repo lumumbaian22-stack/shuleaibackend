@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { HomeTask, HomeTaskAssignment, Student, Teacher, Class, User, TeacherSubjectAssignment } = require('../models');
+const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 function cleanString(value, fallback = '') {
   const s = String(value ?? '').trim();
@@ -69,6 +70,7 @@ async function resolveClass({ classId, className, grade, schoolCode }) {
 
 exports.createAssignment = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const {
       title,
       instructions,
@@ -154,6 +156,7 @@ exports.createAssignment = async (req, res) => {
 
 exports.getTeacherAssignments = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const teacher = await getTeacherFromUser(req.user.id);
     if (!teacher) return res.status(403).json({ success: false, message: 'Not a teacher' });
 
@@ -189,15 +192,60 @@ exports.getTeacherAssignments = async (req, res) => {
 
 exports.getStudentAssignments = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(403).json({ success: false, message: 'Not a student' });
 
     const assignments = await HomeTaskAssignment.findAll({
-      where: { studentId: student.id },
-      include: [{ model: HomeTask }],
+      where: {
+        studentId: student.id,
+        [Op.or]: [{ schoolCode: req.user.schoolCode }, { schoolCode: null }]
+      },
+      include: [{
+        model: HomeTask,
+        required: true,
+        where: { [Op.or]: [{ schoolCode: req.user.schoolCode }, { schoolCode: null }] },
+        include: [{ model: Teacher, required: false, include: [{ model: User, attributes: ['id', 'name'], required: false }] }]
+      }],
       order: [['assignedAt', 'DESC']]
     });
-    res.json({ success: true, data: assignments });
+
+    const data = assignments.map(a => {
+      const row = a.toJSON();
+      const task = row.HomeTask || {};
+      return {
+        id: row.id,
+        assignmentId: row.id,
+        studentId: row.studentId,
+        taskId: row.taskId,
+        status: row.status || 'pending',
+        assignedAt: row.assignedAt,
+        submittedAt: row.completedAt || null,
+        studentFeedback: row.studentFeedback || {},
+        parentFeedback: row.parentFeedback || {},
+        pointsEarned: row.pointsEarned || null,
+        schoolCode: row.schoolCode || task.schoolCode || null,
+        HomeTask: {
+          id: task.id,
+          title: task.title || 'Untitled Homework',
+          instructions: task.instructions || '',
+          description: task.instructions || '',
+          subject: task.subject || 'General',
+          dueDate: task.dueDate || null,
+          classId: task.classId || null,
+          className: task.className || null,
+          estimatedMinutes: task.estimatedMinutes || null,
+          points: task.points || 0,
+          difficulty: task.difficulty || null,
+          attachments: task.attachments || [],
+          teacherNote: task.teacherNote || '',
+          teacherName: task.Teacher?.User?.name || 'Not assigned',
+          createdAt: task.createdAt
+        }
+      };
+    });
+
+    res.json({ success: true, data });
   } catch (error) {
     console.error('Get student assignments error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -206,9 +254,12 @@ exports.getStudentAssignments = async (req, res) => {
 
 exports.submitAssignment = async (req, res) => {
   try {
+    await ensureRuntimeSchema().catch(() => null);
     const { assignmentId } = req.params;
     const { fileUrl, comment } = req.body;
-    const assignment = await HomeTaskAssignment.findByPk(assignmentId);
+    const student = await Student.findOne({ where: { userId: req.user.id } });
+    if (!student) return res.status(403).json({ success: false, message: 'Not a student' });
+    const assignment = await HomeTaskAssignment.findOne({ where: { id: assignmentId, studentId: student.id } });
     if (!assignment) return res.status(404).json({ success: false, message: 'Assignment not found' });
 
     await assignment.update({

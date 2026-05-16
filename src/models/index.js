@@ -249,6 +249,8 @@ School.hasMany(Class, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
 // HomeTask associations
 HomeTask.belongsTo(Competency, { foreignKey: 'competencyId' });
 HomeTask.belongsTo(LearningOutcome, { foreignKey: 'learningOutcomeId' });
+HomeTask.belongsTo(Teacher, { foreignKey: 'createdBy' });
+Teacher.hasMany(HomeTask, { foreignKey: 'createdBy' });
 HomeTaskAssignment.belongsTo(Student, { foreignKey: 'studentId' });
 HomeTaskAssignment.belongsTo(HomeTask, { foreignKey: 'taskId' });
 Student.hasMany(HomeTaskAssignment, { foreignKey: 'studentId' });

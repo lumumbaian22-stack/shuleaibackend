@@ -240,14 +240,42 @@ exports.getGrades = async (req, res) => {
     const schoolLevel = school?.settings?.schoolLevel || 'secondary';
 
     const records = await AcademicRecord.findAll({
-        where: { studentId: student.id, isPublished: true },
-        order: [['date', 'DESC']]
+        where: {
+          studentId: student.id,
+          schoolCode: req.user.schoolCode,
+          [Op.or]: [{ isPublished: true }, { status: 'published' }]
+        },
+        include: [{
+          model: Teacher,
+          required: false,
+          include: [{ model: User, attributes: ['id', 'name'], required: false }]
+        }],
+        order: [['year', 'DESC'], ['term', 'DESC'], ['date', 'DESC'], ['subject', 'ASC']]
     });
 
-    const enriched = records.map(r => ({
-        ...r.toJSON(),
-        grade: getGradeFromScore(r.score, curriculum, schoolLevel)
-    }));
+    const enriched = records.map(r => {
+        const row = r.toJSON();
+        const score = Number(row.score || 0);
+        return {
+          id: row.id,
+          studentId: row.studentId,
+          schoolCode: row.schoolCode,
+          year: row.year,
+          term: row.term,
+          subject: row.subject,
+          assessmentType: row.assessmentType,
+          assessmentName: row.assessmentName || row.assessmentType || 'Assessment',
+          score,
+          totalMarks: 100,
+          percentage: score,
+          grade: getGradeFromScore(score, curriculum, schoolLevel),
+          remark: row.remarks || '',
+          remarks: row.remarks || '',
+          teacherName: row.Teacher?.User?.name || 'Not assigned',
+          date: row.date,
+          publishedAt: row.publishedAt || null
+        };
+    });
 
     res.json({ success: true, data: enriched });
   } catch (error) {

@@ -16,7 +16,10 @@ module.exports = (sequelize, DataTypes) => {
     createdBy: { type: DataTypes.INTEGER, allowNull: true },
     createdByUserId: { type: DataTypes.INTEGER, allowNull: true },
     classId: { type: DataTypes.INTEGER, allowNull: true },
-    className: { type: DataTypes.STRING, allowNull: true }
+    className: { type: DataTypes.STRING, allowNull: true },
+    dueDate: { type: DataTypes.DATE, allowNull: true },
+    attachments: { type: DataTypes.JSONB, defaultValue: [] },
+    teacherNote: { type: DataTypes.TEXT, allowNull: true }
   }, { timestamps: true });
   return HomeTask;
 };
