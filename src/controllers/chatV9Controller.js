@@ -77,23 +77,51 @@ function threadMatchesStudentContext(thread, ctx) {
   return possibleNames.some(name => threadNames.includes(name));
 }
 
-async function buildStudyMeta(req, threads, student) {
+async function buildStudyMeta(req, threads, student, studentCtx = null) {
   const schoolCode = schoolCodeOf(req);
-  const classIds = [...new Set([student?.classId, ...threads.map(t => t.classId)].filter(Boolean).map(Number))];
+  const classIds = [...new Set([studentCtx?.classId, student?.classId, ...threads.map(t => t.classId)].filter(Boolean).map(Number))];
   const classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds }, schoolCode } }) : [];
   const classMap = new Map(classes.map(c => [Number(c.id), c]));
   const participantsByClass = {};
   for (const classId of classIds) {
     participantsByClass[classId] = await getClassStudyParticipants({ schoolCode, classId });
   }
+
+  // If the student has a grade/class name but no linked classId yet, still return
+  // same-grade classmates so private peer chats and the members panel do not appear empty.
+  if (!classIds.length && req.user?.role === 'student') {
+    const grade = studentCtx?.grade || student?.grade || req.user?.grade || req.user?.className || null;
+    if (grade) {
+      const cleanGrade = String(grade).trim();
+      const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
+        where: { schoolCode, status: 'active', [Op.or]: [{ grade: cleanGrade }, { className: cleanGrade }] },
+        include: [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }],
+        order: [[User, 'name', 'ASC']],
+        limit: 120
+      }).catch(() => []);
+      participantsByClass[0] = students.map(s => ({
+        id: s.User?.id,
+        studentId: s.id,
+        name: s.User?.name || s.name || 'Student',
+        role: 'student',
+        profileImage: s.User?.profileImage || null,
+        admissionNumber: s.admissionNumber || null
+      })).filter(x => x.id);
+      return {
+        groups: [{ id: 'class-0', classId: null, name: cleanGrade || 'My Study Group', grade: cleanGrade, stream: '', type: 'class-study-group', participantCount: participantsByClass[0].length, participants: participantsByClass[0] }],
+        participantsByClass
+      };
+    }
+  }
+
   const groups = classIds.map(classId => {
     const c = classMap.get(Number(classId));
     const participants = participantsByClass[classId] || [];
     return {
       id: `class-${classId}`,
       classId,
-      name: c?.name || c?.grade || 'My Class Study Group',
-      grade: c?.grade || '',
+      name: c?.name || c?.grade || studentCtx?.grade || 'My Class Study Group',
+      grade: c?.grade || studentCtx?.grade || '',
       stream: c?.stream || '',
       type: 'class-study-group',
       participantCount: participants.length,
@@ -243,14 +271,20 @@ exports.listTeacherDirectory = async (req, res) => {
     // Official rollout safety rule:
     // private/direct chat must never expose teacher <-> student 1:1 messaging.
     // Teacher-student communication stays in classroom, study-room, and homework threads.
-    let roleFilter = ['teacher'];
+    if (req.user.role === 'student') {
+      const ctx = await resolveStudentClassContext(req);
+      let classmates = [];
+      if (ctx.classId) {
+        classmates = await getClassStudyParticipants({ schoolCode: schoolCodeOf(req), classId: ctx.classId });
+      }
+      classmates = classmates.filter(p => Number(p.id) !== Number(req.user.id));
+      return res.json({ success: true, data: classmates });
+    }
 
+    let roleFilter = ['teacher'];
     if (req.user.role === 'teacher') roleFilter = ['teacher', 'admin', 'parent'];
     else if (req.user.role === 'parent') roleFilter = ['teacher', 'admin'];
     else if (['admin', 'super_admin'].includes(req.user.role)) roleFilter = ['teacher', 'admin', 'parent'];
-    else if (req.user.role === 'student') roleFilter = [];
-
-    if (!roleFilter.length) return res.json({ success: true, data: [] });
 
     const users = await User.findAll({
       where: {
@@ -461,8 +495,10 @@ exports.listClassroomThreads = async (req, res) => {
     const where = { schoolCode: schoolCodeOf(req) };
     const studentCtx = req.user.role === 'student' ? await resolveStudentClassContext(req) : null;
     const student = studentCtx?.student || null;
-    if (studentCtx?.classId) where.classId = studentCtx.classId;
 
+    // Do not add where.classId for students here. Older study-room threads may have
+    // null/wrong classId from the pre-classId versions, and filtering in SQL hides
+    // previous group chats completely. Load school threads, then apply safe visibility below.
     let threads = await ClassroomThread.findAll({
       where,
       include: [
@@ -474,24 +510,33 @@ exports.listClassroomThreads = async (req, res) => {
       limit: 80
     });
 
-    if (req.user.role === 'student' && !studentCtx?.classId) {
-      threads = threads.filter(t => threadMatchesStudentContext(t, studentCtx || {}));
+    if (req.user.role === 'student') {
+      threads = threads.filter(t => {
+        if (threadMatchesStudentContext(t, studentCtx || {})) return true;
+        const meta = t.metadata || {};
+        const approvalStatus = String(meta.approvalStatus || 'approved').toLowerCase();
+        // Legacy rollout safeguard: keep old approved study-room threads visible
+        // when classId was not saved correctly, instead of making the chat look empty.
+        return approvalStatus === 'approved' && (!t.classId || !studentCtx?.classId || Number(t.classId) !== Number(studentCtx.classId));
+      });
     }
+
+    const meta = await buildStudyMeta(req, threads, student, studentCtx);
+    const defaultClassId = studentCtx?.classId || student?.classId || null;
+    const defaultClassName = studentCtx?.classRecord?.name || studentCtx?.grade || 'Class Study Group';
 
     const json = threads.map(t => {
       const row = t.toJSON();
-      row.className = row.Class?.name || row.metadata?.className || 'Class Study Group';
+      const effectiveClassId = row.classId || defaultClassId || 0;
+      row.classId = effectiveClassId || row.classId || null;
+      row.className = row.Class?.name || row.metadata?.className || defaultClassName;
       row.studentCount = row.metadata?.studentCount || undefined;
+      const participants = meta.participantsByClass?.[Number(effectiveClassId)] || meta.participantsByClass?.[0] || [];
+      row.participants = participants;
+      row.studentCount = participants.length || row.studentCount || '—';
+      row.metadata = { ...(row.metadata || {}), participantsCount: participants.length, className: row.className, legacyClassResolved: !t.classId && Boolean(defaultClassId) };
       return row;
     });
-
-    const meta = await buildStudyMeta(req, threads, student);
-    for (const t of json) {
-      const participants = meta.participantsByClass?.[Number(t.classId)] || [];
-      t.participants = participants;
-      t.studentCount = participants.length || t.studentCount || '—';
-      t.metadata = { ...(t.metadata || {}), participantsCount: participants.length, className: t.className };
-    }
 
     res.json({ success: true, data: json, meta });
   } catch (error) {
@@ -675,6 +720,18 @@ exports.listAvailableMembers = async (req, res) => {
   try {
     const where = { schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student'] } };
     let users = await User.findAll({ where, attributes: ['id','name','email','role','profileImage'], include: [{ model: Student, required: false, attributes: ['id','classId','grade'] }, { model: Teacher, required: false, attributes: ['id','classId','subjects'] }], order: [['role','ASC'], ['name','ASC']] });
+
+    if (req.user.role === 'student') {
+      const ctx = await resolveStudentClassContext(req);
+      users = users.filter(u => {
+        if (Number(u.id) === Number(req.user.id)) return false;
+        if (u.role !== 'student') return false;
+        if (ctx.classId && u.Student?.classId) return Number(u.Student.classId) === Number(ctx.classId);
+        const myGrade = String(ctx.grade || '').trim().toLowerCase();
+        const otherGrade = String(u.Student?.grade || '').trim().toLowerCase();
+        return Boolean(myGrade && otherGrade && myGrade === otherGrade);
+      });
+    }
 
     if (req.user.role === 'teacher' && !canManageSchool(req)) {
       const allowedClassIds = await getTeacherAllowedClassIds(req.user.id);
