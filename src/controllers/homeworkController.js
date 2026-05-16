@@ -51,6 +51,29 @@ function homeTaskAttachmentUrl(req, relativeUrl) {
   return `${safeProto}://${req.get('host')}${relativeUrl}`;
 }
 
+function safeHomeworkDownloadUrl(req, relativeUrl) {
+  if (!relativeUrl) return '';
+  const raw = String(relativeUrl || '');
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      const pathname = parsed.pathname || '';
+      if (pathname.startsWith('/uploads/homework/')) return homeTaskAttachmentUrl(req, pathname);
+      return raw;
+    } catch (_) { return raw; }
+  }
+  if (raw.startsWith('/uploads/homework/')) return homeTaskAttachmentUrl(req, raw);
+  return homeTaskAttachmentUrl(req, raw.startsWith('/') ? raw : `/uploads/homework/${path.basename(raw)}`);
+}
+
+function normalizeAttachmentUrlsForResponse(req, attachments = []) {
+  return normalizeAttachments(attachments).map(file => {
+    const raw = file.secureUrl || file.url || '';
+    const secureUrl = safeHomeworkDownloadUrl(req, raw);
+    return { ...file, url: secureUrl, secureUrl, downloadUrl: secureUrl };
+  });
+}
+
 async function getTeacherFromUser(userId) {
   return Teacher.findOne({ where: { userId } });
 }
@@ -67,42 +90,54 @@ function classNamesForStudentLookup(classItem) {
 async function getStudentsForClass(classItem, schoolCode) {
   if (!classItem) return [];
   const names = classNamesForStudentLookup(classItem);
-  const userInclude = { model: User, attributes: ['id', 'name', 'schoolCode'], where: { schoolCode }, required: true };
+  const normalizedNames = names.map(normalizeClassText).filter(Boolean);
   const seen = new Set();
   const results = [];
+  const userIncludeSoft = { model: User, attributes: ['id', 'name', 'email', 'schoolCode'], required: false };
+  const belongsToSchool = (student) => {
+    const userSchool = student?.User?.schoolCode || student?.User?.dataValues?.schoolCode;
+    return !schoolCode || !userSchool || userSchool === schoolCode;
+  };
   const addMany = (rows = []) => rows.forEach((student) => {
-    if (!student || seen.has(student.id)) return;
+    if (!student || seen.has(student.id) || !belongsToSchool(student)) return;
     seen.add(student.id);
     results.push(student);
   });
 
+  const activeWhere = { status: { [Op.ne]: 'inactive' } };
+
   if (classItem.id) {
-    addMany(await Student.findAll({
-      where: { classId: classItem.id, status: { [Op.ne]: 'inactive' } },
-      include: [userInclude],
+    addMany(await Student.unscoped().findAll({
+      where: { ...activeWhere, classId: classItem.id },
+      include: [userIncludeSoft],
       attributes: ['id', 'userId', 'grade', 'classId', 'status'],
-      limit: 3000
+      limit: 5000
     }));
   }
 
   if (names.length) {
-    addMany(await Student.findAll({
-      where: { grade: { [Op.in]: names }, status: { [Op.ne]: 'inactive' } },
-      include: [userInclude],
+    addMany(await Student.unscoped().findAll({
+      where: { ...activeWhere, grade: { [Op.in]: names } },
+      include: [userIncludeSoft],
       attributes: ['id', 'userId', 'grade', 'classId', 'status'],
-      limit: 3000
+      limit: 5000
     }));
   }
 
-  // Safety net for older records where class text was saved in slightly different formats.
-  if (results.length === 0 && names.length) {
-    const schoolStudents = await Student.findAll({
-      where: { status: { [Op.ne]: 'inactive' } },
-      include: [userInclude],
+  // Broad fallback for old records where grade/class text differs by case, stream spacing, or punctuation.
+  if (normalizedNames.length) {
+    const schoolStudents = await Student.unscoped().findAll({
+      where: activeWhere,
+      include: [userIncludeSoft],
       attributes: ['id', 'userId', 'grade', 'classId', 'status'],
-      limit: 5000
+      limit: 10000
     });
-    addMany(schoolStudents.filter(student => names.some(name => classTextsMatch(student.grade, name))));
+    addMany(schoolStudents.filter(student => {
+      if (!belongsToSchool(student)) return false;
+      if (classItem.id && Number(student.classId) === Number(classItem.id)) return true;
+      const studentGrade = normalizeClassText(student.grade);
+      return normalizedNames.some(name => studentGrade === name || studentGrade.includes(name) || name.includes(studentGrade));
+    }));
   }
 
   return results;
@@ -248,12 +283,16 @@ exports.createAssignment = async (req, res) => {
     }));
     if (assignments.length) await HomeTaskAssignment.bulkCreate(assignments, { ignoreDuplicates: true });
 
+    const repairedStudents = await ensureHomeworkAssignmentsForTask(task, req.user.schoolCode);
+    const assignedCount = await HomeTaskAssignment.count({ where: { taskId: task.id } });
+
     res.status(201).json({
       success: true,
-      message: assignments.length ? 'Homework assigned successfully' : 'Homework saved, but no matching students were found for the selected class',
+      message: assignedCount ? 'Homework assigned successfully' : 'Homework saved, but no matching students were found for the selected class',
       data: {
-        task: task.toJSON(),
-        assignedCount: assignments.length,
+        task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments) },
+        assignedCount,
+        repairedCount: repairedStudents.length,
         taskId: task.id,
         classId: resolvedClassId || null,
         className: resolvedClassName || null
@@ -285,14 +324,34 @@ exports.getTeacherAssignments = async (req, res) => {
       order: [['createdAt', 'DESC']]
     });
 
-    res.json({ success: true, data: tasks.map(t => {
+    for (const task of tasks) {
+      const count = Array.isArray(task.HomeTaskAssignments) ? task.HomeTaskAssignments.length : 0;
+      if (!count) await ensureHomeworkAssignmentsForTask(task, req.user.schoolCode);
+    }
+
+    const refreshed = await HomeTask.findAll({
+      where: {
+        [Op.or]: [
+          { createdBy: teacher.id },
+          { createdByUserId: req.user.id }
+        ],
+        [Op.and]: [
+          { [Op.or]: [{ schoolCode: req.user.schoolCode }, { schoolCode: null }] }
+        ]
+      },
+      include: [{ model: HomeTaskAssignment, required: false }],
+      order: [['createdAt', 'DESC']]
+    });
+
+    res.json({ success: true, data: refreshed.map(t => {
       const json = t.toJSON();
-      const assignments = json.HomeTaskAssignments || json.HomeTaskAssignments || [];
+      const assignments = json.HomeTaskAssignments || [];
       return {
         ...json,
+        attachments: normalizeAttachmentUrlsForResponse(req, json.attachments),
         assignedCount: assignments.length,
-        submittedCount: assignments.filter(a => a.status === 'submitted').length,
-        pendingCount: assignments.filter(a => a.status !== 'submitted').length
+        submittedCount: assignments.filter(a => ['submitted','graded'].includes(String(a.status || '').toLowerCase())).length,
+        pendingCount: assignments.filter(a => !['submitted','graded'].includes(String(a.status || '').toLowerCase())).length
       };
     }) });
   } catch (error) {
@@ -316,17 +375,67 @@ async function teacherOwnsTask(req, taskId) {
   return { teacher, task };
 }
 
+async function ensureHomeworkAssignmentsForTask(task, schoolCode) {
+  if (!task) return [];
+  let classItem = null;
+  if (task.classId) {
+    classItem = await Class.findOne({ where: { id: task.classId, schoolCode, isActive: true } }).catch(() => null);
+  }
+  if (!classItem && (task.className || task.gradeLevel)) {
+    classItem = await resolveClass({ className: task.className, grade: task.gradeLevel, schoolCode }).catch(() => null);
+  }
+
+  let students = [];
+  if (classItem) students = await getStudentsForClass(classItem, schoolCode);
+
+  // Final fallback: use task text directly when the Class row cannot be resolved.
+  if (!students.length) {
+    const names = [...new Set([task.className, task.gradeLevel].filter(Boolean))];
+    const normalizedNames = names.map(normalizeClassText).filter(Boolean);
+    if (normalizedNames.length) {
+      const candidates = await Student.unscoped().findAll({
+        where: { status: { [Op.ne]: 'inactive' } },
+        include: [{ model: User, attributes: ['id','name','email','schoolCode'], required: false }],
+        attributes: ['id','userId','grade','classId','status'],
+        limit: 10000
+      });
+      students = candidates.filter(student => {
+        const userSchool = student?.User?.schoolCode || student?.User?.dataValues?.schoolCode;
+        if (schoolCode && userSchool && userSchool !== schoolCode) return false;
+        const grade = normalizeClassText(student.grade);
+        return normalizedNames.some(n => grade === n || grade.includes(n) || n.includes(grade));
+      });
+    }
+  }
+
+  for (const student of students) {
+    await HomeTaskAssignment.findOrCreate({
+      where: { taskId: task.id, studentId: student.id },
+      defaults: {
+        studentId: student.id,
+        taskId: task.id,
+        classId: task.classId || student.classId || null,
+        schoolCode: schoolCode || task.schoolCode || null,
+        assignedAt: new Date(),
+        status: 'pending'
+      }
+    }).catch(() => null);
+  }
+  return students;
+}
+
 exports.getTeacherAssignmentDetails = async (req, res) => {
   try {
     await ensureRuntimeSchema().catch(() => null);
     const { task } = await teacherOwnsTask(req, req.params.taskId);
     if (!task) return res.status(404).json({ success: false, message: 'Homework not found' });
+    await ensureHomeworkAssignmentsForTask(task, req.user.schoolCode);
     const assignments = await HomeTaskAssignment.findAll({
       where: { taskId: task.id },
-      include: [{ model: Student, required: false, include: [{ model: User, attributes: ['id','name','email','profileImage'], required: false }] }],
+      include: [{ model: Student, required: false, include: [{ model: User, attributes: ['id','name','email','profileImage','schoolCode'], required: false }] }],
       order: [['updatedAt', 'DESC']]
     });
-    res.json({ success: true, data: { task, assignments } });
+    res.json({ success: true, data: { task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments) }, assignments } });
   } catch (error) {
     console.error('Get homework details error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -478,7 +587,7 @@ exports.getStudentAssignments = async (req, res) => {
           estimatedMinutes: task.estimatedMinutes || null,
           points: task.points || 0,
           difficulty: task.difficulty || null,
-          attachments: normalizeAttachments(task.attachments).map(file => ({ ...file, secureUrl: homeTaskAttachmentUrl(req, file.secureUrl || file.url) })),
+          attachments: normalizeAttachmentUrlsForResponse(req, task.attachments),
           teacherNote: task.teacherNote || '',
           teacherName: task.Teacher?.User?.name || 'Not assigned',
           createdAt: task.createdAt
@@ -505,7 +614,7 @@ exports.submitAssignment = async (req, res) => {
 
     await assignment.update({
       status: 'submitted',
-      submittedAt: new Date(),
+      completedAt: new Date(),
       studentFeedback: { fileUrl, comment }
     });
     res.json({ success: true });
