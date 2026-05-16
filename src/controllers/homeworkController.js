@@ -190,6 +190,76 @@ exports.getTeacherAssignments = async (req, res) => {
   }
 };
 
+
+
+async function teacherOwnsTask(req, taskId) {
+  const teacher = await getTeacherFromUser(req.user.id);
+  if (!teacher) return { teacher: null, task: null };
+  const task = await HomeTask.findOne({
+    where: {
+      id: Number(taskId),
+      [Op.or]: [{ createdBy: teacher.id }, { createdByUserId: req.user.id }],
+      [Op.and]: [{ [Op.or]: [{ schoolCode: req.user.schoolCode }, { schoolCode: null }] }]
+    }
+  });
+  return { teacher, task };
+}
+
+exports.getTeacherAssignmentDetails = async (req, res) => {
+  try {
+    await ensureRuntimeSchema().catch(() => null);
+    const { task } = await teacherOwnsTask(req, req.params.taskId);
+    if (!task) return res.status(404).json({ success: false, message: 'Homework not found' });
+    const assignments = await HomeTaskAssignment.findAll({
+      where: { taskId: task.id },
+      include: [{ model: Student, required: false, include: [{ model: User, attributes: ['id','name','email','profileImage'], required: false }] }],
+      order: [['updatedAt', 'DESC']]
+    });
+    res.json({ success: true, data: { task, assignments } });
+  } catch (error) {
+    console.error('Get homework details error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateTeacherAssignment = async (req, res) => {
+  try {
+    await ensureRuntimeSchema().catch(() => null);
+    const { task } = await teacherOwnsTask(req, req.params.taskId);
+    if (!task) return res.status(404).json({ success: false, message: 'Homework not found' });
+    const allowed = ['title','instructions','subject','dueDate','difficulty','estimatedMinutes','points','teacherNote','attachments'];
+    const updates = {};
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+    if (updates.title !== undefined) updates.title = cleanString(updates.title, task.title);
+    if (updates.instructions !== undefined) updates.instructions = cleanString(updates.instructions, task.instructions);
+    if (updates.subject !== undefined) updates.subject = cleanString(updates.subject, task.subject || 'General');
+    await task.update(updates);
+    res.json({ success: true, message: 'Homework updated successfully', data: task });
+  } catch (error) {
+    console.error('Update homework error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.reviewSubmission = async (req, res) => {
+  try {
+    await ensureRuntimeSchema().catch(() => null);
+    const assignment = await HomeTaskAssignment.findByPk(req.params.assignmentId, { include: [{ model: HomeTask }] });
+    if (!assignment?.HomeTask) return res.status(404).json({ success: false, message: 'Submission not found' });
+    const { task } = await teacherOwnsTask(req, assignment.HomeTask.id);
+    if (!task) return res.status(403).json({ success: false, message: 'Not allowed to review this homework' });
+    const { status = 'graded', pointsEarned = null, teacherComment = '' } = req.body || {};
+    const parentFeedback = { ...(assignment.parentFeedback || {}), teacherComment, reviewedAt: new Date().toISOString(), reviewedBy: req.user.id };
+    await assignment.update({ status, pointsEarned, parentFeedback });
+    res.json({ success: true, message: 'Submission reviewed', data: assignment });
+  } catch (error) {
+    console.error('Review homework submission error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.getStudentAssignments = async (req, res) => {
   try {
     await ensureRuntimeSchema().catch(() => null);

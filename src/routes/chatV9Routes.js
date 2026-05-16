@@ -2,19 +2,6 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth');
 const chat = require('../controllers/chatV9Controller');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const attachmentDir = path.join(__dirname, '../../uploads');
-if (!fs.existsSync(attachmentDir)) fs.mkdirSync(attachmentDir, { recursive: true });
-const attachmentUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, attachmentDir),
-    filename: (req, file, cb) => cb(null, `chat-${req.user.id}-${Date.now()}-${Math.round(Math.random()*1e9)}${path.extname(file.originalname || '')}`)
-  }),
-  limits: { fileSize: Number(process.env.MAX_FILE_SIZE || 52428800) }
-});
-
 router.use(protect);
 
 router.get('/departments', chat.listDepartments);
@@ -46,7 +33,7 @@ router.post('/classroom/replies/:replyId/award', chat.awardThreadReply);
 router.post('/classroom/replies/:replyId/pin', chat.pinThreadReply);
 router.post('/teacher/messages/:messageId/award', chat.awardChatMessage);
 router.post('/teacher/messages/:messageId/react', chat.reactToMessage);
-router.post('/attachments', attachmentUpload.single('file'), chat.uploadAttachment);
+router.post('/attachments', chat.uploadAttachment);
 
 router.get('/achievements/me', chat.myAchievements);
 

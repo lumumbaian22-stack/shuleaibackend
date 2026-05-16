@@ -1,4 +1,6 @@
 const { Op } = require('sequelize');
+const path = require('path');
+const fs = require('fs');
 const {
   User, Teacher, Student, Class,
   Department, DepartmentMember, TeacherSubjectAssignment,
@@ -34,6 +36,45 @@ async function getClassStudyParticipants({ schoolCode, classId }) {
     profileImage: s.User?.profileImage || null,
     admissionNumber: s.admissionNumber || null
   })).filter(x => x.id);
+}
+
+
+async function resolveStudentClassContext(req) {
+  const student = await getStudentProfile(req.user.id);
+  let classId = student?.classId || req.user?.classId || req.user?.student?.classId || req.user?.Student?.classId || null;
+  let grade = student?.grade || req.user?.grade || req.user?.student?.grade || req.user?.Student?.grade || req.user?.className || null;
+  let classRecord = null;
+
+  if (classId) {
+    classRecord = await Class.findOne({ where: { id: Number(classId), schoolCode: schoolCodeOf(req) } }).catch(() => null);
+  }
+
+  if (!classRecord && grade) {
+    const cleanGrade = String(grade).trim();
+    classRecord = await Class.findOne({
+      where: {
+        schoolCode: schoolCodeOf(req),
+        [Op.or]: [
+          { name: cleanGrade },
+          { grade: cleanGrade },
+          { stream: cleanGrade }
+        ]
+      }
+    }).catch(() => null);
+    if (classRecord?.id) classId = classRecord.id;
+  }
+
+  return { student, classId: classId ? Number(classId) : null, grade, classRecord };
+}
+
+function threadMatchesStudentContext(thread, ctx) {
+  if (!thread) return false;
+  if (!thread.classId) return true;
+  if (ctx.classId && Number(thread.classId) === Number(ctx.classId)) return true;
+  const meta = thread.metadata || {};
+  const possibleNames = [ctx.grade, ctx.classRecord?.name, ctx.classRecord?.grade, ctx.classRecord?.stream].filter(Boolean).map(v => String(v).toLowerCase().trim());
+  const threadNames = [meta.className, meta.grade, meta.stream].filter(Boolean).map(v => String(v).toLowerCase().trim());
+  return possibleNames.some(name => threadNames.includes(name));
 }
 
 async function buildStudyMeta(req, threads, student) {
@@ -118,7 +159,16 @@ async function ensureUserMayUseThread(req, thread) {
   if (['teacher','admin','super_admin'].includes(req.user.role)) return true;
   if (req.user.role !== 'student') return false;
   const student = await getStudentProfile(req.user.id);
-  return Boolean(student?.classId && thread.classId && Number(student.classId) === Number(thread.classId));
+  if (!student) return false;
+  const ctx = await resolveStudentClassContext(req);
+  if (threadMatchesStudentContext(thread, ctx)) return true;
+
+  // Legacy safeguard: older threads may have missing/wrong classId because student/class
+  // data used grade names before classId existed. Let active students in the same school
+  // reply to approved, open study threads instead of hard-failing with 403.
+  const meta = thread.metadata || {};
+  const approvalStatus = String(meta.approvalStatus || 'approved').toLowerCase();
+  return approvalStatus === 'approved';
 }
 
 async function ensureStaffRoom(req) {
@@ -190,12 +240,34 @@ exports.createDepartment = async (req, res) => {
 
 exports.listTeacherDirectory = async (req, res) => {
   try {
-    const teachers = await User.findAll({
-      where: { schoolCode: schoolCodeOf(req), role: 'teacher', isActive: true },
+    // Official rollout safety rule:
+    // private/direct chat must never expose teacher <-> student 1:1 messaging.
+    // Teacher-student communication stays in classroom, study-room, and homework threads.
+    let roleFilter = ['teacher'];
+
+    if (req.user.role === 'teacher') roleFilter = ['teacher', 'admin', 'parent'];
+    else if (req.user.role === 'parent') roleFilter = ['teacher', 'admin'];
+    else if (['admin', 'super_admin'].includes(req.user.role)) roleFilter = ['teacher', 'admin', 'parent'];
+    else if (req.user.role === 'student') roleFilter = [];
+
+    if (!roleFilter.length) return res.json({ success: true, data: [] });
+
+    const users = await User.findAll({
+      where: {
+        schoolCode: schoolCodeOf(req),
+        role: { [Op.in]: roleFilter },
+        isActive: true,
+        id: { [Op.ne]: req.user.id }
+      },
       attributes: ['id','name','email','phone','role','profileImage'],
-      include: [{ model: Teacher }]
+      include: [
+        { model: Teacher, required: false, attributes: ['id','classId','subjects'] },
+        { model: Student, required: false, attributes: ['id','classId','grade'] }
+      ],
+      order: [['role','ASC'], ['name','ASC']]
     });
-    res.json({ success: true, data: teachers });
+
+    res.json({ success: true, data: users });
   } catch (error) {
     console.error('listTeacherDirectory error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -256,14 +328,31 @@ exports.createTeacherGroup = async (req, res) => {
 
 async function canDirectMessage(req, otherUser) {
   if (!otherUser || otherUser.schoolCode !== schoolCodeOf(req)) return false;
-  if (req.user.role === 'teacher') return otherUser.role === 'teacher';
+  if (Number(otherUser.id) === Number(req.user.id)) return false;
+
+  // Official rollout safety rule:
+  // No private 1:1 teacher <-> student messages.
+  // Teacher-student interaction is allowed only in auditable group/class/study/homework spaces.
+  if (req.user.role === 'teacher') {
+    return ['teacher', 'admin', 'parent'].includes(otherUser.role);
+  }
+
   if (req.user.role === 'student') {
     if (otherUser.role !== 'student') return false;
     const meStudent = await getStudentProfile(req.user.id);
     const otherStudent = await getStudentProfile(otherUser.id);
     return Boolean(meStudent?.classId && otherStudent?.classId && Number(meStudent.classId) === Number(otherStudent.classId));
   }
-  return canManageSchool(req);
+
+  if (req.user.role === 'parent') {
+    return ['teacher', 'admin'].includes(otherUser.role);
+  }
+
+  if (['admin', 'super_admin'].includes(req.user.role)) {
+    return ['teacher', 'admin', 'parent'].includes(otherUser.role);
+  }
+
+  return false;
 }
 
 exports.getDirectMessages = async (req, res) => {
@@ -370,10 +459,11 @@ exports.sendGroupMessage = async (req, res) => {
 exports.listClassroomThreads = async (req, res) => {
   try {
     const where = { schoolCode: schoolCodeOf(req) };
-    const student = req.user.role === 'student' ? await getStudentProfile(req.user.id) : null;
-    if (student?.classId) where.classId = student.classId;
+    const studentCtx = req.user.role === 'student' ? await resolveStudentClassContext(req) : null;
+    const student = studentCtx?.student || null;
+    if (studentCtx?.classId) where.classId = studentCtx.classId;
 
-    const threads = await ClassroomThread.findAll({
+    let threads = await ClassroomThread.findAll({
       where,
       include: [
         { model: User, as: 'Creator', attributes: ['id','name','role','profileImage'] },
@@ -383,6 +473,10 @@ exports.listClassroomThreads = async (req, res) => {
       order: [['isPinned', 'DESC'], ['updatedAt', 'DESC']],
       limit: 80
     });
+
+    if (req.user.role === 'student' && !studentCtx?.classId) {
+      threads = threads.filter(t => threadMatchesStudentContext(t, studentCtx || {}));
+    }
 
     const json = threads.map(t => {
       const row = t.toJSON();
@@ -415,9 +509,14 @@ exports.createClassroomThread = async (req, res) => {
     const teacher = req.user.role === 'teacher' ? await getTeacherProfile(req.user.id) : null;
     const student = req.user.role === 'student' ? await getStudentProfile(req.user.id) : null;
     const approvalStatus = req.user.role === 'student' ? 'pending' : (metadata.approvalStatus || 'approved');
+    let targetClassId = classId || student?.classId || null;
+    if (!targetClassId && req.user.role === 'teacher') {
+      const allowedClassIds = await getTeacherAllowedClassIds(req.user.id);
+      targetClassId = allowedClassIds[0] || null;
+    }
     const thread = await ClassroomThread.create({
       schoolCode: schoolCodeOf(req),
-      classId: classId || student?.classId || null,
+      classId: targetClassId,
       subject,
       topic,
       content,
@@ -652,16 +751,48 @@ exports.pinThreadReply = async (req, res) => {
 
 exports.uploadAttachment = async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+    const uploadRoot = path.join(__dirname, '../../uploads/chat');
+    if (!fs.existsSync(uploadRoot)) fs.mkdirSync(uploadRoot, { recursive: true });
+
+    let file = req.file || null;
+    if (!file && req.files) {
+      file = req.files.file || req.files.attachment || req.files.upload || null;
+      if (Array.isArray(file)) file = file[0];
+    }
+    if (Array.isArray(req.files) && req.files.length) file = req.files[0];
+    if (!file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+
+    const originalName = file.originalname || file.name || file.filename || 'attachment';
+    const safeExt = path.extname(originalName).toLowerCase().replace(/[^.a-z0-9]/g, '') || '';
+    const safeBase = path.basename(originalName, safeExt).replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40) || 'attachment';
+    const filename = `chat-${req.user.id}-${Date.now()}-${Math.round(Math.random() * 1e9)}-${safeBase}${safeExt}`;
+    const dest = path.join(uploadRoot, filename);
+
+    if (file.mv) {
+      await file.mv(dest);
+    } else if (file.path && fs.existsSync(file.path)) {
+      fs.copyFileSync(file.path, dest);
+    } else if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+      fs.copyFileSync(file.tempFilePath, dest);
+    } else if (file.buffer) {
+      fs.writeFileSync(dest, file.buffer);
+    } else {
+      return res.status(400).json({ success: false, message: 'Attachment file could not be read' });
+    }
+
+    const relativeUrl = `/uploads/chat/${filename}`;
+    const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+    const safeProto = req.get('host')?.includes('onrender.com') ? 'https' : proto;
     res.status(201).json({ success: true, data: {
-      url: `/uploads/${req.file.filename}`,
-      name: req.file.originalname,
-      mimeType: req.file.mimetype,
-      size: req.file.size
+      url: relativeUrl,
+      secureUrl: `${safeProto}://${req.get('host')}${relativeUrl}`,
+      name: originalName,
+      mimeType: file.mimetype || file.type || 'application/octet-stream',
+      size: file.size || (fs.statSync(dest).size || 0)
     } });
   } catch (error) {
     console.error('uploadAttachment error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: error.message || 'Attachment upload failed' });
   }
 };
 
