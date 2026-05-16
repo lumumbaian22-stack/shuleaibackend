@@ -34,6 +34,7 @@ const searchRoutes = require('./routes/searchRoutes');
 const calendarRoutes = require('./routes/calendarRoutes');
 const timetableRoutes = require('./routes/timetableRoutes');
 const homeworkRoutes = require('./routes/homeworkRoutes');
+const publicHomeworkFileController = require('./controllers/homeworkController');
 const gamificationRoutes = require('./routes/gamificationRoutes');
 const chatV9Routes = require('./routes/chatV9Routes');
 const paymentRoutes = require('./routes/paymentRoutes');
@@ -101,6 +102,10 @@ app.use('/uploads', (req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   next();
 }, express.static(uploadDir));
+
+// Public homework file route used by dashboard View/Download buttons.
+// Kept outside /api so browser navigation/downloads do not fail when Authorization headers are unavailable.
+app.get('/homework-files/:filename', publicHomeworkFileController.serveHomeworkAttachment);
 
 // ============ TEST ENDPOINT ============
 app.get('/health', (req, res) => {

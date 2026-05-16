@@ -64,7 +64,7 @@ function homeworkFileApiUrl(req, rawUrl) {
   if (!filename || filename === '.' || filename === '..') return '';
   const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
   const safeProto = req.get('host')?.includes('onrender.com') ? 'https' : proto;
-  return `${safeProto}://${req.get('host')}/api/homework/files/${encodeURIComponent(filename)}`;
+  return `${safeProto}://${req.get('host')}/homework-files/${encodeURIComponent(filename)}`;
 }
 
 function safeHomeworkDownloadUrl(req, relativeUrl) {
@@ -96,7 +96,7 @@ exports.serveHomeworkAttachment = async (req, res) => {
 
     const originalName = filename.replace(/^homework-\d+-\d+-\d+-/, '') || filename;
     const disposition = req.query.download === '1' ? 'attachment' : 'inline';
-    res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self' data:; style-src 'self'; sandbox");
+    res.setHeader('Content-Security-Policy', "default-src 'self' blob: data:; img-src 'self' blob: data:; media-src 'self' blob: data:; object-src 'self' blob: data:; script-src 'none'; style-src 'self' 'unsafe-inline'");
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Content-Disposition', `${disposition}; filename="${originalName.replace(/"/g, '')}"`);
     return res.sendFile(fullPath);
