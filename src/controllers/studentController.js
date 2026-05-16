@@ -153,7 +153,16 @@ exports.getDashboard = async (req, res) => {
     res.json({
       success: true,
       data: {
-        student: req.user.getPublicProfile(),
+        student: {
+          ...req.user.getPublicProfile(),
+          studentId: student.id,
+          grade: student.grade,
+          classId: student.classId || classItem?.id || null,
+          curriculum: student.curriculum || curriculum,
+          academicStatus: student.academicStatus,
+          admissionNumber: student.admissionNumber,
+          assessmentNumber: student.assessmentNumber
+        },
         averageScore: parseFloat(avg),
         stats: {
             averageScore: parseFloat(avg),
@@ -227,6 +236,91 @@ exports.getMaterials = async (req, res) => {
   }
 };
 
+
+
+function normalizeAssessmentName(row) {
+  return row.assessmentName || row.assessmentType || 'Assessment';
+}
+
+function buildStudentRecommendations(records, filter = {}) {
+  const rows = (records || []).map(r => r.toJSON ? r.toJSON() : r).filter(Boolean);
+  const selected = rows.filter(row => {
+    const yearOk = !filter.year || String(row.year) === String(filter.year);
+    const termOk = !filter.term || String(row.term) === String(filter.term);
+    const assessmentValue = normalizeAssessmentName(row);
+    const assessmentOk = !filter.assessment || String(assessmentValue) === String(filter.assessment) || String(row.assessmentType) === String(filter.assessment);
+    return yearOk && termOk && assessmentOk;
+  });
+
+  if (!rows.length) {
+    return [{ type: 'empty', priority: 'info', title: 'No recommendations yet', detail: 'Recommendations will appear after your teacher publishes marks.' }];
+  }
+  if (!selected.length) {
+    return [{ type: 'empty-selection', priority: 'info', title: 'No data for this selection', detail: 'Choose a year, term, and assessment that already has published marks.' }];
+  }
+
+  const bySubject = {};
+  selected.forEach(row => {
+    const subject = row.subject || 'Subject';
+    if (!bySubject[subject]) bySubject[subject] = [];
+    bySubject[subject].push(Number(row.score || row.percentage || 0));
+  });
+  const subjectAverages = Object.entries(bySubject).map(([subject, scores]) => ({
+    subject,
+    average: Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length),
+    count: scores.length
+  })).sort((a, b) => a.average - b.average);
+
+  const items = [];
+  const weak = subjectAverages.filter(item => item.average < 60).slice(0, 2);
+  weak.forEach(item => {
+    const level = item.average < 40 ? 'foundation' : item.average < 50 ? 'urgent' : 'practice';
+    items.push({
+      type: 'weak-subject',
+      priority: item.average < 40 ? 'high' : 'medium',
+      subject: item.subject,
+      title: `Focus on ${item.subject}`,
+      detail: item.average < 40
+        ? `${item.subject} is at ${item.average}%. Start with teacher notes, basic examples, then 10 short practice questions.`
+        : `${item.subject} is at ${item.average}%. Revise the missed areas and do extra practice before the next assessment.`,
+      action: level === 'foundation' ? 'Revise basics + ask teacher for support' : 'Practice weak topics'
+    });
+  });
+
+  const strong = [...subjectAverages].reverse().find(item => item.average >= 70) || [...subjectAverages].reverse()[0];
+  if (strong) {
+    items.push({
+      type: 'strength',
+      priority: 'positive',
+      subject: strong.subject,
+      title: `Maintain ${strong.subject}`,
+      detail: `${strong.subject} is currently your strongest area at ${strong.average}%. Keep revising it while giving more time to weaker subjects.`,
+      action: 'Keep momentum'
+    });
+  }
+
+  const overallAverage = Math.round(selected.reduce((sum, row) => sum + Number(row.score || row.percentage || 0), 0) / selected.length);
+  if (overallAverage < 50) {
+    items.unshift({
+      type: 'overall-risk',
+      priority: 'high',
+      title: 'Create a daily revision routine',
+      detail: `Your average for this selection is ${overallAverage}%. Use 30 minutes daily: 15 minutes notes, 10 minutes questions, 5 minutes corrections.`,
+      action: 'Start daily revision'
+    });
+  } else if (overallAverage >= 75) {
+    items.push({
+      type: 'extension',
+      priority: 'positive',
+      title: 'Try advanced practice',
+      detail: `Your average is ${overallAverage}%. Use challenge questions to protect your performance and prepare for harder exams.`,
+      action: 'Attempt advanced questions'
+    });
+  }
+
+  return items.slice(0, 3);
+}
+
 // @desc    Get own grades (only published)
 // @route   GET /api/student/grades
 // @access  Private/Student
@@ -277,7 +371,43 @@ exports.getGrades = async (req, res) => {
         };
     });
 
-    res.json({ success: true, data: enriched });
+    const recommendations = buildStudentRecommendations(records, req.query || {});
+
+    res.json({ success: true, data: enriched, recommendations });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+// @desc    Get own grade recommendations from real published marks
+// @route   GET /api/student/recommendations
+// @access  Private/Student
+exports.getGradeRecommendations = async (req, res) => {
+  try {
+    const student = await Student.findOne({ where: { userId: req.user.id } });
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+
+    const records = await AcademicRecord.findAll({
+      where: {
+        studentId: student.id,
+        schoolCode: req.user.schoolCode,
+        [Op.or]: [{ isPublished: true }, { status: 'published' }]
+      },
+      order: [['year', 'DESC'], ['term', 'DESC'], ['date', 'DESC'], ['subject', 'ASC']]
+    });
+
+    res.json({
+      success: true,
+      data: buildStudentRecommendations(records, req.query || {}),
+      meta: {
+        studentId: student.id,
+        grade: student.grade,
+        year: req.query.year || null,
+        term: req.query.term || null,
+        assessment: req.query.assessment || null
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

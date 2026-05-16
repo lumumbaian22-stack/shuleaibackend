@@ -13,6 +13,7 @@ router.use(protect, authorize('student'));
 router.get('/dashboard', studentController.getDashboard);
 router.get('/materials', studentController.getMaterials);
 router.get('/grades', studentController.getGrades);
+router.get('/recommendations', studentController.getGradeRecommendations);
 router.get('/attendance', studentController.getAttendance);
 router.post('/message', studentController.sendMessage);
 router.get('/messages/:otherUserId', studentController.getMessages);
