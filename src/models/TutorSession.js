@@ -4,6 +4,7 @@ module.exports = (sequelize, DataTypes) => {
     schoolCode: { type: DataTypes.STRING, allowNull: true },
     studentId: { type: DataTypes.INTEGER, allowNull: false },
     userId: { type: DataTypes.INTEGER, allowNull: true },
+    title: { type: DataTypes.STRING, allowNull: false, defaultValue: 'AI Tutor Session' },
     grade: { type: DataTypes.STRING, allowNull: true },
     gradeLevel: { type: DataTypes.STRING, allowNull: true },
     level: { type: DataTypes.STRING, allowNull: true },

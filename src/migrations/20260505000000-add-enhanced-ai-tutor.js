@@ -47,6 +47,7 @@ module.exports = {
         schoolId: { type: Sequelize.STRING, allowNull: false, defaultValue: 'default-school' },
         studentId: { type: Sequelize.INTEGER, allowNull: false },
         userId: { type: Sequelize.INTEGER, allowNull: true },
+        title: { type: Sequelize.STRING, allowNull: false, defaultValue: 'AI Tutor Session' },
         grade: { type: Sequelize.STRING, allowNull: true },
         gradeLevel: { type: Sequelize.STRING, allowNull: true, defaultValue: 'Grade 5' },
         level: { type: Sequelize.STRING, allowNull: true },
@@ -66,6 +67,7 @@ module.exports = {
         sessionId: { type: Sequelize.INTEGER, allowNull: true },
         studentId: { type: Sequelize.INTEGER, allowNull: false },
         userId: { type: Sequelize.INTEGER, allowNull: true },
+        title: { type: Sequelize.STRING, allowNull: false, defaultValue: 'AI Tutor Session' },
         role: { type: Sequelize.STRING, allowNull: false },
         message: { type: Sequelize.TEXT, allowNull: false },
         subject: { type: Sequelize.STRING, allowNull: true },
@@ -116,6 +118,7 @@ module.exports = {
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'schoolId', { type: Sequelize.STRING, allowNull: false, defaultValue: 'default-school' });
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'studentId', { type: Sequelize.INTEGER, allowNull: false, defaultValue: 0 });
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'userId', { type: Sequelize.INTEGER, allowNull: true });
+    await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'title', { type: Sequelize.STRING, allowNull: false, defaultValue: 'AI Tutor Session' });
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'grade', { type: Sequelize.STRING, allowNull: true });
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'gradeLevel', { type: Sequelize.STRING, allowNull: true, defaultValue: 'Grade 5' });
     await ensureColumn(queryInterface, Sequelize, 'TutorSessions', 'level', { type: Sequelize.STRING, allowNull: true });

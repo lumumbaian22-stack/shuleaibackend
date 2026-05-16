@@ -18,6 +18,22 @@ async function resolveStudent(req, requestedStudentId) {
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
+function buildTutorSessionTitle(question, subject, topic, command) {
+  const clean = String(question || '').replace(/\s+/g, ' ').trim();
+  const safeSubject = String(subject || '').replace(/\s+/g, ' ').trim();
+  const safeTopic = String(topic || '').replace(/\s+/g, ' ').trim();
+  const safeCommand = String(command || '').replace(/\s+/g, ' ').trim();
+
+  if (safeTopic && safeSubject) return `${safeSubject}: ${safeTopic}`.slice(0, 90);
+  if (safeSubject) return `${safeSubject} Tutor Session`.slice(0, 90);
+  if (safeCommand && safeCommand !== 'ask') return `${safeCommand.charAt(0).toUpperCase() + safeCommand.slice(1)} Tutor Session`.slice(0, 90);
+  if (clean) {
+    const short = clean.length > 64 ? `${clean.slice(0, 61)}...` : clean;
+    return short || 'AI Tutor Session';
+  }
+  return 'AI Tutor Session';
+}
+
 exports.getTutorConfig = async (req, res) => {
   res.json({ success: true, data: { levels: LEVELS, commands: ['ask', 'explain', 'solve', 'quiz', 'summarize', 'revise', 'homework', 'weakness', 'plan'] } });
 };
@@ -44,18 +60,20 @@ exports.askTutor = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Daily tutor limit reached', data: { locked: true, dailyLimit } });
     }
 
+    const sessionTitle = buildTutorSessionTitle(question, realSubject, topic, command);
     const session = await TutorSession.create({
       schoolId,
       schoolCode: schoolId,
       studentId: realStudentId,
       userId: req.user.id,
+      title: sessionTitle,
       grade: realGrade,
       gradeLevel: realGrade,
       level: level.id || requestedLevel || 'upper_primary',
       subject: realSubject,
       mode: mode || command || 'ask',
       lastCommand: command || 'ask',
-      metadata: { source: 'student-dashboard', rawGrade }
+      metadata: { source: 'student-dashboard', rawGrade, title: sessionTitle }
     });
     await TutorMessage.create({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'student', message: question, subject: realSubject, topic, command, source: 'student' });
 

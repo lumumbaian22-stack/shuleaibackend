@@ -86,6 +86,7 @@ async function ensureTutorTables() {
       "schoolId" VARCHAR(255) NOT NULL,
       "studentId" INTEGER NOT NULL,
       "userId" INTEGER,
+      "title" VARCHAR(255) NOT NULL DEFAULT 'AI Tutor Session',
       "grade" VARCHAR(255),
       "level" VARCHAR(255),
       "subject" VARCHAR(255),
@@ -150,6 +151,7 @@ async function ensureTutorTables() {
   await addColumnIfMissing('TutorSessions', 'schoolId', "VARCHAR(255) NOT NULL DEFAULT 'default-school'");
   await addColumnIfMissing('TutorSessions', 'studentId', 'INTEGER NOT NULL DEFAULT 0');
   await addColumnIfMissing('TutorSessions', 'userId', 'INTEGER');
+  await addColumnIfMissing('TutorSessions', 'title', "VARCHAR(255) NOT NULL DEFAULT 'AI Tutor Session'");
   await addColumnIfMissing('TutorSessions', 'grade', 'VARCHAR(255)');
   await addColumnIfMissing('TutorSessions', 'level', 'VARCHAR(255)');
   await addColumnIfMissing('TutorSessions', 'subject', 'VARCHAR(255)');
