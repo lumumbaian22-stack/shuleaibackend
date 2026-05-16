@@ -43,6 +43,7 @@ router.put('/classroom/threads/:threadId', chat.updateClassroomThread);
 router.post('/classroom/threads/:threadId/replies', chat.replyToThread);
 
 router.post('/classroom/replies/:replyId/award', chat.awardThreadReply);
+router.post('/classroom/replies/:replyId/pin', chat.pinThreadReply);
 router.post('/teacher/messages/:messageId/award', chat.awardChatMessage);
 router.post('/teacher/messages/:messageId/react', chat.reactToMessage);
 router.post('/attachments', attachmentUpload.single('file'), chat.uploadAttachment);

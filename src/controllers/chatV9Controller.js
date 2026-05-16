@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
 const {
   User, Teacher, Student, Class,
-  Department, DepartmentMember,
+  Department, DepartmentMember, TeacherSubjectAssignment,
   ChatGroup, ChatGroupMember, ChatMessage,
   ClassroomThread, ThreadReply, AchievementEvent
 } = require('../models');
@@ -64,6 +64,61 @@ async function buildStudyMeta(req, threads, student) {
 
 function canManageSchool(req) {
   return ['admin', 'super_admin'].includes(req.user?.role);
+}
+
+function canManageChatGroup(req) {
+  return ['teacher', 'admin', 'super_admin'].includes(req.user?.role);
+}
+
+async function getTeacherAllowedClassIds(userId) {
+  const teacher = await getTeacherProfile(userId);
+  if (!teacher) return [];
+  const ids = new Set();
+  if (teacher.classId) ids.add(Number(teacher.classId));
+  const assignments = await TeacherSubjectAssignment.findAll({ where: { teacherId: teacher.id }, attributes: ['classId'] }).catch(() => []);
+  for (const item of assignments || []) {
+    if (item.classId) ids.add(Number(item.classId));
+  }
+  return [...ids].filter(Boolean);
+}
+
+async function hydrateChatMessage(message) {
+  if (!message) return null;
+  return ChatMessage.findByPk(message.id, {
+    include: [{ model: User, as: 'Sender', attributes: ['id','name','role','profileImage'] }]
+  });
+}
+
+async function ensureChatGroupManager(req, groupId) {
+  const member = await ChatGroupMember.findOne({ where: { groupId, userId: req.user.id } });
+  if (canManageSchool(req)) return member || true;
+  if (req.user.role !== 'teacher') return null;
+  return ['owner','admin'].includes(member?.role) ? member : null;
+}
+
+async function ensureTeacherCanAddUsers(req, userIds) {
+  if (canManageSchool(req)) return true;
+  if (req.user.role !== 'teacher') return false;
+  const requestedIds = [...new Set((userIds || []).map(Number).filter(Boolean))];
+  if (!requestedIds.length) return true;
+  const users = await User.findAll({ where: { id: { [Op.in]: requestedIds }, schoolCode: schoolCodeOf(req), isActive: true }, attributes: ['id','role'] });
+  const allowedClassIds = await getTeacherAllowedClassIds(req.user.id);
+  for (const user of users) {
+    if (user.role === 'teacher') continue;
+    if (user.role !== 'student') return false;
+    if (!allowedClassIds.length) return false;
+    const student = await getStudentProfile(user.id);
+    if (!student?.classId || !allowedClassIds.includes(Number(student.classId))) return false;
+  }
+  return true;
+}
+
+async function ensureUserMayUseThread(req, thread) {
+  if (!thread || thread.schoolCode !== schoolCodeOf(req)) return false;
+  if (['teacher','admin','super_admin'].includes(req.user.role)) return true;
+  if (req.user.role !== 'student') return false;
+  const student = await getStudentProfile(req.user.id);
+  return Boolean(student?.classId && thread.classId && Number(student.classId) === Number(thread.classId));
 }
 
 async function ensureStaffRoom(req) {
@@ -179,15 +234,18 @@ exports.listTeacherGroups = async (req, res) => {
 
 exports.createTeacherGroup = async (req, res) => {
   try {
-    if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Not allowed' });
+    if (!canManageChatGroup(req)) return res.status(403).json({ success: false, message: 'Only teachers/admins can create groups' });
     const { name, description, type = 'project', memberUserIds = [] } = req.body;
     if (!name) return res.status(400).json({ success: false, message: 'Group name is required' });
 
     const group = await ChatGroup.create({ schoolCode: schoolCodeOf(req), name, description, type, createdBy: req.user.id });
     await ChatGroupMember.create({ groupId: group.id, userId: req.user.id, role: 'owner' });
+    if (!(await ensureTeacherCanAddUsers(req, memberUserIds))) {
+      return res.status(403).json({ success: false, message: 'Teachers can only add teachers and students from their assigned class/subject' });
+    }
     for (const userId of memberUserIds) {
-      const user = await User.findOne({ where: { id: userId, schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student','parent','admin'] } } });
-      if (user) await ChatGroupMember.findOrCreate({ where: { groupId: group.id, userId }, defaults: { role: user.role === 'teacher' ? 'member' : user.role } });
+      const user = await User.findOne({ where: { id: userId, schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student'] } } });
+      if (user) await ChatGroupMember.findOrCreate({ where: { groupId: group.id, userId }, defaults: { role: user.role === 'teacher' ? 'member' : 'student' } });
     }
     res.status(201).json({ success: true, data: group });
   } catch (error) {
@@ -250,7 +308,8 @@ exports.sendDirectMessage = async (req, res) => {
       messageType: attachmentUrl ? 'file' : 'text',
       metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
     });
-    res.status(201).json({ success: true, data: message });
+    const hydrated = await hydrateChatMessage(message);
+    res.status(201).json({ success: true, data: hydrated || message });
   } catch (error) {
     console.error('sendDirectMessage error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -300,7 +359,8 @@ exports.sendGroupMessage = async (req, res) => {
       messageType: attachmentUrl ? 'file' : 'text',
       metadata: attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}
     });
-    res.status(201).json({ success: true, data: message });
+    const hydrated = await hydrateChatMessage(message);
+    res.status(201).json({ success: true, data: hydrated || message });
   } catch (error) {
     console.error('sendGroupMessage error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -404,11 +464,13 @@ exports.replyToThread = async (req, res) => {
 
     const thread = await ClassroomThread.findOne({ where: { id: threadId, schoolCode: schoolCodeOf(req), isClosed: false } });
     if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
+    if (!(await ensureUserMayUseThread(req, thread))) return res.status(403).json({ success: false, message: 'Not allowed in this study room' });
 
     const reply = await ThreadReply.create({ threadId, userId: req.user.id, parentReplyId: parentReplyId || null, content, metadata: attachmentUrl ? { attachmentUrl, attachmentName: attachment?.name, attachmentType: attachment?.mimeType, attachmentSize: attachment?.size } : {} });
     thread.updatedAt = new Date();
     await thread.save();
-    res.status(201).json({ success: true, data: reply });
+    const hydrated = await ThreadReply.findByPk(reply.id, { include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }] });
+    res.status(201).json({ success: true, data: hydrated || reply });
   } catch (error) {
     console.error('replyToThread error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -512,8 +574,33 @@ exports.listGroupMembers = async (req, res) => {
 
 exports.listAvailableMembers = async (req, res) => {
   try {
-    const users = await User.findAll({ where: { schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student','parent','admin'] } }, attributes: ['id','name','email','role','profileImage'], order: [['role','ASC'], ['name','ASC']] });
-    res.json({ success: true, data: users });
+    const where = { schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student'] } };
+    let users = await User.findAll({ where, attributes: ['id','name','email','role','profileImage'], include: [{ model: Student, required: false, attributes: ['id','classId','grade'] }, { model: Teacher, required: false, attributes: ['id','classId','subjects'] }], order: [['role','ASC'], ['name','ASC']] });
+
+    if (req.user.role === 'teacher' && !canManageSchool(req)) {
+      const allowedClassIds = await getTeacherAllowedClassIds(req.user.id);
+      users = users.filter(u => {
+        if (Number(u.id) === Number(req.user.id)) return true;
+        if (u.role === 'teacher') return true;
+        const classId = u.Student?.classId;
+        return Boolean(classId && allowedClassIds.includes(Number(classId)));
+      });
+    }
+
+    const classIds = [...new Set(users.map(u => u.Student?.classId || u.Teacher?.classId).filter(Boolean).map(Number))];
+    const classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds }, schoolCode: schoolCodeOf(req) }, attributes: ['id','name','grade','stream'] }) : [];
+    const classMap = new Map(classes.map(c => [Number(c.id), c]));
+
+    res.json({ success: true, data: users.map(u => {
+      const row = u.toJSON();
+      const classId = row.Student?.classId || row.Teacher?.classId || null;
+      const c = classId ? classMap.get(Number(classId)) : null;
+      row.classId = classId;
+      row.className = c?.name || c?.grade || row.Student?.grade || '';
+      delete row.Student;
+      delete row.Teacher;
+      return row;
+    }) });
   } catch (error) {
     console.error('listAvailableMembers error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -525,11 +612,14 @@ exports.updateGroupMembers = async (req, res) => {
     const groupId = Number(req.params.groupId);
     const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
     if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
-    const member = await ChatGroupMember.findOne({ where: { groupId, userId: req.user.id } });
-    if (!canManageSchool(req) && !['owner','admin'].includes(member?.role)) return res.status(403).json({ success: false, message: 'Only group owners/admins can manage members' });
+    const manager = await ensureChatGroupManager(req, groupId);
+    if (!manager) return res.status(403).json({ success: false, message: 'Only teacher/admin group managers can manage members' });
     const memberUserIds = Array.isArray(req.body?.memberUserIds) ? req.body.memberUserIds.map(Number).filter(Boolean) : [];
     const keep = new Set([Number(group.createdBy), Number(req.user.id), ...memberUserIds]);
-    const users = await User.findAll({ where: { id: { [Op.in]: [...keep] }, schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student','parent','admin'] } }, attributes: ['id','role'] });
+    if (!(await ensureTeacherCanAddUsers(req, [...keep]))) {
+      return res.status(403).json({ success: false, message: 'Teachers can only manage teachers and students from their assigned class/subject' });
+    }
+    const users = await User.findAll({ where: { id: { [Op.in]: [...keep] }, schoolCode: schoolCodeOf(req), isActive: true, role: { [Op.in]: ['teacher','student'] } }, attributes: ['id','role'] });
     await ChatGroupMember.destroy({ where: { groupId, userId: { [Op.notIn]: users.map(u => u.id) } } });
     for (const u of users) {
       await ChatGroupMember.findOrCreate({ where: { groupId, userId: u.id }, defaults: { role: u.id === group.createdBy ? 'owner' : u.role } });
@@ -538,6 +628,24 @@ exports.updateGroupMembers = async (req, res) => {
     res.json({ success: true, data: members });
   } catch (error) {
     console.error('updateGroupMembers error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+exports.pinThreadReply = async (req, res) => {
+  try {
+    if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only teachers/admins can pin replies' });
+    const reply = await ThreadReply.findByPk(req.params.replyId, { include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }] });
+    if (!reply) return res.status(404).json({ success: false, message: 'Reply not found' });
+    const thread = await ClassroomThread.findOne({ where: { id: reply.threadId, schoolCode: schoolCodeOf(req) } });
+    if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
+    const metadata = reply.metadata || {};
+    reply.metadata = { ...metadata, isPinned: req.body?.isPinned === undefined ? !metadata.isPinned : Boolean(req.body.isPinned), pinnedBy: req.user.id, pinnedAt: new Date().toISOString() };
+    await reply.save();
+    res.json({ success: true, data: reply });
+  } catch (error) {
+    console.error('pinThreadReply error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
