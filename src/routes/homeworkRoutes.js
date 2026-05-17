@@ -8,6 +8,7 @@ router.get('/files/:filename', homeworkCtrl.serveHomeworkAttachment);
 
 router.use(protect);
 router.post('/attachments', authorize('teacher'), homeworkCtrl.uploadHomeworkAttachment);
+router.post('/submission-attachments', authorize('student'), homeworkCtrl.uploadHomeworkSubmission);
 router.post('/assign', authorize('teacher'), homeworkCtrl.createAssignment);
 router.get('/teacher', authorize('teacher'), homeworkCtrl.getTeacherAssignments);
 router.get('/teacher/:taskId', authorize('teacher'), homeworkCtrl.getTeacherAssignmentDetails);
