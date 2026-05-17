@@ -19,7 +19,11 @@ module.exports = (sequelize, DataTypes) => {
     className: { type: DataTypes.STRING, allowNull: true },
     dueDate: { type: DataTypes.DATE, allowNull: true },
     attachments: { type: DataTypes.JSONB, defaultValue: [] },
-    teacherNote: { type: DataTypes.TEXT, allowNull: true }
+    teacherNote: { type: DataTypes.TEXT, allowNull: true },
+    studyDiscussionEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },
+    studyThreadId: { type: DataTypes.INTEGER, allowNull: true },
+    studyDiscussionTitle: { type: DataTypes.STRING, allowNull: true },
+    studyDiscussionSettings: { type: DataTypes.JSONB, defaultValue: {} }
   }, { timestamps: true });
   return HomeTask;
 };

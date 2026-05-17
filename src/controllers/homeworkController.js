@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
-const { HomeTask, HomeTaskAssignment, Student, Teacher, Class, User, TeacherSubjectAssignment } = require('../models');
+const { HomeTask, HomeTaskAssignment, Student, Teacher, Class, User, TeacherSubjectAssignment, ClassroomThread } = require('../models');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 function cleanString(value, fallback = '') {
@@ -281,6 +281,67 @@ async function resolveClass({ classId, className, grade, schoolCode }) {
   return classItem;
 }
 
+
+
+function parseBool(value) {
+  if (value === true || value === 1) return true;
+  const s = String(value ?? '').trim().toLowerCase();
+  return ['true', '1', 'yes', 'on', 'open'].includes(s);
+}
+
+async function ensureHomeworkStudyThread(req, task, options = {}) {
+  if (!task || !ClassroomThread) return null;
+  const existingId = Number(task.studyThreadId || 0);
+  if (existingId) {
+    const existing = await ClassroomThread.findOne({ where: { id: existingId, schoolCode: req.user.schoolCode } }).catch(() => null);
+    if (existing) return existing;
+  }
+
+  const discussionTitle = cleanString(
+    options.discussionTitle || task.studyDiscussionTitle || `${task.title} Discussion`,
+    `${task.title || 'Homework'} Discussion`
+  );
+  const teacher = await getTeacherFromUser(req.user.id).catch(() => null);
+  const thread = await ClassroomThread.create({
+    schoolCode: req.user.schoolCode,
+    classId: task.classId || null,
+    subject: task.subject || 'Homework',
+    topic: discussionTitle,
+    content: cleanString(
+      options.discussionContent || `Use this study discussion to ask questions, share ideas, and get teacher guidance for: ${task.title}`,
+      `Homework discussion for ${task.title || 'assignment'}`
+    ),
+    teacherId: teacher?.id || task.createdBy || null,
+    createdBy: req.user.id,
+    isPinned: false,
+    isClosed: false,
+    metadata: {
+      source: 'homework',
+      homeworkTaskId: task.id,
+      homeworkTitle: task.title,
+      className: task.className || task.gradeLevel || null,
+      grade: task.gradeLevel || task.className || null,
+      approvalRequired: true,
+      approvalStatus: 'approved',
+      createdByRole: req.user.role,
+      allowStudentReplies: options.allowStudentReplies !== false,
+      teacherModerationOnly: Boolean(options.teacherModerationOnly),
+      rewardParticipation: Boolean(options.rewardParticipation)
+    }
+  });
+
+  task.studyDiscussionEnabled = true;
+  task.studyThreadId = thread.id;
+  task.studyDiscussionTitle = discussionTitle;
+  task.studyDiscussionSettings = {
+    allowStudentReplies: options.allowStudentReplies !== false,
+    teacherModerationOnly: Boolean(options.teacherModerationOnly),
+    rewardParticipation: Boolean(options.rewardParticipation)
+  };
+  await task.save();
+  return thread;
+}
+
 exports.uploadHomeworkAttachment = async (req, res) => {
   try {
     await ensureRuntimeSchema().catch(() => null);
@@ -350,7 +411,13 @@ exports.createAssignment = async (req, res) => {
       points,
       difficulty,
       attachments,
-      teacherNote
+      teacherNote,
+      openStudyDiscussion,
+      createStudyDiscussion,
+      discussionTitle,
+      allowStudentReplies,
+      teacherModerationOnly,
+      rewardParticipation
     } = req.body || {};
 
     const teacher = await getTeacherFromUser(req.user.id);
@@ -392,7 +459,15 @@ exports.createAssignment = async (req, res) => {
       dueDate: dueDate || null,
       materials: '',
       attachments: normalizeAttachments(attachments),
-      teacherNote: cleanString(teacherNote || '')
+      teacherNote: cleanString(teacherNote || ''),
+      studyDiscussionEnabled: parseBool(openStudyDiscussion) || parseBool(createStudyDiscussion),
+      studyThreadId: null,
+      studyDiscussionTitle: cleanString(discussionTitle || ''),
+      studyDiscussionSettings: {
+        allowStudentReplies: allowStudentReplies !== false,
+        teacherModerationOnly: Boolean(teacherModerationOnly),
+        rewardParticipation: parseBool(rewardParticipation)
+      }
     });
 
     const assignments = targetStudentIds.map(sid => ({
@@ -407,12 +482,16 @@ exports.createAssignment = async (req, res) => {
 
     const repairedStudents = await ensureHomeworkAssignmentsForTask(task, req.user.schoolCode);
     const assignedCount = await HomeTaskAssignment.count({ where: { taskId: task.id } });
+    let studyThread = null;
+    if (parseBool(openStudyDiscussion) || parseBool(createStudyDiscussion)) {
+      studyThread = await ensureHomeworkStudyThread(req, task, { discussionTitle, allowStudentReplies: allowStudentReplies !== false, teacherModerationOnly, rewardParticipation: parseBool(rewardParticipation) });
+    }
 
     res.status(201).json({
       success: true,
       message: assignedCount ? 'Homework assigned successfully' : 'Homework saved, but no matching students were found for the selected class',
       data: {
-        task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments) },
+        task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments), studyThread },
         assignedCount,
         repairedCount: repairedStudents.length,
         taskId: task.id,
@@ -423,6 +502,29 @@ exports.createAssignment = async (req, res) => {
   } catch (error) {
     console.error('Create homework error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+
+exports.createHomeworkDiscussion = async (req, res) => {
+  try {
+    await ensureRuntimeSchema().catch(() => null);
+    const teacher = await getTeacherFromUser(req.user.id);
+    if (!teacher) return res.status(403).json({ success: false, message: 'Teacher account not found' });
+    const task = await HomeTask.findOne({
+      where: {
+        id: Number(req.params.taskId),
+        [Op.or]: [{ createdBy: teacher.id }, { createdByUserId: req.user.id }],
+        schoolCode: req.user.schoolCode
+      }
+    });
+    if (!task) return res.status(404).json({ success: false, message: 'Homework not found' });
+    const thread = await ensureHomeworkStudyThread(req, task, req.body || {});
+    res.status(201).json({ success: true, data: { task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments) }, thread } });
+  } catch (error) {
+    console.error('Create homework discussion error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Could not create homework discussion' });
   }
 };
 
@@ -731,6 +833,10 @@ exports.getStudentAssignments = async (req, res) => {
           attachments: normalizeAttachmentUrlsForResponse(req, task.attachments),
           teacherNote: task.teacherNote || '',
           teacherName: task.Teacher?.User?.name || 'Not assigned',
+          studyDiscussionEnabled: Boolean(task.studyDiscussionEnabled),
+          studyThreadId: task.studyThreadId || null,
+          studyDiscussionTitle: task.studyDiscussionTitle || '',
+          studyDiscussionSettings: task.studyDiscussionSettings || {},
           createdAt: task.createdAt
         }
       };
@@ -747,7 +853,7 @@ exports.submitAssignment = async (req, res) => {
   try {
     await ensureRuntimeSchema().catch(() => null);
     const { assignmentId } = req.params;
-    const { fileUrl, comment, typedAnswer, attachments } = req.body || {};
+    const { fileUrl, comment } = req.body;
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(403).json({ success: false, message: 'Not a student' });
     const assignment = await HomeTaskAssignment.findOne({ where: { id: assignmentId, studentId: student.id } });
@@ -757,22 +863,12 @@ exports.submitAssignment = async (req, res) => {
     const submittedAt = new Date();
     const due = task?.dueDate ? new Date(task.dueDate) : null;
     const submittedLate = Boolean(due && submittedAt > due);
-    const normalizedSubmissionFiles = normalizeAttachmentUrlsForResponse(req, normalizeAttachments(attachments || []));
-    const firstFileUrl = fileUrl || normalizedSubmissionFiles[0]?.url || '';
     await assignment.update({
       status: 'submitted',
       completedAt: submittedAt,
-      studentFeedback: {
-        ...(assignment.studentFeedback || {}),
-        fileUrl: firstFileUrl,
-        attachments: normalizedSubmissionFiles,
-        comment: cleanString(comment, ''),
-        typedAnswer: cleanString(typedAnswer, ''),
-        submittedLate,
-        submittedAt: submittedAt.toISOString()
-      }
+      studentFeedback: { fileUrl, comment, submittedLate }
     });
-    res.json({ success: true, data: { submittedLate, displayStatus: submittedLate ? 'Submitted late' : 'Submitted', submittedAt, attachments: normalizedSubmissionFiles } });
+    res.json({ success: true, data: { submittedLate, displayStatus: submittedLate ? 'Submitted late' : 'Submitted' } });
   } catch (error) {
     console.error('Submit assignment error:', error);
     res.status(500).json({ success: false, message: error.message });

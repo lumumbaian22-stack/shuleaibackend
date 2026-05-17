@@ -7,11 +7,12 @@ const homeworkCtrl = require('../controllers/homeworkController');
 router.get('/files/:filename', homeworkCtrl.serveHomeworkAttachment);
 
 router.use(protect);
-router.post('/attachments', authorize('teacher', 'student'), homeworkCtrl.uploadHomeworkAttachment);
+router.post('/attachments', authorize('teacher'), homeworkCtrl.uploadHomeworkAttachment);
 router.post('/assign', authorize('teacher'), homeworkCtrl.createAssignment);
 router.get('/teacher', authorize('teacher'), homeworkCtrl.getTeacherAssignments);
 router.get('/teacher/:taskId', authorize('teacher'), homeworkCtrl.getTeacherAssignmentDetails);
 router.put('/teacher/:taskId', authorize('teacher'), homeworkCtrl.updateTeacherAssignment);
+router.post('/teacher/:taskId/discussion', authorize('teacher'), homeworkCtrl.createHomeworkDiscussion);
 router.post('/teacher/submissions/:assignmentId/review', authorize('teacher'), homeworkCtrl.reviewSubmission);
 router.get('/student', authorize('student'), homeworkCtrl.getStudentAssignments);
 router.post('/submit/:assignmentId', authorize('student'), homeworkCtrl.submitAssignment);

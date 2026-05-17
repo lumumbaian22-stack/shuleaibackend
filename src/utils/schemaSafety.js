@@ -365,6 +365,10 @@ async function ensureRuntimeSchema() {
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "dueDate" TIMESTAMP WITH TIME ZONE').catch(() => null);
   await sequelize.query("ALTER TABLE IF EXISTS \"HomeTasks\" ADD COLUMN IF NOT EXISTS \"attachments\" JSONB DEFAULT '[]'::jsonb").catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "teacherNote" TEXT').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "studyDiscussionEnabled" BOOLEAN DEFAULT false').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "studyThreadId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "HomeTasks" ADD COLUMN IF NOT EXISTS "studyDiscussionTitle" VARCHAR(255)').catch(() => null);
+  await sequelize.query("ALTER TABLE IF EXISTS \"HomeTasks\" ADD COLUMN IF NOT EXISTS \"studyDiscussionSettings\" JSONB DEFAULT '{}'::jsonb").catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTaskAssignments" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTaskAssignments" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
 
