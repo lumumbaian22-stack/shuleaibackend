@@ -747,7 +747,7 @@ exports.submitAssignment = async (req, res) => {
   try {
     await ensureRuntimeSchema().catch(() => null);
     const { assignmentId } = req.params;
-    const { fileUrl, comment } = req.body;
+    const { fileUrl, comment, typedAnswer, attachments } = req.body || {};
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(403).json({ success: false, message: 'Not a student' });
     const assignment = await HomeTaskAssignment.findOne({ where: { id: assignmentId, studentId: student.id } });
@@ -757,12 +757,22 @@ exports.submitAssignment = async (req, res) => {
     const submittedAt = new Date();
     const due = task?.dueDate ? new Date(task.dueDate) : null;
     const submittedLate = Boolean(due && submittedAt > due);
+    const normalizedSubmissionFiles = normalizeAttachmentUrlsForResponse(req, normalizeAttachments(attachments || []));
+    const firstFileUrl = fileUrl || normalizedSubmissionFiles[0]?.url || '';
     await assignment.update({
       status: 'submitted',
       completedAt: submittedAt,
-      studentFeedback: { fileUrl, comment, submittedLate }
+      studentFeedback: {
+        ...(assignment.studentFeedback || {}),
+        fileUrl: firstFileUrl,
+        attachments: normalizedSubmissionFiles,
+        comment: cleanString(comment, ''),
+        typedAnswer: cleanString(typedAnswer, ''),
+        submittedLate,
+        submittedAt: submittedAt.toISOString()
+      }
     });
-    res.json({ success: true, data: { submittedLate, displayStatus: submittedLate ? 'Submitted late' : 'Submitted' } });
+    res.json({ success: true, data: { submittedLate, displayStatus: submittedLate ? 'Submitted late' : 'Submitted', submittedAt, attachments: normalizedSubmissionFiles } });
   } catch (error) {
     console.error('Submit assignment error:', error);
     res.status(500).json({ success: false, message: error.message });

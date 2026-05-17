@@ -7,7 +7,7 @@ const homeworkCtrl = require('../controllers/homeworkController');
 router.get('/files/:filename', homeworkCtrl.serveHomeworkAttachment);
 
 router.use(protect);
-router.post('/attachments', authorize('teacher'), homeworkCtrl.uploadHomeworkAttachment);
+router.post('/attachments', authorize('teacher', 'student'), homeworkCtrl.uploadHomeworkAttachment);
 router.post('/assign', authorize('teacher'), homeworkCtrl.createAssignment);
 router.get('/teacher', authorize('teacher'), homeworkCtrl.getTeacherAssignments);
 router.get('/teacher/:taskId', authorize('teacher'), homeworkCtrl.getTeacherAssignmentDetails);
