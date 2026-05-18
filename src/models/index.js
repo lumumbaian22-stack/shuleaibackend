@@ -138,7 +138,21 @@ const StudentParent = sequelize.define('StudentParent', {
     type: DataTypes.INTEGER,
     references: { model: 'Parents', key: 'id' },
     onDelete: 'CASCADE'
+  },
+  relationship: {
+    type: DataTypes.STRING,
+    defaultValue: 'guardian'
+  },
+  linkedByElimuId: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
+  },
+  linkedAt: {
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW
   }
+}, {
+  indexes: [{ unique: true, fields: ['studentId', 'parentId'] }]
 });
 
 Student.belongsToMany(Parent, {
@@ -402,5 +416,6 @@ module.exports = {
     PlatformPaymentSetting,
     Subscription,
     SubscriptionPayment,
-    FeatureLock
+    FeatureLock,
+    StudentParent
 };

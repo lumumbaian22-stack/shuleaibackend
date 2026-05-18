@@ -1,4 +1,4 @@
-const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, sequelize } = require('../models');
+const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, Class, sequelize } = require('../models');
 const { createAlert } = require('../services/notificationService');
 function rolloutMoneyDisabled(res) {
   return res.status(503).json({ success: false, message: 'Real money collection is disabled in this national rollout school-operations build. Fee/payment records can be enabled after Daraja live audit.' });
@@ -6,6 +6,50 @@ function rolloutMoneyDisabled(res) {
 
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
+
+
+async function countLinkedParents(studentId) {
+  const rows = await sequelize.query(
+    'SELECT COUNT(DISTINCT "parentId")::int AS count FROM "StudentParents" WHERE "studentId" = :studentId',
+    { replacements: { studentId }, type: sequelize.QueryTypes.SELECT }
+  );
+  return Number(rows?.[0]?.count || 0);
+}
+
+async function parentHasStudent(parentId, studentId) {
+  const rows = await sequelize.query(
+    'SELECT 1 FROM "StudentParents" WHERE "parentId" = :parentId AND "studentId" = :studentId LIMIT 1',
+    { replacements: { parentId, studentId }, type: sequelize.QueryTypes.SELECT }
+  );
+  return rows.length > 0;
+}
+
+async function enrichLinkedChildren(children) {
+  const classIds = [...new Set(children.map(c => c.classId).filter(Boolean))];
+  const classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds } } }) : [];
+  const classMap = new Map(classes.map(c => [String(c.id), c]));
+
+  const schoolCodes = [...new Set(children.map(c => c.User?.schoolCode).filter(Boolean))];
+  const schools = schoolCodes.length ? await School.findAll({ where: { schoolId: { [Op.in]: schoolCodes } } }) : [];
+  const schoolMap = new Map(schools.map(s => [String(s.schoolId), s]));
+
+  return children.map(child => {
+    const raw = child.toJSON ? child.toJSON() : child;
+    const classItem = raw.classId ? classMap.get(String(raw.classId)) : null;
+    const schoolCode = raw.User?.schoolCode || raw.schoolCode || null;
+    const school = schoolCode ? schoolMap.get(String(schoolCode)) : null;
+    return {
+      ...raw,
+      name: raw.User?.name || raw.name || 'Student',
+      className: classItem?.name || raw.grade || 'Not Assigned',
+      classId: raw.classId || null,
+      schoolCode,
+      schoolName: school?.name || raw.User?.School?.name || schoolCode || 'School',
+      schoolLogo: school?.logo || school?.settings?.logo || null,
+      curriculum: raw.curriculum || school?.system || 'cbc'
+    };
+  });
+}
 
 // @desc    Get parent's children
 // @route   GET /api/parent/children
@@ -18,13 +62,62 @@ exports.getChildren = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Parent profile not found' });
     }
 
-    const children = await parent.getStudents({ 
-      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }] 
+    const children = await parent.getStudents({
+      attributes: { include: ['classId'] },
+      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode', 'profileImage'] }],
+      order: [[User, 'name', 'ASC']]
     });
-    
-    res.json({ success: true, data: children });
+
+    const enrichedChildren = await enrichLinkedChildren(children);
+    res.json({ success: true, data: enrichedChildren });
   } catch (error) {
     console.error('Get children error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Link an extra child to a parent using that child's Elimu ID only
+// @route   POST /api/parent/children/link
+// @access  Private/Parent
+exports.linkChildByElimuId = async (req, res) => {
+  try {
+    await ensureRuntimeSchema().catch(() => null);
+    const rawElimuId = String(req.body?.elimuid || req.body?.elimuId || '').trim();
+    if (!rawElimuId) {
+      return res.status(400).json({ success: false, message: 'Please enter the child Elimu ID' });
+    }
+
+    const parent = await Parent.findOne({ where: { userId: req.user.id } });
+    if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
+
+    const student = await Student.findOne({
+      where: sequelize.where(sequelize.fn('LOWER', sequelize.col('elimuid')), rawElimuId.toLowerCase()),
+      attributes: { include: ['classId'] },
+      include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }]
+    });
+
+    // Do not expose other learners through search-like responses.
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Unable to link child with this Elimu ID' });
+    }
+
+    const alreadyLinked = await parentHasStudent(parent.id, student.id);
+    if (alreadyLinked) {
+      const children = await enrichLinkedChildren([student]);
+      return res.json({ success: true, message: 'This child is already linked to your account', data: children[0] });
+    }
+
+    const linkedParentCount = await countLinkedParents(student.id);
+    if (linkedParentCount >= 2) {
+      return res.status(403).json({ success: false, message: 'This Elimu ID already has the maximum two parent/guardian accounts linked' });
+    }
+
+    await parent.addStudent(student, { through: { relationship: parent.relationship || 'guardian' } });
+    const children = await enrichLinkedChildren([student]);
+
+    res.status(201).json({ success: true, message: 'Child linked successfully', data: children[0] });
+  } catch (error) {
+    console.error('Link child by Elimu ID error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -40,6 +133,7 @@ exports.getChildSummary = async (req, res) => {
     if (!parent) return res.status(404).json({ success: false, message: 'Parent not found' });
 
     const student = await Student.findByPk(studentId, { 
+      attributes: { include: ['classId'] },
       include: [
         { model: User },
         { model: Fee, where: { status: { [Op.ne]: 'paid' } }, required: false }
@@ -77,14 +171,14 @@ exports.getChildSummary = async (req, res) => {
 
     // Get school info – include curriculum and level so frontend can compute correct grades
     const school = await School.findOne({ 
-      where: { schoolId: req.user.schoolCode },
+      where: { schoolId: student.User?.schoolCode || req.user.schoolCode },
       attributes: ['name', 'bankDetails', 'contact', 'schoolId', 'system', 'settings']
     });
 
     res.json({
       success: true,
       data: {
-        student: student.User.getPublicProfile(),
+        student: { ...student.User.getPublicProfile(), studentId: student.id, elimuid: student.elimuid, grade: student.grade, classId: student.classId, curriculum: student.curriculum, schoolCode: student.User?.schoolCode },
         classTeacher: classTeacher ? {
           id: classTeacher.id,
           name: classTeacher.User.name,
@@ -129,6 +223,7 @@ exports.reportAbsence = async (req, res) => {
 
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId, { 
+      attributes: { include: ['classId'] },
       include: [{ model: User, attributes: ['id', 'name'] }] 
     });
     
@@ -244,6 +339,7 @@ exports.makePayment = async (req, res) => {
     
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId, { 
+      attributes: { include: ['classId'] },
       include: [{ model: User, attributes: ['name'] }] 
     });
     
@@ -445,6 +541,7 @@ exports.sendMessage = async (req, res) => {
     
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId, { 
+      attributes: { include: ['classId'] },
       include: [{ model: User, attributes: ['id', 'name'] }] 
     });
     

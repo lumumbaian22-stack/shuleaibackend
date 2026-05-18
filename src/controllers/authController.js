@@ -335,8 +335,20 @@ const authController = {
         relationship: 'guardian'
       });
 
-      // Link parent to student
-      await parent.addStudent(student);
+      // Link parent to student using original Elimu ID logic.
+      // A learner can only be linked to a maximum of two parent/guardian accounts.
+      const linkedParents = await sequelize.query(
+        'SELECT COUNT(DISTINCT "parentId")::int AS count FROM "StudentParents" WHERE "studentId" = :studentId',
+        { replacements: { studentId: student.id }, type: sequelize.QueryTypes.SELECT }
+      );
+      const linkedParentCount = Number(linkedParents?.[0]?.count || 0);
+      if (linkedParentCount >= 2) {
+        await parent.destroy().catch(() => null);
+        await user.destroy().catch(() => null);
+        return res.status(403).json({ success: false, message: 'This Elimu ID already has the maximum two parent/guardian accounts linked' });
+      }
+
+      await parent.addStudent(student, { through: { relationship: 'guardian' } });
 
       res.status(201).json({
         success: true,

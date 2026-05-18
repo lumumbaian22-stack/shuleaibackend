@@ -8,6 +8,7 @@ router.use(protect, authorize('parent'));
 
 // Basic routes – no subscription required
 router.get('/children', parentController.getChildren);
+router.post('/children/link', parentController.linkChildByElimuId);
 router.get('/child/:studentId/summary', parentController.getChildSummary);
 router.post('/report-absence', parentController.reportAbsence);
 router.get('/fees/:studentId', parentController.getFees);
