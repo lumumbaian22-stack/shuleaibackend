@@ -348,7 +348,7 @@ const authController = {
         return res.status(403).json({ success: false, message: 'This Elimu ID already has the maximum two parent/guardian accounts linked' });
       }
 
-      await parent.addStudent(student, { through: { relationship: 'guardian' } });
+      await parent.addStudent(student);
 
       res.status(201).json({
         success: true,

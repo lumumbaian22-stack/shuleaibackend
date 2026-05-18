@@ -64,6 +64,7 @@ exports.getChildren = async (req, res) => {
 
     const children = await parent.getStudents({
       attributes: { include: ['classId'] },
+      joinTableAttributes: [],
       include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode', 'profileImage'] }],
       order: [[User, 'name', 'ASC']]
     });
@@ -112,7 +113,7 @@ exports.linkChildByElimuId = async (req, res) => {
       return res.status(403).json({ success: false, message: 'This Elimu ID already has the maximum two parent/guardian accounts linked' });
     }
 
-    await parent.addStudent(student, { through: { relationship: parent.relationship || 'guardian' } });
+    await parent.addStudent(student);
     const children = await enrichLinkedChildren([student]);
 
     res.status(201).json({ success: true, message: 'Child linked successfully', data: children[0] });
