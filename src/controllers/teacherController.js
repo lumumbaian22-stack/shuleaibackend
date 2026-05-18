@@ -8,6 +8,21 @@ const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
 const moment = require('moment');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
+const sequelize = require('../config/database');
+
+
+async function linkParentToStudentSafely(parentId, studentId) {
+  const now = new Date();
+  await sequelize.query(`
+    INSERT INTO "StudentParents" ("studentId", "parentId", "createdAt", "updatedAt")
+    VALUES (:studentId, :parentId, :createdAt, :updatedAt)
+    ON CONFLICT ("studentId", "parentId") DO UPDATE
+      SET "updatedAt" = EXCLUDED."updatedAt"
+  `, {
+    replacements: { studentId, parentId, createdAt: now, updatedAt: now },
+    type: sequelize.QueryTypes.INSERT
+  });
+}
 
 // ============ EXISTING FUNCTIONS (keep your existing ones, they work) ============
 
@@ -263,7 +278,7 @@ exports.addStudent = async (req, res) => {
         }
 
         if (parent) {
-          await parent.addStudent(student);
+          await linkParentToStudentSafely(parent.id, student.id);
         }
       } catch (parentError) {
         console.error('Error linking parent:', parentError);
@@ -1076,7 +1091,7 @@ exports.uploadStudentsCSV = async (req, res) => {
                 await Parent.create({ userId: parentUser.id, relationship: row.parentRelationship || 'guardian', phone: row.parentPhone || null });
               }
               const parent = await Parent.findOne({ where: { userId: parentUser.id } });
-              if (parent) await parent.addStudent(student);
+              if (parent) await linkParentToStudentSafely(parent.id, student.id);
             }
           } catch (err) {
             errors.push({ row, error: err.message });

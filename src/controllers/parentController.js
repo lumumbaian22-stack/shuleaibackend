@@ -16,6 +16,20 @@ async function countLinkedParents(studentId) {
   return Number(rows?.[0]?.count || 0);
 }
 
+
+async function linkParentToStudentSafely(parentId, studentId) {
+  const now = new Date();
+  await sequelize.query(`
+    INSERT INTO "StudentParents" ("studentId", "parentId", "createdAt", "updatedAt")
+    VALUES (:studentId, :parentId, :createdAt, :updatedAt)
+    ON CONFLICT ("studentId", "parentId") DO UPDATE
+      SET "updatedAt" = EXCLUDED."updatedAt"
+  `, {
+    replacements: { studentId, parentId, createdAt: now, updatedAt: now },
+    type: sequelize.QueryTypes.INSERT
+  });
+}
+
 async function parentHasStudent(parentId, studentId) {
   const rows = await sequelize.query(
     'SELECT 1 FROM "StudentParents" WHERE "parentId" = :parentId AND "studentId" = :studentId LIMIT 1',
@@ -113,7 +127,7 @@ exports.linkChildByElimuId = async (req, res) => {
       return res.status(403).json({ success: false, message: 'This Elimu ID already has the maximum two parent/guardian accounts linked' });
     }
 
-    await parent.addStudent(student);
+    await linkParentToStudentSafely(parent.id, student.id);
     const children = await enrichLinkedChildren([student]);
 
     res.status(201).json({ success: true, message: 'Child linked successfully', data: children[0] });
