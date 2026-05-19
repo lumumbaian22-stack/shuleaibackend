@@ -17,191 +17,225 @@ const DEFAULT_PERIODS = [
   { label: 'Period 9', startTime: '15:20', endTime: '16:00', type: 'lesson' }
 ];
 
-const cleanPeriod = (p = {}, idx = 0) => {
-  const type = String(p.type || (p.break ? 'break' : 'lesson')).toLowerCase();
-  const isBreak = type === 'break' || type === 'lunch' || /break|lunch|assembly|games|club/i.test(String(p.label || ''));
+function parseMaybeJson(value, fallback) {
+  if (value == null) return fallback;
+  if (Array.isArray(value) || typeof value === 'object') return value;
+  if (typeof value === 'string') {
+    try { return JSON.parse(value); } catch (_) { return fallback; }
+  }
+  return fallback;
+}
+function norm(v) { return String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+function sameText(a, b) { return norm(a) && norm(a) === norm(b); }
+function cleanPeriod(p = {}, idx = 0) {
+  const label = String(p.label || p.name || `Period ${idx + 1}`).trim();
+  const rawType = String(p.type || (p.break ? 'break' : 'lesson')).toLowerCase();
+  const isBreak = rawType === 'break' || /break|lunch|assembly|games|club/i.test(label);
   return {
     id: p.id || `period-${idx + 1}`,
-    label: String(p.label || `Period ${idx + 1}`).trim(),
+    label,
     startTime: String(p.startTime || p.start || '08:00').slice(0, 5),
     endTime: String(p.endTime || p.end || '08:40').slice(0, 5),
     type: isBreak ? 'break' : 'lesson',
-    break: !!isBreak,
+    break: isBreak,
     classes: Array.isArray(p.classes) ? p.classes : []
   };
-};
-const getPeriods = (periods) => (Array.isArray(periods) && periods.length ? periods : DEFAULT_PERIODS).map(cleanPeriod);
-const normalizeDay = (d) => String(d || '').toLowerCase();
-const startOfWeek = () => moment().startOf('isoWeek').format('YYYY-MM-DD');
-
-function weight(subject) {
-  const s = String(subject || '').toLowerCase();
-  if (/math|english|kiswahili|science|biology|chemistry|physics/.test(s)) return 5;
-  if (/social|history|geography|cre|ire|agriculture|business|computer/.test(s)) return 3;
-  return 2;
+}
+function getPeriods(periods) {
+  const parsed = parseMaybeJson(periods, []);
+  return (Array.isArray(parsed) && parsed.length ? parsed : DEFAULT_PERIODS).map(cleanPeriod);
 }
 function shell(periods = DEFAULT_PERIODS) {
   const clean = getPeriods(periods);
-  return DAYS.map(day => ({
-    day,
-    periods: clean.map((p, idx) => ({ ...p, id: p.id || `${day}-${idx}`, classes: [] }))
-  }));
+  return DAYS.map(day => ({ day, periods: clean.map((p, idx) => ({ ...cleanPeriod(p, idx), classes: [] })) }));
 }
-function defaultSubjectsForClass(cls) {
-  const settingsSubjects = cls.settings?.subjects || cls.settings?.curriculumSubjects || cls.settings?.learningAreas;
-  if (Array.isArray(settingsSubjects) && settingsSubjects.length) return settingsSubjects.map(s => typeof s === 'string' ? s : (s.name || s.subject)).filter(Boolean);
-  const grade = String(cls.grade || cls.name || '').toLowerCase();
-  if (/grade|pp|primary|class|std|standard/.test(grade)) return ['Mathematics', 'English', 'Kiswahili', 'Science', 'Social Studies', 'Creative Arts', 'CRE', 'Agriculture'];
+function startOfWeek() { return moment().startOf('isoWeek').format('YYYY-MM-DD'); }
+function subjectWeight(subject) {
+  const s = norm(subject);
+  if (/math|english|kiswahili|science|literacy|language/.test(s)) return 4;
+  if (/biology|chemistry|physics|social|history|geography|cre|ire/.test(s)) return 3;
+  return 2;
+}
+function defaultSubjectsForClass(cls = {}) {
+  const settings = parseMaybeJson(cls.settings, {}) || {};
+  const candidates = [settings.subjects, settings.curriculumSubjects, settings.learningAreas, settings.subjectList];
+  for (const list of candidates) {
+    if (Array.isArray(list) && list.length) {
+      return [...new Set(list.map(s => typeof s === 'string' ? s : (s.subject || s.name || s.learningArea || s.title)).filter(Boolean))];
+    }
+  }
+  const label = norm(`${cls.grade || ''} ${cls.name || ''}`);
+  if (/pp|pre primary|nursery|kindergarten/.test(label)) return ['Literacy', 'Numeracy', 'Kiswahili', 'Environmental Activities', 'Creative Activities', 'Religious Education'];
+  if (/grade|primary|class|std|standard/.test(label)) return ['Mathematics', 'English', 'Kiswahili', 'Science', 'Social Studies', 'Creative Arts', 'CRE', 'Agriculture'];
   return ['Mathematics', 'English', 'Kiswahili', 'Biology', 'Chemistry', 'Physics', 'Geography', 'History', 'CRE', 'Business Studies'];
 }
-
-function normalizeAssignment(raw = {}) {
+function teacherName(t) { return t?.User?.name || t?.name || t?.fullName || 'Unassigned Teacher'; }
+function teacherSubjects(t) { return parseMaybeJson(t?.subjects, []) || []; }
+function normalizeAssignment(raw = {}, cls = null) {
+  if (!raw) return null;
   const subject = raw.subject || raw.subjectName || raw.name || raw.learningArea || raw.title;
-  const teacherId = raw.teacherId || raw.TeacherId || raw.teacher_id || raw.id;
-  return subject ? { ...raw, subject: String(subject).trim(), teacherId: teacherId ? Number(teacherId) : null } : null;
+  if (!subject) return null;
+  const teacherId = raw.teacherId || raw.TeacherId || raw.teacher_id || raw.id || raw.teacher?.id || null;
+  return {
+    subject: String(subject).trim(),
+    teacherId: teacherId ? Number(teacherId) : null,
+    teacherName: raw.teacherName || raw.teacher || raw.name || '',
+    classId: cls?.id || raw.classId || null,
+    room: raw.room || raw.classroom || ''
+  };
 }
-function classAssignments(cls) {
-  const direct = Array.isArray(cls.subjectTeachers) ? cls.subjectTeachers : [];
-  const settings = cls.settings || {};
-  const extra = [];
-  ['subjects','curriculumSubjects','learningAreas'].forEach(key => {
-    if (Array.isArray(settings[key])) settings[key].forEach(item => {
-      const subject = typeof item === 'string' ? item : (item.subject || item.name || item.learningArea || item.title);
-      if (subject) extra.push({ subject, teacherId: item.teacherId || item.teacher_id || null, teacherName: item.teacherName || item.teacher || '' });
+function classAssignments(cls, teachers = []) {
+  const list = [];
+  const direct = parseMaybeJson(cls.subjectTeachers, []) || [];
+  if (Array.isArray(direct)) direct.forEach(a => { const n = normalizeAssignment(a, cls); if (n) list.push(n); });
+  const settings = parseMaybeJson(cls.settings, {}) || {};
+  ['subjects', 'curriculumSubjects', 'learningAreas', 'subjectTeachers'].forEach(key => {
+    const arr = parseMaybeJson(settings[key], []) || [];
+    if (Array.isArray(arr)) arr.forEach(item => {
+      const n = typeof item === 'string' ? normalizeAssignment({ subject: item }, cls) : normalizeAssignment(item, cls);
+      if (n) list.push(n);
     });
   });
-  const normalized = [...direct, ...extra].map(normalizeAssignment).filter(Boolean);
+  // Teachers directly assigned to this class also contribute their subject arrays.
+  teachers.forEach(t => {
+    const assignedToClass = String(t.classId || '') === String(cls.id) || sameText(t.classTeacher, cls.name) || sameText(t.classTeacher, `${cls.grade || ''} ${cls.stream || ''}`);
+    if (!assignedToClass) return;
+    teacherSubjects(t).forEach(subject => list.push({ subject, teacherId: Number(t.id), teacherName: teacherName(t), classId: cls.id }));
+  });
+  if (!list.length) {
+    defaultSubjectsForClass(cls).forEach(subject => list.push({ subject, teacherId: null, teacherName: '', classId: cls.id, fallback: true }));
+  }
+  // Fill missing teacher by matching teacher subject first, then class teacher, then any teacher.
+  const deduped = [];
   const seen = new Set();
-  return normalized.filter(a => { const key = `${String(a.subject).toLowerCase()}:${a.teacherId || ''}`; if (seen.has(key)) return false; seen.add(key); return true; });
+  list.forEach(a => {
+    const subject = String(a.subject || '').trim(); if (!subject) return;
+    let teacher = a.teacherId ? teachers.find(t => Number(t.id) === Number(a.teacherId)) : null;
+    if (!teacher) teacher = teachers.find(t => teacherSubjects(t).some(s => sameText(s, subject)));
+    if (!teacher) teacher = teachers.find(t => String(t.classId || '') === String(cls.id) || sameText(t.classTeacher, cls.name));
+    const key = norm(subject);
+    if (seen.has(key)) return;
+    seen.add(key);
+    deduped.push({ ...a, subject, teacherId: teacher ? Number(teacher.id) : null, teacherName: teacher ? teacherName(teacher) : (a.teacherName || 'Unassigned Teacher') });
+  });
+  return deduped;
 }
-function buildFallbackAssignments(cls, teachers) {
-  const subjects = defaultSubjectsForClass(cls);
-  return subjects.map((subject, idx) => {
-    const matched = teachers.find(t => (t.subjects || []).some(s => String(s).toLowerCase() === String(subject).toLowerCase())) || teachers[idx % Math.max(teachers.length, 1)];
-    return { subject, teacherId: matched?.id || null, teacherName: matched?.User?.name || 'Unassigned Teacher', fallback: true };
+async function loadSchoolData(schoolId) {
+  const classes = await Class.findAll({
+    where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] },
+    order: [['grade', 'ASC'], ['name', 'ASC']]
   });
-}
-function buildClassBlocksFromSlots(slots, existingClasses = []) {
-  const blocks = new Map();
-  (existingClasses || []).forEach(c => {
-    if (c.classId) blocks.set(String(c.classId), { ...c, timetable: shell(c.periods || DEFAULT_PERIODS) });
+  const teachers = await Teacher.findAll({
+    include: [{ model: User, where: { schoolCode: schoolId, role: 'teacher' }, required: true, attributes: ['id', 'name', 'email', 'schoolCode'] }],
+    order: [['id', 'ASC']]
   });
-  (slots || []).forEach(dayBlock => {
-    const day = normalizeDay(dayBlock.day);
-    (dayBlock.periods || []).forEach((period, pi) => {
-      (period.classes || []).forEach(lesson => {
-        const key = String(lesson.classId || lesson.className || 'unknown');
-        if (!blocks.has(key)) {
-          blocks.set(key, {
-            classId: lesson.classId || null,
-            className: lesson.className || 'Class',
-            grade: lesson.grade || '',
-            stream: lesson.stream || '',
-            timetable: shell((slots[0] && slots[0].periods) || DEFAULT_PERIODS)
-          });
-        }
-        const block = blocks.get(key);
-        const d = block.timetable.find(x => x.day === day);
-        if (!d) return;
-        const p = d.periods[pi];
-        if (!p) return;
-        Object.assign(p, { ...period, classes: [] });
-        p.classes.push({ ...lesson, startTime: period.startTime, endTime: period.endTime, day });
-      });
-    });
-  });
-  return Array.from(blocks.values());
-}
-function filterClassTimetable(block, periodsOverride) {
-  if (!block) return [];
-  const base = shell(periodsOverride || block.periods || DEFAULT_PERIODS);
-  const source = Array.isArray(block.timetable) ? block.timetable : [];
-  return base.map(dayBlock => {
-    const srcDay = source.find(d => normalizeDay(d.day) === dayBlock.day);
-    if (!srcDay) return dayBlock;
-    return {
-      ...dayBlock,
-      periods: dayBlock.periods.map((basePeriod, idx) => {
-        const src = (srcDay.periods || [])[idx] || {};
-        return { ...basePeriod, ...src, classes: Array.isArray(src.classes) ? src.classes : [] };
-      })
-    };
-  });
+  return { classes, teachers };
 }
 async function generateBalanced(schoolId, opts = {}) {
   const periods = getPeriods(opts.periods || DEFAULT_PERIODS);
-  const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] }, order: [['grade', 'ASC'], ['name', 'ASC']] });
-  const teacherIds = new Set(); classes.forEach(c => classAssignments(c).forEach(a => a.teacherId && teacherIds.add(Number(a.teacherId))));
-  const teachers = teacherIds.size
-    ? await Teacher.findAll({ where: { id: Array.from(teacherIds) }, include: [{ model: User, attributes: ['id', 'name', 'email', 'schoolCode'] }] })
-    : await Teacher.findAll({ where: {}, include: [{ model: User, where: { schoolCode: schoolId, role: 'teacher' }, attributes: ['id', 'name', 'email', 'schoolCode'] }] });
-  const teacherMap = new Map(teachers.map(t => [Number(t.id), t]));
-  const slots = shell(periods), classResults = [], teacherBusy = {}, classBusy = {}, daily = {}, warnings = [];
+  const lessonPeriodIndexes = periods.map((p, idx) => ({ p, idx })).filter(x => !x.p.break);
+  const slots = shell(periods);
+  const classResults = [];
+  const teacherBusy = new Map();
+  const classBusy = new Map();
+  const warnings = [];
+  const { classes, teachers } = await loadSchoolData(schoolId);
+
   for (const cls of classes) {
-    const classPeriods = getPeriods(opts.classPeriodOverrides?.[String(cls.id)] || periods);
+    const classPeriods = getPeriods((opts.classPeriodOverrides || {})[String(cls.id)] || periods);
     const classSlots = shell(classPeriods);
-    let assignments = classAssignments(cls).filter(a => a.subject);
+    const classLessonIndexes = classPeriods.map((p, idx) => ({ p, idx })).filter(x => !x.p.break);
+    const assignments = classAssignments(cls, teachers);
     if (!assignments.length) {
-      assignments = buildFallbackAssignments(cls, teachers);
-      warnings.push({ classId: cls.id, className: cls.name, message: 'Generated using class/curriculum subjects because no subject-teacher assignments were found' });
+      warnings.push({ classId: cls.id, className: cls.name, message: 'No subjects found for this class.' });
+      classResults.push({ classId: cls.id, className: cls.name, grade: cls.grade, stream: cls.stream, periods: classPeriods, timetable: classSlots, lessonCount: 0 });
+      continue;
     }
-    const lessons = [];
-    assignments.forEach(a => { for (let i = 0; i < weight(a.subject); i++) lessons.push(a); });
-    lessons.sort((a, b) => weight(b.subject) - weight(a.subject));
-    for (const a of lessons) {
-      let placed = false; let teacher = teacherMap.get(Number(a.teacherId));
-      if (!teacher && teachers.length) teacher = teachers.find(t => (t.subjects || []).some(s => String(s).toLowerCase() === String(a.subject).toLowerCase())) || teachers[0];
-      if (!a.teacherId && teacher) a.teacherId = teacher.id;
-      for (const day of DAYS) {
-        if ((daily[`${cls.id}:${day}:${a.subject}`] || 0) >= 2) continue;
-        for (let pi = 0; pi < classPeriods.length; pi++) {
-          const period = classPeriods[pi]; if (period.break) continue;
-          const key = `${day}:${period.startTime}`;
-          teacherBusy[key] = teacherBusy[key] || new Set(); classBusy[key] = classBusy[key] || new Set();
-          if ((a.teacherId && teacherBusy[key].has(Number(a.teacherId))) || classBusy[key].has(Number(cls.id))) continue;
-          const lesson = { classId: cls.id, className: cls.name, grade: cls.grade, stream: cls.stream, subject: a.subject, teacherId: a.teacherId ? Number(a.teacherId) : null, teacherName: teacher?.User?.name || a.teacherName || 'Unassigned Teacher', startTime: period.startTime, endTime: period.endTime, term: opts.term, year: opts.year, scope: opts.scope || 'term', room: a.room || '' };
-          const globalDay = slots.find(d => d.day === day); const globalPeriod = globalDay?.periods?.[pi];
-          if (globalPeriod) globalPeriod.classes.push(lesson);
-          classSlots.find(d => d.day === day).periods[pi].classes.push(lesson);
-          if (a.teacherId) teacherBusy[key].add(Number(a.teacherId)); classBusy[key].add(Number(cls.id));
-          daily[`${cls.id}:${day}:${a.subject}`] = (daily[`${cls.id}:${day}:${a.subject}`] || 0) + 1;
-          placed = true; break;
-        }
-        if (placed) break;
+    let queue = [];
+    assignments.forEach(a => {
+      const repeat = Math.max(1, Math.min(subjectWeight(a.subject), classLessonIndexes.length));
+      for (let i = 0; i < repeat; i++) queue.push({ ...a });
+    });
+    // Ensure at least one pass of every subject before repeats dominate.
+    queue = [...assignments, ...queue].filter((a, idx, arr) => idx < assignments.length || arr.length < classLessonIndexes.length * DAYS.length);
+    let cursor = 0;
+    let placedCount = 0;
+    for (const item of queue) {
+      let placed = false;
+      for (let attempt = 0; attempt < DAYS.length * classLessonIndexes.length; attempt++) {
+        const day = DAYS[Math.floor(cursor / classLessonIndexes.length) % DAYS.length];
+        const periodInfo = classLessonIndexes[cursor % classLessonIndexes.length];
+        cursor++;
+        const period = periodInfo.p;
+        const pi = periodInfo.idx;
+        const busyKey = `${day}:${period.startTime}:${period.endTime}`;
+        const tBusy = teacherBusy.get(busyKey) || new Set();
+        const cBusy = classBusy.get(busyKey) || new Set();
+        if (cBusy.has(Number(cls.id))) continue;
+        if (item.teacherId && tBusy.has(Number(item.teacherId))) continue;
+        const lesson = {
+          classId: cls.id,
+          className: cls.name,
+          grade: cls.grade,
+          stream: cls.stream,
+          subject: item.subject,
+          teacherId: item.teacherId || null,
+          teacherName: item.teacherName || 'Unassigned Teacher',
+          room: item.room || '',
+          startTime: period.startTime,
+          endTime: period.endTime,
+          term: opts.term,
+          year: opts.year,
+          scope: opts.scope || 'term'
+        };
+        const gDay = slots.find(d => d.day === day);
+        if (gDay && gDay.periods[pi]) gDay.periods[pi].classes.push(lesson);
+        const cDay = classSlots.find(d => d.day === day);
+        if (cDay && cDay.periods[pi]) cDay.periods[pi].classes.push(lesson);
+        cBusy.add(Number(cls.id)); classBusy.set(busyKey, cBusy);
+        if (item.teacherId) { tBusy.add(Number(item.teacherId)); teacherBusy.set(busyKey, tBusy); }
+        placedCount++;
+        placed = true;
+        break;
       }
-      if (!placed) warnings.push({ classId: cls.id, className: cls.name, subject: a.subject, teacherId: a.teacherId, message: 'Could not place lesson without conflict' });
+      if (!placed) warnings.push({ classId: cls.id, className: cls.name, subject: item.subject, message: 'Could not place lesson without conflict.' });
     }
-    classResults.push({ classId: cls.id, className: cls.name, grade: cls.grade, stream: cls.stream, periods: classPeriods, timetable: classSlots });
+    classResults.push({ classId: cls.id, className: cls.name, grade: cls.grade, stream: cls.stream, periods: classPeriods, timetable: classSlots, lessonCount: placedCount, subjects: assignments.map(a => a.subject) });
   }
   return { slots, classes: classResults, warnings, periods };
 }
-async function findActiveTimetable(schoolId, query = {}) {
+function normalizeDay(d) { return String(d || '').toLowerCase(); }
+function findActiveTimetable(schoolId, query = {}) {
   const where = { schoolId };
   if (query.weekStart || query.weekStartDate) where.weekStartDate = query.weekStart || query.weekStartDate;
   if (query.term) where.term = query.term;
   if (query.year) where.year = Number(query.year);
-  if (!where.weekStartDate && !query.includeDrafts) where.isPublished = true;
-  let tt = await Timetable.findOne({ where, order: [['updatedAt', 'DESC']] });
-  if (!tt && !where.isPublished) return null;
-  if (!tt) tt = await Timetable.findOne({ where: { schoolId, isPublished: true }, order: [['updatedAt', 'DESC']] });
-  if (!tt && query.includeDrafts) tt = await Timetable.findOne({ where: { schoolId }, order: [['updatedAt', 'DESC']] });
-  return tt;
+  if (!query.includeDrafts) where.isPublished = true;
+  return Timetable.findOne({ where, order: [['updatedAt', 'DESC']] }).then(tt => tt || (query.includeDrafts ? Timetable.findOne({ where: { schoolId }, order: [['updatedAt', 'DESC']] }) : Timetable.findOne({ where: { schoolId, isPublished: true }, order: [['updatedAt', 'DESC']] })));
 }
 function resolveClassForStudent(student, classes) {
   if (!student || !classes) return null;
-  const g = String(student.grade || '').toLowerCase().trim();
-  return classes.find(c => String(c.id) === String(student.classId)) ||
-    classes.find(c => String(c.name || '').toLowerCase() === g) ||
-    classes.find(c => String(c.grade || '').toLowerCase() === g) ||
-    classes.find(c => g && String(c.name || '').toLowerCase().includes(g));
+  const g = norm(student.grade || student.className || student.currentClass);
+  return classes.find(c => String(c.id) === String(student.classId)) || classes.find(c => sameText(c.name, g) || sameText(c.grade, g) || norm(c.name).includes(g) || g.includes(norm(c.name)));
 }
-function normText(v) { return String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 function findClassBlock(tt, cls) {
   if (!tt || !cls) return null;
   const blocks = Array.isArray(tt.classes) ? tt.classes : [];
-  return blocks.find(c => String(c.classId ?? c.id ?? '') === String(cls.id)) ||
-    blocks.find(c => normText(c.className || c.name) && normText(c.className || c.name) === normText(cls.name)) ||
-    blocks.find(c => normText(c.grade) && normText(c.grade) === normText(cls.grade));
+  return blocks.find(c => String(c.classId ?? c.id ?? '') === String(cls.id)) || blocks.find(c => sameText(c.className || c.name, cls.name)) || blocks.find(c => sameText(c.grade, cls.grade));
+}
+function filterClassTimetable(block, periodsOverride) {
+  if (!block) return [];
+  const basePeriods = getPeriods(periodsOverride || block.periods || DEFAULT_PERIODS);
+  const base = shell(basePeriods);
+  const source = Array.isArray(block.timetable) ? block.timetable : [];
+  return base.map(dayBlock => {
+    const srcDay = source.find(d => normalizeDay(d.day) === dayBlock.day);
+    if (!srcDay) return dayBlock;
+    return { ...dayBlock, periods: dayBlock.periods.map((basePeriod, idx) => {
+      const src = (srcDay.periods || [])[idx] || {};
+      return { ...basePeriod, ...cleanPeriod({ ...basePeriod, ...src }, idx), classes: Array.isArray(src.classes) ? src.classes : [] };
+    }) };
+  });
 }
 function classBlockFromGlobalSlots(tt, cls) {
   if (!tt || !cls || !Array.isArray(tt.slots)) return null;
@@ -211,7 +245,7 @@ function classBlockFromGlobalSlots(tt, cls) {
   tt.slots.forEach(dayBlock => {
     const day = normalizeDay(dayBlock.day);
     (dayBlock.periods || []).forEach((period, pi) => {
-      const matches = (period.classes || []).filter(l => String(l.classId ?? '') === String(cls.id) || normText(l.className || l.grade) === normText(cls.name) || (normText(l.grade) && normText(l.grade) === normText(cls.grade)));
+      const matches = (period.classes || []).filter(l => String(l.classId ?? '') === String(cls.id) || sameText(l.className, cls.name) || sameText(l.grade, cls.grade));
       if (!matches.length) return;
       const d = block.timetable.find(x => x.day === day);
       if (!d || !d.periods[pi]) return;
@@ -223,36 +257,38 @@ function classBlockFromGlobalSlots(tt, cls) {
 }
 function countLessonsFromSlots(slots = []) {
   let total = 0;
-  slots.forEach(day => (day.periods || []).forEach(p => {
+  (slots || []).forEach(day => (day.periods || []).forEach(p => {
     if (p.break) return;
-    (p.classes || []).forEach(l => {
-      const subject = String(l.subject || '').trim();
-      if (subject && !/^(free|break|lunch|assembly|games|club|remedial)$/i.test(subject)) total++;
-    });
+    (p.classes || []).forEach(l => { if (String(l.subject || '').trim() && !/^(free|break|lunch|assembly|games|club|remedial)$/i.test(String(l.subject))) total++; });
   }));
   return total;
 }
 function studyUpdates(slots) {
-  const now = new Date(); const day = now.toLocaleDateString('en-US', { weekday: 'long' }); const time = now.toTimeString().slice(0, 5);
-  return (slots || []).filter(s => String(s.day || '').toLowerCase() === day.toLowerCase() && s.subject && !/break|lunch|free/i.test(s.subject) && String(s.endTime || '00:00') <= time).slice(-8).map(s => ({ subject: s.subject, teacherName: s.teacherName || s.teacher || 'Teacher', room: s.room || '', startTime: s.startTime, endTime: s.endTime }));
+  const now = new Date();
+  const day = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+  const time = now.toTimeString().slice(0, 5);
+  const dayBlock = (slots || []).find(s => String(s.day || '').toLowerCase() === day);
+  if (!dayBlock) return [];
+  return (dayBlock.periods || []).filter(p => !p.break && String(p.endTime || '00:00') <= time).flatMap(p => (p.classes || []).map(l => ({ subject: l.subject, teacherName: l.teacherName || l.teacher || 'Teacher', room: l.room || '', startTime: p.startTime, endTime: p.endTime }))).slice(-8);
 }
 
 exports.generate = async (req, res) => { try {
   const schoolId = req.user.schoolCode;
-  const { weekStartDate, term = 'Term 1', year = new Date().getFullYear(), scope = 'term', publish = false, periods, classPeriodOverrides = {} } = req.body;
+  const { weekStartDate, term = 'Term 1', year = new Date().getFullYear(), scope = 'term', publish = false, periods, classPeriodOverrides = {} } = req.body || {};
   const weekStart = weekStartDate || startOfWeek();
   const generated = await generateBalanced(schoolId, { term, year: Number(year), scope, periods, classPeriodOverrides });
   const payload = { weekStartDate: weekStart, term, year: Number(year), scope: ['term', 'year', 'week'].includes(scope) ? scope : 'term', slots: generated.slots, classes: generated.classes, warnings: generated.warnings, isPublished: !!publish };
   const [tt, created] = await Timetable.findOrCreate({ where: { schoolId, weekStartDate: weekStart }, defaults: { schoolId, ...payload } });
   if (!created) await tt.update(payload);
-  res.json({ success: true, message: `Generated timetable for ${generated.classes.length} class(es)`, data: tt });
+  const json = tt.toJSON();
+  res.json({ success: true, message: `Generated timetable for ${generated.classes.length} class(es) with ${countLessonsFromSlots(generated.slots)} lesson(s)`, data: { ...json, slots: generated.slots, classes: generated.classes, warnings: generated.warnings, lessonCount: countLessonsFromSlots(generated.slots) } });
 } catch (error) { console.error('Generate timetable error:', error); res.status(500).json({ success: false, message: error.message }); } };
 exports.getClasses = async (req, res) => { try { const classes = await Class.findAll({ where: { schoolCode: req.user.schoolCode, [Op.or]: [{ isActive: true }, { isActive: null }] }, order: [['grade', 'ASC'], ['name', 'ASC']] }); res.json({ success: true, data: classes }); } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
 exports.manualUpdate = async (req, res) => { try {
   const tt = await Timetable.findOne({ where: { id: req.params.id, schoolId: req.user.schoolCode } });
   if (!tt) return res.status(404).json({ success: false, message: 'Timetable not found' });
   const slots = Array.isArray(req.body.slots) ? req.body.slots : tt.slots;
-  const classes = Array.isArray(req.body.classes) && req.body.classes.length ? req.body.classes : buildClassBlocksFromSlots(slots, tt.classes || []);
+  const classes = Array.isArray(req.body.classes) && req.body.classes.length ? req.body.classes : [];
   await tt.update({ slots, classes, warnings: req.body.warnings || tt.warnings || [], term: req.body.term || tt.term, year: req.body.year ? Number(req.body.year) : tt.year, scope: req.body.scope || tt.scope });
   res.json({ success: true, data: tt });
 } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
@@ -285,10 +321,9 @@ exports.getByWeek = async (req, res) => { try {
   let tt = await findActiveTimetable(req.user.schoolCode, { ...req.query, includeDrafts: true, weekStartDate: req.query.weekStartDate || req.query.weekStart || startOfWeek() });
   if (!tt) tt = await findActiveTimetable(req.user.schoolCode, { ...req.query, includeDrafts: true });
   const classLessonCounts = {};
-  if (tt) {
-    (tt.classes || []).forEach(block => { classLessonCounts[String(block.classId ?? block.id ?? block.className)] = countLessonsFromSlots(filterClassTimetable(block)); });
-  }
-  res.json({ success: true, data: tt ? { ...tt.toJSON(), lessonCount: tt ? countLessonsFromSlots(tt.slots || []) || Object.values(classLessonCounts).reduce((a,b)=>a+b,0) : 0, classLessonCounts } : null });
+  if (tt) (tt.classes || []).forEach(block => { classLessonCounts[String(block.classId ?? block.id ?? block.className)] = countLessonsFromSlots(filterClassTimetable(block)); });
+  const total = tt ? (countLessonsFromSlots(tt.slots || []) || Object.values(classLessonCounts).reduce((a,b)=>a+b,0)) : 0;
+  res.json({ success: true, data: tt ? { ...tt.toJSON(), lessonCount: total, classLessonCounts } : null });
 } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
 exports.getForStudentMe = async (req, res) => { try {
   const student = await Student.unscoped().findOne({ where: { userId: req.user.id }, include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'] }] });
