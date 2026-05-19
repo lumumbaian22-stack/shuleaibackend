@@ -173,9 +173,42 @@ function resolveClassForStudent(student, classes) {
     classes.find(c => String(c.grade || '').toLowerCase() === g) ||
     classes.find(c => g && String(c.name || '').toLowerCase().includes(g));
 }
+function normText(v) { return String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 function findClassBlock(tt, cls) {
   if (!tt || !cls) return null;
-  return (tt.classes || []).find(c => String(c.classId) === String(cls.id) || String(c.className || '').toLowerCase() === String(cls.name || '').toLowerCase());
+  const blocks = Array.isArray(tt.classes) ? tt.classes : [];
+  return blocks.find(c => String(c.classId ?? c.id ?? '') === String(cls.id)) ||
+    blocks.find(c => normText(c.className || c.name) && normText(c.className || c.name) === normText(cls.name)) ||
+    blocks.find(c => normText(c.grade) && normText(c.grade) === normText(cls.grade));
+}
+function classBlockFromGlobalSlots(tt, cls) {
+  if (!tt || !cls || !Array.isArray(tt.slots)) return null;
+  const periods = getPeriods((tt.slots[0] && tt.slots[0].periods) || DEFAULT_PERIODS);
+  const block = { classId: cls.id, className: cls.name, grade: cls.grade, stream: cls.stream, periods, timetable: shell(periods) };
+  let count = 0;
+  tt.slots.forEach(dayBlock => {
+    const day = normalizeDay(dayBlock.day);
+    (dayBlock.periods || []).forEach((period, pi) => {
+      const matches = (period.classes || []).filter(l => String(l.classId ?? '') === String(cls.id) || normText(l.className || l.grade) === normText(cls.name) || (normText(l.grade) && normText(l.grade) === normText(cls.grade)));
+      if (!matches.length) return;
+      const d = block.timetable.find(x => x.day === day);
+      if (!d || !d.periods[pi]) return;
+      d.periods[pi] = { ...cleanPeriod(period, pi), classes: matches.map(l => ({ ...l, startTime: period.startTime, endTime: period.endTime, day })) };
+      count += matches.length;
+    });
+  });
+  return count ? block : null;
+}
+function countLessonsFromSlots(slots = []) {
+  let total = 0;
+  slots.forEach(day => (day.periods || []).forEach(p => {
+    if (p.break) return;
+    (p.classes || []).forEach(l => {
+      const subject = String(l.subject || '').trim();
+      if (subject && !/^(free|break|lunch|assembly|games|club|remedial)$/i.test(subject)) total++;
+    });
+  }));
+  return total;
 }
 function studyUpdates(slots) {
   const now = new Date(); const day = now.toLocaleDateString('en-US', { weekday: 'long' }); const time = now.toTimeString().slice(0, 5);
@@ -211,8 +244,10 @@ exports.publish = async (req, res) => { try {
 exports.getForClass = async (req, res) => { try {
   const tt = await findActiveTimetable(req.user.schoolCode, req.query);
   if (!tt) return res.json({ success: true, data: [], meta: { published: false } });
-  const found = (tt.classes || []).find(c => Number(c.classId) === Number(req.params.classId));
-  res.json({ success: true, data: found ? filterClassTimetable(found) : [], meta: { term: tt.term, year: tt.year, scope: tt.scope, published: !!tt.isPublished, classInfo: found || null } });
+  const cls = await Class.findOne({ where: { id: req.params.classId, schoolCode: req.user.schoolCode, isActive: true } });
+  const found = findClassBlock(tt, cls) || classBlockFromGlobalSlots(tt, cls);
+  const data = found ? filterClassTimetable(found) : [];
+  res.json({ success: true, data, meta: { term: tt.term, year: tt.year, scope: tt.scope, published: !!tt.isPublished, classInfo: found || cls || null, lessonCount: countLessonsFromSlots(data) } });
 } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
 exports.getForTeacher = async (req, res) => { try {
   let teacherId = Number(req.params.teacherId);
@@ -225,8 +260,13 @@ exports.getForTeacher = async (req, res) => { try {
   res.json({ success: true, data, meta: { term: tt.term, year: tt.year, scope: tt.scope, published: !!tt.isPublished, teacherId } });
 } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
 exports.getByWeek = async (req, res) => { try {
-  const tt = await findActiveTimetable(req.user.schoolCode, { ...req.query, includeDrafts: true, weekStartDate: req.query.weekStartDate || req.query.weekStart || startOfWeek() });
-  res.json({ success: true, data: tt || null });
+  let tt = await findActiveTimetable(req.user.schoolCode, { ...req.query, includeDrafts: true, weekStartDate: req.query.weekStartDate || req.query.weekStart || startOfWeek() });
+  if (!tt) tt = await findActiveTimetable(req.user.schoolCode, { ...req.query, includeDrafts: true });
+  const classLessonCounts = {};
+  if (tt) {
+    (tt.classes || []).forEach(block => { classLessonCounts[String(block.classId ?? block.id ?? block.className)] = countLessonsFromSlots(filterClassTimetable(block)); });
+  }
+  res.json({ success: true, data: tt ? { ...tt.toJSON(), lessonCount: tt ? countLessonsFromSlots(tt.slots || []) || Object.values(classLessonCounts).reduce((a,b)=>a+b,0) : 0, classLessonCounts } : null });
 } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
 exports.getForStudentMe = async (req, res) => { try {
   const student = await Student.unscoped().findOne({ where: { userId: req.user.id }, include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'] }] });
@@ -234,7 +274,7 @@ exports.getForStudentMe = async (req, res) => { try {
   const schoolId = student.User?.schoolCode || req.user.schoolCode;
   const classes = await Class.findAll({ where: { schoolCode: schoolId, isActive: true } }); const cls = resolveClassForStudent(student, classes);
   const tt = await findActiveTimetable(schoolId, req.query);
-  const block = findClassBlock(tt, cls); const slots = block ? filterClassTimetable(block) : [];
+  const block = findClassBlock(tt, cls) || classBlockFromGlobalSlots(tt, cls); const slots = block ? filterClassTimetable(block) : [];
   res.json({ success: true, data: { student, classInfo: cls, timetable: slots, updates: studyUpdates(slots), term: tt?.term, year: tt?.year, scope: tt?.scope, published: !!tt?.isPublished } });
 } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
 exports.getForParentChild = async (req, res) => { try {
@@ -244,6 +284,6 @@ exports.getForParentChild = async (req, res) => { try {
   const schoolId = student.User?.schoolCode || req.user.schoolCode;
   const classes = await Class.findAll({ where: { schoolCode: schoolId, isActive: true } }); const cls = resolveClassForStudent(student, classes);
   const tt = await findActiveTimetable(schoolId, req.query);
-  const block = findClassBlock(tt, cls); const slots = block ? filterClassTimetable(block) : [];
+  const block = findClassBlock(tt, cls) || classBlockFromGlobalSlots(tt, cls); const slots = block ? filterClassTimetable(block) : [];
   res.json({ success: true, data: { child: student, classInfo: cls, timetable: slots, updates: studyUpdates(slots), term: tt?.term, year: tt?.year, scope: tt?.scope, published: !!tt?.isPublished, premiumStatusPreview: true } });
 } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
