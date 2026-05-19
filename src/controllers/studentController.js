@@ -583,8 +583,9 @@ exports.getStudentFullDetails = async (req, res) => {
 
         // School curriculum
         const school = await School.findOne({ where: { schoolId: student.User?.schoolCode || user.schoolCode } });
-        const curriculum = school ? school.system : 'cbc';
+        const curriculum = school ? (school.system || school.curriculum || 'cbc') : 'cbc';
         const schoolLevel = school?.settings?.schoolLevel || 'secondary';
+        const gradingScale = school?.settings?.gradingScale || null;
 
         // Parents
         const parents = await student.getParents({
@@ -599,15 +600,22 @@ exports.getStudentFullDetails = async (req, res) => {
         }));
 
         // Class teacher
-        const classTeacher = await Teacher.findOne({
-            where: { classTeacher: student.grade },
-            include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
-        });
+        let classTeacher = null;
+        const studentClass = await Class.findOne({ where: { schoolCode: student.User?.schoolCode || user.schoolCode, [Op.or]: [{ id: student.classId || 0 }, { name: student.grade }, { grade: student.grade }] } });
+        if (studentClass?.teacherId) {
+            classTeacher = await Teacher.findByPk(studentClass.teacherId, { include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }] });
+        }
+        if (!classTeacher) {
+            classTeacher = await Teacher.findOne({
+                where: { classTeacher: student.grade },
+                include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+            });
+        }
 
         // Academic records (only published)
         const records = await AcademicRecord.findAll({
-            where: { studentId, isPublished: true },
-            order: [['date', 'DESC']]
+            where: { studentId, schoolCode: student.User?.schoolCode || user.schoolCode, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
+            order: [['year', 'DESC'], ['term', 'DESC'], ['date', 'DESC']]
         });
         const overallAverage = records.length
             ? Math.round(records.reduce((s, r) => s + r.score, 0) / records.length)
@@ -623,7 +631,7 @@ exports.getStudentFullDetails = async (req, res) => {
         const subjects = Object.entries(subjectMap).map(([subject, data]) => ({
             subject,
             average: Math.round(data.total / data.count),
-            grade: getGradeFromScore(Math.round(data.total / data.count), curriculum, schoolLevel)
+            grade: getGradeFromScore(Math.round(data.total / data.count), curriculum, schoolLevel, gradingScale)
         }));
 
         // Term averages
@@ -654,6 +662,9 @@ exports.getStudentFullDetails = async (req, res) => {
             subject: r.subject,
             assessment: r.assessmentName,
             score: r.score,
+            grade: getGradeFromScore(r.score, curriculum, schoolLevel, gradingScale),
+            term: r.term,
+            year: r.year,
             date: r.date
         }));
 
@@ -699,7 +710,10 @@ exports.getStudentFullDetails = async (req, res) => {
                 recentAssessments,
                 address,
                 school: {
+                    name: school?.name || null,
+                    schoolName: school?.name || null,
                     curriculum,
+                    system: curriculum,
                     schoolLevel
                 }
             }

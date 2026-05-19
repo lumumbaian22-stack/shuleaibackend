@@ -95,17 +95,33 @@ const CURRICULUMS = {
     }
 };
 
-function getGradeFromScore(score, curriculum, level) {
-    const curriculumData = CURRICULUMS[curriculum];
+function normalizeCurriculumKey(curriculum) {
+    const key = String(curriculum || 'cbc').toLowerCase().trim();
+    if (['8-4-4','844','8_4_4'].includes(key)) return '844';
+    if (['british','igcse','cambridge'].includes(key)) return 'british';
+    if (['american','us','usa'].includes(key)) return 'american';
+    return 'cbc';
+}
+
+function getGradeFromScore(score, curriculum, level, customScale) {
+    const scoreNum = Number(score);
+    if (isNaN(scoreNum)) return 'N/A';
+
+    if (Array.isArray(customScale) && customScale.length) {
+        for (const entry of customScale) {
+            const min = Number(entry.min ?? entry.from ?? 0);
+            const max = Number(entry.max ?? entry.to ?? 100);
+            if (scoreNum >= min && scoreNum <= max) return entry.grade || entry.label || 'N/A';
+        }
+    }
+
+    const curriculumData = CURRICULUMS[normalizeCurriculumKey(curriculum)];
     if (!curriculumData) return 'N/A';
 
     let normalizedLevel = level;
     if (level === 'both') normalizedLevel = 'secondary';
     const scale = curriculumData[normalizedLevel] || curriculumData.primary;
     if (!scale) return 'N/A';
-
-    const scoreNum = Number(score);
-    if (isNaN(scoreNum)) return 'N/A';
 
     for (const entry of scale) {
         const [min, max] = entry.range;
@@ -139,4 +155,4 @@ function getSubjectsForCurriculum(curriculum, level) {
     return subjects[curriculum]?.[levelKey] || subjects.cbc.secondary;
 }
 
-module.exports = { getGradeFromScore, getSubjectsForCurriculum, CURRICULUMS };
+module.exports = { getGradeFromScore, getSubjectsForCurriculum, CURRICULUMS, normalizeCurriculumKey };

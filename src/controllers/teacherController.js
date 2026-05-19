@@ -1525,3 +1525,176 @@ exports.publishMarks = async (req,res) => {
     res.json({ success:true, message:`${count} mark(s) published for ${cls.name}`, data:{ count, classId:cls.id, term, year:Number(year) } });
   } catch(error) { console.error('V3 publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
+
+
+// ============ V66 STAGE 4F: CURRICULUM-SAFE MARKS + REPORT CARD ROLE LOGIC ============
+async function v66SchoolMeta(schoolCode) {
+  const school = await School.findOne({ where: { schoolId: schoolCode } });
+  const system = school?.system || school?.curriculum || 'cbc';
+  const level = school?.settings?.schoolLevel || 'secondary';
+  const gradingScale = school?.settings?.gradingScale || null;
+  return { school, system, level, gradingScale };
+}
+function v66StudentClassWhere(cls) {
+  return {
+    [Op.or]: [
+      { classId: cls.id },
+      { grade: cls.name },
+      { grade: cls.grade },
+      { grade: [cls.grade, cls.stream].filter(Boolean).join(' ') },
+      { grade: [cls.name, cls.stream].filter(Boolean).join(' ') }
+    ]
+  };
+}
+function v66SubjectListForClass(cls) {
+  const out = [];
+  const add = (x) => { if (x && !out.some(v => String(v).toLowerCase() === String(x).toLowerCase())) out.push(String(x)); };
+  (cls.subjectTeachers || []).forEach(st => add(st.subject));
+  const settings = cls.settings || {};
+  (settings.subjects || settings.subjectList || []).forEach(s => add(typeof s === 'string' ? s : s?.name || s?.subject));
+  return out;
+}
+async function v66CanEnterMarks(teacher, cls, subject) {
+  const isClassTeacher = Number(cls.teacherId) === Number(teacher.id) || String(teacher.classTeacher || '').toLowerCase() === String(cls.name || '').toLowerCase();
+  const assignedSubjects = (cls.subjectTeachers || [])
+    .filter(st => Number(st.teacherId) === Number(teacher.id))
+    .map(st => String(st.subject || '').trim())
+    .filter(Boolean);
+  const isSubjectTeacher = assignedSubjects.some(s => s.toLowerCase() === String(subject || '').toLowerCase());
+  return { allowed: isClassTeacher || isSubjectTeacher, isClassTeacher, isSubjectTeacher, assignedSubjects };
+}
+
+exports.enterMarks = async (req, res) => {
+  try {
+    const { studentId, classId, subject, score, assessmentType='test', assessmentName, date, term='Term 1', year=new Date().getFullYear(), remarks='' } = req.body;
+    const requestedStatus = ['submitted','draft'].includes(String(req.body.status || '').toLowerCase()) ? String(req.body.status).toLowerCase() : 'draft';
+    if (!studentId || !subject) return res.status(400).json({ success:false, message:'studentId and subject are required' });
+    const numericScore = Number(score);
+    if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > 100) return res.status(400).json({ success:false, message:'Score must be between 0 and 100' });
+
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const student = await Student.unscoped().findOne({ where:{ id: studentId }, include:[{ model:User, attributes:['id','name','schoolCode'] }] });
+    if (!student || (student.User?.schoolCode && student.User.schoolCode !== req.user.schoolCode)) return res.status(404).json({ success:false, message:'Student not found in this school' });
+
+    let cls = null;
+    if (classId) cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } });
+    if (!cls) cls = await Class.findOne({ where:{ schoolCode:req.user.schoolCode, isActive:true, [Op.or]: [{ id: student.classId || 0 }, { name: student.grade }, { grade: student.grade }] } });
+    if (!cls) return res.status(404).json({ success:false, message:'Class not found for this student' });
+
+    const access = await v66CanEnterMarks(teacher, cls, subject);
+    if (!access.allowed) return res.status(403).json({ success:false, message:'You can only enter marks for your assigned subject/class' });
+
+    const meta = await v66SchoolMeta(req.user.schoolCode);
+    const grade = getGradeFromScore(numericScore, meta.system, meta.level, req.body.gradingScale || meta.gradingScale);
+    const normalizedAssessmentName = assessmentName || `${subject} ${assessmentType}`;
+    const where = { studentId, schoolCode:req.user.schoolCode, subject, assessmentType, assessmentName: normalizedAssessmentName, term, year:Number(year) };
+    const [record, created] = await AcademicRecord.findOrCreate({
+      where,
+      defaults: {
+        ...where,
+        score: numericScore,
+        grade,
+        remarks,
+        teacherId: teacher.id,
+        date: date || new Date(),
+        classId: cls.id,
+        curriculum: meta.system,
+        gradingScale: req.body.gradingScale || meta.gradingScale || null,
+        status: requestedStatus,
+        isPublished: false
+      }
+    });
+    if (!created) {
+      if (record.isPublished || record.status === 'published' || record.status === 'locked') return res.status(409).json({ success:false, message:'Published marks cannot be edited. Ask admin/class teacher for correction workflow.' });
+      await record.update({ score:numericScore, grade, remarks, teacherId:teacher.id, date:date || record.date, classId:cls.id, curriculum:meta.system, gradingScale:req.body.gradingScale || meta.gradingScale || null, status: requestedStatus });
+    }
+    res.status(created ? 201 : 200).json({ success:true, data:record, meta:{ curriculum:meta.system, schoolLevel:meta.level, grade, isClassTeacher:access.isClassTeacher, isSubjectTeacher:access.isSubjectTeacher } });
+  } catch (error) {
+    console.error('V66 enter marks error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
+};
+
+exports.saveBulkMarks = async (req,res) => {
+  try {
+    const { classId, subject, assessmentType='test', assessmentName, date, marks=[], term='Term 1', year=new Date().getFullYear() } = req.body;
+    const requestedStatus = ['submitted','draft'].includes(String(req.body.status || '').toLowerCase()) ? String(req.body.status).toLowerCase() : 'draft';
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = await v66CanEnterMarks(teacher, cls, subject); if (!access.allowed) return res.status(403).json({ success:false, message:'You can only enter marks for your assigned subject/class' });
+    const meta = await v66SchoolMeta(req.user.schoolCode);
+    const normalizedAssessmentName = assessmentName || `${subject} ${assessmentType}`;
+    let saved=0, failed=0; const results=[];
+    for (const m of marks) {
+      try {
+        const score=Number(m.score); if (!Number.isFinite(score)||score<0||score>100) throw new Error('Score must be 0-100');
+        const grade = getGradeFromScore(score, meta.system, meta.level, req.body.gradingScale || meta.gradingScale);
+        const where = { studentId:m.studentId, schoolCode:req.user.schoolCode, subject, assessmentType, assessmentName:normalizedAssessmentName, term, year:Number(year) };
+        const [record,created]=await AcademicRecord.findOrCreate({ where, defaults:{ ...where, score, grade, remarks:m.remarks || '', teacherId:teacher.id, date:date||new Date(), classId:cls.id, curriculum:meta.system, gradingScale:req.body.gradingScale || meta.gradingScale || null, status:requestedStatus, isPublished:false } });
+        if (!created) { if (record.isPublished || record.status === 'published' || record.status === 'locked') throw new Error('Published marks cannot be edited'); await record.update({ score, grade, remarks:m.remarks || record.remarks || '', teacherId:teacher.id, date:date||record.date, classId:cls.id, curriculum:meta.system, gradingScale:req.body.gradingScale || meta.gradingScale || null, status: requestedStatus }); }
+        saved++; results.push({ studentId:m.studentId, success:true, recordId:record.id, grade });
+      } catch(err){ failed++; results.push({ studentId:m.studentId, success:false, error:err.message }); }
+    }
+    res.json({ success:true, message:`Saved ${saved} draft mark(s). Class teacher publishes final report-card marks.`, data:{ saved, failed, results, curriculum:meta.system, schoolLevel:meta.level } });
+  } catch(error) { console.error('V66 save bulk marks error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.publishMarks = async (req,res) => {
+  try {
+    const { classId, term='Term 1', year=new Date().getFullYear(), assessmentType, assessmentName } = req.body;
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    if (Number(cls.teacherId) !== Number(teacher.id)) return res.status(403).json({ success:false, message:'Only the class teacher can publish final marks for this class' });
+    const students = await Student.unscoped().findAll({ where:v66StudentClassWhere(cls), attributes:['id'] }); const ids=students.map(s=>s.id);
+    const where = { schoolCode:req.user.schoolCode, studentId:{ [Op.in]:ids }, term, year:Number(year), status:{ [Op.ne]:'locked' } };
+    if (assessmentType) where.assessmentType = assessmentType;
+    if (assessmentName) where.assessmentName = assessmentName;
+    const now = new Date();
+    const [count] = await AcademicRecord.update({ isPublished:true, status:'published', publishedAt:now, publishedBy:req.user.id }, { where });
+    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}`, data:{ count, classId:cls.id, term, year:Number(year) } });
+  } catch(error) { console.error('V66 publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getMyAssignments = async (req, res) => {
+  try {
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const allClasses = await Class.findAll({ where:{ schoolCode:req.user.schoolCode, isActive:true }, order:[['name','ASC']] });
+    const classesById = new Map();
+    const subjects = [];
+    for (const cls of allClasses) {
+      const isClassTeacher = Number(cls.teacherId) === Number(teacher.id) || String(teacher.classTeacher || '').toLowerCase() === String(cls.name || '').toLowerCase();
+      const assigned = (cls.subjectTeachers || []).filter(st => Number(st.teacherId) === Number(teacher.id));
+      if (isClassTeacher) classesById.set(String(cls.id), { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream, subjects:v66SubjectListForClass(cls), role:'class_teacher' });
+      for (const st of assigned) {
+        subjects.push({ classId:cls.id, className:cls.name, grade:cls.grade, stream:cls.stream, subject:st.subject, role:'subject_teacher', isClassTeacher:false });
+        if (!classesById.has(String(cls.id))) classesById.set(String(cls.id), { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream, subjects:[], role:'subject_teacher' });
+      }
+    }
+    const classTeacher = [...classesById.values()].find(c => c.role === 'class_teacher') || null;
+    res.json({ success:true, data:{ teacherId:teacher.id, teacherName:teacher.User?.name, department:teacher.department || '', role:classTeacher ? 'class_teacher' : 'subject_teacher', classTeacher, classes:[...classesById.values()], subjects } });
+  } catch(error) { console.error('V66 get assignments error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getClassGradebook = async (req, res) => {
+  try {
+    const { classId, term, year } = req.query;
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = classId ? await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }) : await Class.findOne({ where:{ teacherId:teacher.id, schoolCode:req.user.schoolCode, isActive:true } });
+    if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = await v66CanEnterMarks(teacher, cls, null); if (!access.allowed) return res.status(403).json({ success:false, message:'Not allowed for this class' });
+    const students = await Student.unscoped().findAll({ where:v66StudentClassWhere(cls), include:[{ model:User, attributes:['id','name','profileImage'] }], order:[['createdAt','ASC']] });
+    const ids = students.map(s => s.id);
+    const where = { schoolCode:req.user.schoolCode, studentId:{ [Op.in]:ids } };
+    if (term) where.term = term;
+    if (year) where.year = Number(year);
+    const records = await AcademicRecord.findAll({ where, order:[['subject','ASC'],['assessmentName','ASC']] });
+    const subjects = [...new Set([...v66SubjectListForClass(cls), ...records.map(r => r.subject)].filter(Boolean))].sort();
+    const data = students.map(st => {
+      const recs = records.filter(r => Number(r.studentId) === Number(st.id));
+      const scores = {};
+      subjects.forEach(sub => { const rows=recs.filter(r=>r.subject===sub); scores[sub] = rows.length ? Math.round(rows.reduce((a,b)=>a+Number(b.score||0),0)/rows.length) : null; });
+      const vals=Object.values(scores).filter(v=>v!==null); return { id:st.id, name:st.User?.name || 'Student', elimuid:st.elimuid, admissionNumber:st.admissionNumber, scores, overallAverage:vals.length?Math.round(vals.reduce((a,b)=>a+b,0)/vals.length):null };
+    });
+    res.json({ success:true, data:{ classId:cls.id, className:cls.name, subjects, students:data, canPublish:Number(cls.teacherId)===Number(teacher.id) } });
+  } catch(error) { console.error('V66 gradebook error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
