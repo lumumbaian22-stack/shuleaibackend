@@ -54,6 +54,26 @@ function defaultSubjectsForClass(cls) {
   if (/grade|pp|primary|class|std|standard/.test(grade)) return ['Mathematics', 'English', 'Kiswahili', 'Science', 'Social Studies', 'Creative Arts', 'CRE', 'Agriculture'];
   return ['Mathematics', 'English', 'Kiswahili', 'Biology', 'Chemistry', 'Physics', 'Geography', 'History', 'CRE', 'Business Studies'];
 }
+
+function normalizeAssignment(raw = {}) {
+  const subject = raw.subject || raw.subjectName || raw.name || raw.learningArea || raw.title;
+  const teacherId = raw.teacherId || raw.TeacherId || raw.teacher_id || raw.id;
+  return subject ? { ...raw, subject: String(subject).trim(), teacherId: teacherId ? Number(teacherId) : null } : null;
+}
+function classAssignments(cls) {
+  const direct = Array.isArray(cls.subjectTeachers) ? cls.subjectTeachers : [];
+  const settings = cls.settings || {};
+  const extra = [];
+  ['subjects','curriculumSubjects','learningAreas'].forEach(key => {
+    if (Array.isArray(settings[key])) settings[key].forEach(item => {
+      const subject = typeof item === 'string' ? item : (item.subject || item.name || item.learningArea || item.title);
+      if (subject) extra.push({ subject, teacherId: item.teacherId || item.teacher_id || null, teacherName: item.teacherName || item.teacher || '' });
+    });
+  });
+  const normalized = [...direct, ...extra].map(normalizeAssignment).filter(Boolean);
+  const seen = new Set();
+  return normalized.filter(a => { const key = `${String(a.subject).toLowerCase()}:${a.teacherId || ''}`; if (seen.has(key)) return false; seen.add(key); return true; });
+}
 function buildFallbackAssignments(cls, teachers) {
   const subjects = defaultSubjectsForClass(cls);
   return subjects.map((subject, idx) => {
@@ -110,8 +130,8 @@ function filterClassTimetable(block, periodsOverride) {
 }
 async function generateBalanced(schoolId, opts = {}) {
   const periods = getPeriods(opts.periods || DEFAULT_PERIODS);
-  const classes = await Class.findAll({ where: { schoolCode: schoolId, isActive: true }, order: [['grade', 'ASC'], ['name', 'ASC']] });
-  const teacherIds = new Set(); classes.forEach(c => (c.subjectTeachers || []).forEach(a => a.teacherId && teacherIds.add(Number(a.teacherId))));
+  const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] }, order: [['grade', 'ASC'], ['name', 'ASC']] });
+  const teacherIds = new Set(); classes.forEach(c => classAssignments(c).forEach(a => a.teacherId && teacherIds.add(Number(a.teacherId))));
   const teachers = teacherIds.size
     ? await Teacher.findAll({ where: { id: Array.from(teacherIds) }, include: [{ model: User, attributes: ['id', 'name', 'email', 'schoolCode'] }] })
     : await Teacher.findAll({ where: {}, include: [{ model: User, where: { schoolCode: schoolId, role: 'teacher' }, attributes: ['id', 'name', 'email', 'schoolCode'] }] });
@@ -120,7 +140,7 @@ async function generateBalanced(schoolId, opts = {}) {
   for (const cls of classes) {
     const classPeriods = getPeriods(opts.classPeriodOverrides?.[String(cls.id)] || periods);
     const classSlots = shell(classPeriods);
-    let assignments = (cls.subjectTeachers || []).filter(a => a.subject && a.teacherId);
+    let assignments = classAssignments(cls).filter(a => a.subject);
     if (!assignments.length) {
       assignments = buildFallbackAssignments(cls, teachers);
       warnings.push({ classId: cls.id, className: cls.name, message: 'Generated using class/curriculum subjects because no subject-teacher assignments were found' });
@@ -129,7 +149,9 @@ async function generateBalanced(schoolId, opts = {}) {
     assignments.forEach(a => { for (let i = 0; i < weight(a.subject); i++) lessons.push(a); });
     lessons.sort((a, b) => weight(b.subject) - weight(a.subject));
     for (const a of lessons) {
-      let placed = false; const teacher = teacherMap.get(Number(a.teacherId));
+      let placed = false; let teacher = teacherMap.get(Number(a.teacherId));
+      if (!teacher && teachers.length) teacher = teachers.find(t => (t.subjects || []).some(s => String(s).toLowerCase() === String(a.subject).toLowerCase())) || teachers[0];
+      if (!a.teacherId && teacher) a.teacherId = teacher.id;
       for (const day of DAYS) {
         if ((daily[`${cls.id}:${day}:${a.subject}`] || 0) >= 2) continue;
         for (let pi = 0; pi < classPeriods.length; pi++) {
@@ -225,7 +247,7 @@ exports.generate = async (req, res) => { try {
   if (!created) await tt.update(payload);
   res.json({ success: true, message: `Generated timetable for ${generated.classes.length} class(es)`, data: tt });
 } catch (error) { console.error('Generate timetable error:', error); res.status(500).json({ success: false, message: error.message }); } };
-exports.getClasses = async (req, res) => { try { const classes = await Class.findAll({ where: { schoolCode: req.user.schoolCode, isActive: true }, order: [['grade', 'ASC'], ['name', 'ASC']] }); res.json({ success: true, data: classes }); } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
+exports.getClasses = async (req, res) => { try { const classes = await Class.findAll({ where: { schoolCode: req.user.schoolCode, [Op.or]: [{ isActive: true }, { isActive: null }] }, order: [['grade', 'ASC'], ['name', 'ASC']] }); res.json({ success: true, data: classes }); } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
 exports.manualUpdate = async (req, res) => { try {
   const tt = await Timetable.findOne({ where: { id: req.params.id, schoolId: req.user.schoolCode } });
   if (!tt) return res.status(404).json({ success: false, message: 'Timetable not found' });
@@ -244,7 +266,7 @@ exports.publish = async (req, res) => { try {
 exports.getForClass = async (req, res) => { try {
   const tt = await findActiveTimetable(req.user.schoolCode, req.query);
   if (!tt) return res.json({ success: true, data: [], meta: { published: false } });
-  const cls = await Class.findOne({ where: { id: req.params.classId, schoolCode: req.user.schoolCode, isActive: true } });
+  const cls = await Class.findOne({ where: { id: req.params.classId, schoolCode: req.user.schoolCode, [Op.or]: [{ isActive: true }, { isActive: null }] } });
   const found = findClassBlock(tt, cls) || classBlockFromGlobalSlots(tt, cls);
   const data = found ? filterClassTimetable(found) : [];
   res.json({ success: true, data, meta: { term: tt.term, year: tt.year, scope: tt.scope, published: !!tt.isPublished, classInfo: found || cls || null, lessonCount: countLessonsFromSlots(data) } });
@@ -272,7 +294,7 @@ exports.getForStudentMe = async (req, res) => { try {
   const student = await Student.unscoped().findOne({ where: { userId: req.user.id }, include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'] }] });
   if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
   const schoolId = student.User?.schoolCode || req.user.schoolCode;
-  const classes = await Class.findAll({ where: { schoolCode: schoolId, isActive: true } }); const cls = resolveClassForStudent(student, classes);
+  const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] } }); const cls = resolveClassForStudent(student, classes);
   const tt = await findActiveTimetable(schoolId, req.query);
   const block = findClassBlock(tt, cls) || classBlockFromGlobalSlots(tt, cls); const slots = block ? filterClassTimetable(block) : [];
   res.json({ success: true, data: { student, classInfo: cls, timetable: slots, updates: studyUpdates(slots), term: tt?.term, year: tt?.year, scope: tt?.scope, published: !!tt?.isPublished } });
@@ -282,7 +304,7 @@ exports.getForParentChild = async (req, res) => { try {
   const student = await Student.unscoped().findOne({ where: { id: req.params.studentId }, include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'] }] }); if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
   if (parent.hasStudent) { const ok = await parent.hasStudent(student); if (!ok) return res.status(403).json({ success: false, message: 'Child not linked to this parent' }); }
   const schoolId = student.User?.schoolCode || req.user.schoolCode;
-  const classes = await Class.findAll({ where: { schoolCode: schoolId, isActive: true } }); const cls = resolveClassForStudent(student, classes);
+  const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] } }); const cls = resolveClassForStudent(student, classes);
   const tt = await findActiveTimetable(schoolId, req.query);
   const block = findClassBlock(tt, cls) || classBlockFromGlobalSlots(tt, cls); const slots = block ? filterClassTimetable(block) : [];
   res.json({ success: true, data: { child: student, classInfo: cls, timetable: slots, updates: studyUpdates(slots), term: tt?.term, year: tt?.year, scope: tt?.scope, published: !!tt?.isPublished, premiumStatusPreview: true } });
