@@ -21,8 +21,14 @@ exports.teacherSignup = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invalid school code' });
     }
 
-    if (!school.settings.allowTeacherSignup) {
-      return res.status(403).json({ success: false, message: 'School not accepting signups' });
+    if (school.status && school.status !== 'active') {
+      return res.status(403).json({ success: false, message: 'School is not yet approved' });
+    }
+
+    const schoolSettings = school.settings || {};
+    const requestsExplicitlyClosed = schoolSettings.teacherSignupMode === 'closed' || schoolSettings.allowTeacherRequests === false;
+    if (requestsExplicitlyClosed) {
+      return res.status(403).json({ success: false, message: 'Teacher signup requests are currently disabled for this school' });
     }
 
     const existing = await User.findOne({ where: { email } });
@@ -31,7 +37,7 @@ exports.teacherSignup = async (req, res) => {
     }
 
     const emailDomain = email.split('@')[1];
-    const autoApprove = school.settings.autoApproveDomains?.includes(emailDomain) || false;
+    const autoApprove = schoolSettings.autoApproveDomains?.includes(emailDomain) || false;
 
     const user = await User.create({
       name, 
@@ -61,6 +67,7 @@ exports.teacherSignup = async (req, res) => {
         metadata: { ipAddress: req.ip, userAgent: req.headers['user-agent'] }
       });
 
+      school.stats = school.stats || {};
       school.stats.pendingApprovals = (school.stats.pendingApprovals || 0) + 1;
       await school.save();
 

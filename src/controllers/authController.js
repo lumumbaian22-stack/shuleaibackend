@@ -1,4 +1,4 @@
-const { User, Student, Teacher, Parent, Admin, School } = require('../models');
+const { User, Student, Teacher, Parent, Admin, School, ApprovalRequest } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
@@ -237,8 +237,13 @@ const authController = {
         return res.status(403).json({ success: false, message: 'School is not yet approved' });
       }
 
-      if (!school.settings.allowTeacherSignup) {
-        return res.status(403).json({ success: false, message: 'School not accepting signups' });
+      // Schools with teacher approval requests should not hard-block signups.
+      // A teacher request is created as pending and the admin approves/rejects it later.
+      // Only inactive/unapproved schools are blocked above.
+      const schoolSettings = school.settings || {};
+      const requestsExplicitlyClosed = schoolSettings.teacherSignupMode === 'closed' || schoolSettings.allowTeacherRequests === false;
+      if (requestsExplicitlyClosed) {
+        return res.status(403).json({ success: false, message: 'Teacher signup requests are currently disabled for this school' });
       }
 
       const existing = await User.findOne({ where: { email } });
@@ -248,7 +253,7 @@ const authController = {
 
       // Check auto-approve domains
       const emailDomain = email.split('@')[1];
-      const autoApprove = school.settings.autoApproveDomains?.includes(emailDomain);
+      const autoApprove = schoolSettings.autoApproveDomains?.includes(emailDomain) || false;
 
       const user = await User.create({
         name, 
@@ -269,7 +274,21 @@ const authController = {
       });
 
       if (!autoApprove) {
+        await ApprovalRequest.create({
+          schoolId: school.schoolId,
+          userId: user.id,
+          role: 'teacher',
+          status: 'pending',
+          data: { name, email, phone, qualification, subjects: subjects || [] },
+          metadata: {
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            source: 'teacher_signup'
+          }
+        });
+
         // Update school stats
+        school.stats = school.stats || {};
         school.stats.pendingApprovals = (school.stats.pendingApprovals || 0) + 1;
         await school.save();
 
