@@ -151,6 +151,39 @@ async function getTeacherAllowedClassIds(userId) {
   return [...ids].filter(Boolean);
 }
 
+
+async function getClassTeacherClassIds(userId, schoolCode) {
+  const teacher = await getTeacherProfile(userId);
+  if (!teacher) return [];
+  const or = [];
+  if (teacher.classId) or.push({ id: Number(teacher.classId) });
+  if (teacher.classTeacher) or.push({ name: String(teacher.classTeacher).trim() });
+  // Most deployed Shule AI builds store the class teacher on Classes.teacherId.
+  // Keep this as the strongest source, then fall back to teacher.classId/classTeacher.
+  or.push({ teacherId: teacher.id });
+  const classes = await Class.findAll({
+    where: { schoolCode, isActive: true, [Op.or]: or },
+    attributes: ['id']
+  }).catch(() => []);
+  return [...new Set((classes || []).map(c => Number(c.id)).filter(Boolean))];
+}
+
+async function canTeacherModerateThread(req, thread) {
+  if (!thread || req.user?.role !== 'teacher') return false;
+  if (Number(thread.createdBy) === Number(req.user.id)) return true;
+  const classTeacherClassIds = await getClassTeacherClassIds(req.user.id, schoolCodeOf(req));
+  return Boolean(thread.classId && classTeacherClassIds.includes(Number(thread.classId)));
+}
+
+async function canTeacherViewStudyThread(req, thread) {
+  if (!thread || req.user?.role !== 'teacher') return false;
+  // Official rollout rule:
+  // - Every teacher sees study threads they personally created.
+  // - Class teachers also monitor the official class study group/threads for their class.
+  // - Subject teachers do not browse all school/class study rooms.
+  return canTeacherModerateThread(req, thread);
+}
+
 async function hydrateChatMessage(message) {
   if (!message) return null;
   return ChatMessage.findByPk(message.id, {
@@ -255,7 +288,8 @@ async function ensureTeacherCanAddUsers(req, userIds) {
 
 async function ensureUserMayUseThread(req, thread) {
   if (!thread || thread.schoolCode !== schoolCodeOf(req)) return false;
-  if (['teacher','admin','super_admin'].includes(req.user.role)) return true;
+  if (['admin','super_admin'].includes(req.user.role)) return true;
+  if (req.user.role === 'teacher') return canTeacherViewStudyThread(req, thread);
   if (req.user.role !== 'student') return false;
   const student = await getStudentProfile(req.user.id);
   if (!student) return false;
@@ -647,6 +681,14 @@ exports.listClassroomThreads = async (req, res) => {
       limit: 80
     });
 
+    if (req.user.role === 'teacher') {
+      const visible = [];
+      for (const t of threads) {
+        if (await canTeacherViewStudyThread(req, t)) visible.push(t);
+      }
+      threads = visible;
+    }
+
     if (req.user.role === 'student') {
       threads = threads.filter(t => {
         if (threadMatchesStudentContext(t, studentCtx || {})) return true;
@@ -722,6 +764,9 @@ exports.updateClassroomThread = async (req, res) => {
     const threadId = Number(req.params.threadId);
     const thread = await ClassroomThread.findOne({ where: { id: threadId, schoolCode: schoolCodeOf(req) } });
     if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
+    if (req.user.role === 'teacher' && !(await canTeacherModerateThread(req, thread))) {
+      return res.status(403).json({ success: false, message: 'Teachers can only moderate study threads they created or official class-study threads for their own class' });
+    }
 
     const { approvalStatus, isClosed, isPinned, topic, subject, content, metadata = {} } = req.body || {};
     if (topic !== undefined) thread.topic = topic;
