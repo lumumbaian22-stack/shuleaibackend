@@ -3,10 +3,11 @@ const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');
 const { Op } = require('sequelize');
-const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School, Task, TeacherSubjectAssignment } = require('../models');
+const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School, Task, TeacherSubjectAssignment, ReportSnapshot } = require('../models');
 const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
 const moment = require('moment');
+const crypto = require('crypto');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 const sequelize = require('../config/database');
 
@@ -1871,4 +1872,116 @@ exports.publishMarks = async (req,res) => {
     const [count] = await AcademicRecord.update({ isPublished:true, status:'published', publishedAt:now, publishedBy:req.user.id }, { where });
     res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. Student and parent report cards are now updated.`, data:{ count, classId:cls.id, term, year:Number(year) } });
   } catch(error) { console.error('V66J publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+
+// ============ V66_STAGE_4K_REPORT_ARCHIVE_AND_SAFE_TEACHER_CHAT_FIX ============
+function v66KChecksum(obj) {
+  return crypto.createHash('sha256').update(JSON.stringify(obj || {})).digest('hex');
+}
+async function v66KBuildStudentTermReportSnapshot({ student, records, meta, cls, term, year }) {
+  const bySubject = {};
+  for (const rec of records || []) {
+    const subject = rec.subject || 'Subject';
+    if (!bySubject[subject]) bySubject[subject] = [];
+    bySubject[subject].push(rec);
+  }
+  const subjects = Object.entries(bySubject).map(([subject, rows]) => {
+    const avg = rows.length ? Math.round(rows.reduce((sum, r) => sum + Number(r.score || 0), 0) / rows.length) : null;
+    return {
+      subject,
+      average: avg,
+      grade: avg == null ? null : getGradeFromScore(avg, meta.system, meta.level, meta.gradingScale),
+      status: rows.some(r => r.status === 'published' || r.isPublished) ? 'published' : 'submitted',
+      assessments: rows.map(r => ({
+        id: r.id,
+        assessmentType: r.assessmentType,
+        assessmentName: r.assessmentName,
+        score: Number(r.score || 0),
+        grade: r.grade || getGradeFromScore(Number(r.score || 0), meta.system, meta.level, meta.gradingScale),
+        remarks: r.remarks || '',
+        teacherId: r.teacherId,
+        date: r.date,
+        status: r.status || (r.isPublished ? 'published' : 'draft')
+      }))
+    };
+  }).sort((a, b) => a.subject.localeCompare(b.subject));
+  const vals = subjects.map(s => s.average).filter(v => v !== null && Number.isFinite(Number(v)));
+  const overallAverage = vals.length ? Math.round(vals.reduce((a, b) => a + Number(b), 0) / vals.length) : null;
+  return {
+    student: {
+      id: student.id,
+      name: student.User?.name || student.name || 'Student',
+      elimuid: student.elimuid || null,
+      admissionNumber: student.admissionNumber || null,
+      grade: student.grade || cls?.name || null,
+      classId: cls?.id || student.classId || null,
+      className: cls?.name || student.grade || null
+    },
+    class: cls ? { id: cls.id, name: cls.name, grade: cls.grade, stream: cls.stream } : null,
+    term,
+    year: Number(year),
+    curriculum: meta.system,
+    schoolLevel: meta.level,
+    subjects,
+    overallAverage,
+    overallGrade: overallAverage == null ? null : getGradeFromScore(overallAverage, meta.system, meta.level, meta.gradingScale),
+    generatedAt: new Date().toISOString(),
+    analyticsReady: true
+  };
+}
+
+// Final publisher: publishes marks AND saves locked term report snapshots for later dropdown/history/analytics use.
+exports.publishMarks = async (req,res) => {
+  try {
+    const { classId, term='Term 1', year=new Date().getFullYear(), assessmentType, assessmentName } = req.body;
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = await v66CanEnterMarks(teacher, cls, null);
+    if (!access.isClassTeacher) return res.status(403).json({ success:false, message:'Only the class teacher can publish final marks for this class' });
+
+    const students = await Student.unscoped().findAll({ where:v66StudentClassWhere(cls), include:[{ model:User, attributes:['id','name','profileImage'] }], order:[['createdAt','ASC']] });
+    const ids = students.map(s=>s.id);
+    const where = { schoolCode:req.user.schoolCode, studentId:{ [Op.in]:ids }, term, year:Number(year), status:{ [Op.ne]:'locked' } };
+    if (assessmentType) where.assessmentType = assessmentType;
+    if (assessmentName) where.assessmentName = assessmentName;
+
+    const now = new Date();
+    const [count] = await AcademicRecord.update({ isPublished:true, status:'published', publishedAt:now, publishedBy:req.user.id }, { where });
+
+    const meta = await v66SchoolMeta(req.user.schoolCode);
+    let snapshots = 0;
+    for (const st of students) {
+      const studentRecords = await AcademicRecord.findAll({ where:{ ...where, studentId:st.id }, order:[['subject','ASC'],['assessmentName','ASC']] });
+      if (!studentRecords.length) continue;
+      const snapshot = await v66KBuildStudentTermReportSnapshot({ student: st, records: studentRecords, meta, cls, term, year:Number(year) });
+      const sourceRecordIds = studentRecords.map(r => r.id);
+      const checksum = v66KChecksum(snapshot);
+      const [row, created] = await ReportSnapshot.findOrCreate({
+        where: { schoolCode:req.user.schoolCode, studentId:st.id, term, year:Number(year), reportType:'academic' },
+        defaults: { schoolCode:req.user.schoolCode, studentId:st.id, classId:cls.id, term, year:Number(year), curriculum:meta.system, reportType:'academic', status:'published', generatedBy:req.user.id, publishedBy:req.user.id, publishedAt:now, snapshot, sourceRecordIds, checksum, metadata:{ classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null } }
+      });
+      if (!created) await row.update({ classId:cls.id, curriculum:meta.system, status:'published', generatedBy:req.user.id, publishedBy:req.user.id, publishedAt:now, snapshot, sourceRecordIds, checksum, metadata:{ ...(row.metadata || {}), classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null } });
+      snapshots++;
+    }
+
+    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. ${snapshots} term report(s) saved for future access and analytics.`, data:{ count, snapshots, classId:cls.id, term, year:Number(year) } });
+  } catch(error) { console.error('V66K publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+// Saved reports for class-teacher dropdown/history.
+exports.listClassReportSnapshots = async (req, res) => {
+  try {
+    const { classId, term, year } = req.query;
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = await v66CanEnterMarks(teacher, cls, null);
+    if (!access.isClassTeacher) return res.status(403).json({ success:false, message:'Only the class teacher can view saved reports for this class' });
+    const students = await Student.unscoped().findAll({ where:v66StudentClassWhere(cls), attributes:['id'] });
+    const where = { schoolCode:req.user.schoolCode, studentId:{ [Op.in]:students.map(s=>s.id) }, reportType:'academic', status:'published' };
+    if (term) where.term = term;
+    if (year) where.year = Number(year);
+    const rows = await ReportSnapshot.findAll({ where, order:[['year','DESC'],['term','DESC'],['updatedAt','DESC']], limit:300 });
+    res.json({ success:true, data: rows.map(r => ({ id:r.id, studentId:r.studentId, term:r.term, year:r.year, curriculum:r.curriculum, publishedAt:r.publishedAt, classId:r.classId || r.metadata?.classId, className:r.metadata?.className, overallAverage:r.snapshot?.overallAverage, overallGrade:r.snapshot?.overallGrade, studentName:r.snapshot?.student?.name })) });
+  } catch(error) { console.error('V66K list class reports error:', error); res.status(500).json({ success:false, message:error.message }); }
 };

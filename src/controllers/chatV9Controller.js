@@ -381,7 +381,28 @@ exports.listTeacherDirectory = async (req, res) => {
     }
 
     let roleFilter = ['teacher'];
-    if (req.user.role === 'teacher') roleFilter = ['teacher', 'admin', 'parent'];
+    // V66K safe private-chat rule:
+    // Subject teachers must not see parents in private chat.
+    // Class teachers may see parents, but group/study chats remain available for subject teachers.
+    if (req.user.role === 'teacher') {
+      const meTeacher = await Teacher.findOne({ where: { userId: req.user.id } }).catch(() => null);
+      let isClassTeacher = false;
+      if (meTeacher) {
+        const classCount = await Class.count({
+          where: {
+            schoolCode: schoolCodeOf(req),
+            isActive: true,
+            [Op.or]: [
+              { teacherId: meTeacher.id },
+              { id: meTeacher.classId || 0 },
+              ...(meTeacher.classTeacher ? [{ name: meTeacher.classTeacher }] : [])
+            ]
+          }
+        }).catch(() => 0);
+        isClassTeacher = classCount > 0;
+      }
+      roleFilter = isClassTeacher ? ['teacher', 'admin', 'parent'] : ['teacher', 'admin'];
+    }
     else if (req.user.role === 'parent') roleFilter = ['teacher', 'admin'];
     else if (['admin', 'super_admin'].includes(req.user.role)) roleFilter = ['teacher', 'admin', 'parent'];
 
