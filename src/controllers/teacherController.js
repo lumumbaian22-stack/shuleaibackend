@@ -1698,3 +1698,177 @@ exports.getClassGradebook = async (req, res) => {
     res.json({ success:true, data:{ classId:cls.id, className:cls.name, subjects, students:data, canPublish:Number(cls.teacherId)===Number(teacher.id) } });
   } catch(error) { console.error('V66 gradebook error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
+
+
+// ============ V66_STAGE_4J_ASSIGNMENT_MARKS_WORKFLOW_FIX ============
+function v66JNorm(x) { return String(x || '').trim().toLowerCase(); }
+function v66JSame(a,b) { return v66JNorm(a) === v66JNorm(b); }
+function v66JUnique(arr, key = x => String(x || '').toLowerCase()) {
+  const seen = new Set(); const out = [];
+  for (const item of arr || []) { const k = key(item); if (!k || seen.has(k)) continue; seen.add(k); out.push(item); }
+  return out;
+}
+async function v66JTeacherAssignments(teacher, schoolCode) {
+  const classes = await Class.findAll({ where: { schoolCode, isActive: true }, order: [['name', 'ASC']] });
+  const rows = await TeacherSubjectAssignment.findAll({
+    where: { teacherId: teacher.id },
+    include: [{ model: Class, required: false }]
+  }).catch(() => []);
+  const tableAssignments = rows
+    .filter(a => !a.Class || a.Class.schoolCode === schoolCode)
+    .map(a => ({ classId: Number(a.classId), subject: a.subject, isClassTeacher: !!a.isClassTeacher, source: 'TeacherSubjectAssignments' }));
+
+  const jsonAssignments = [];
+  for (const cls of classes) {
+    for (const st of (Array.isArray(cls.subjectTeachers) ? cls.subjectTeachers : [])) {
+      if (Number(st.teacherId) === Number(teacher.id)) {
+        jsonAssignments.push({ classId: Number(cls.id), subject: st.subject, isClassTeacher: !!st.isClassTeacher, source: 'Class.subjectTeachers' });
+      }
+    }
+  }
+
+  const classTeacherClasses = classes.filter(cls =>
+    Number(cls.teacherId) === Number(teacher.id) ||
+    Number(cls.id) === Number(teacher.classId || 0) ||
+    v66JSame(cls.name, teacher.classTeacher)
+  );
+
+  const subjectAssignments = v66JUnique([...tableAssignments, ...jsonAssignments], a => `${a.classId}:${v66JNorm(a.subject)}`)
+    .map(a => {
+      const cls = classes.find(c => Number(c.id) === Number(a.classId));
+      return cls ? { ...a, classId: cls.id, className: cls.name, grade: cls.grade, stream: cls.stream } : null;
+    })
+    .filter(Boolean);
+
+  return { classes, subjectAssignments, classTeacherClasses };
+}
+
+// Replace assignment feed so assigned subjects/classes reflect correctly in teacher dashboard.
+exports.getMyAssignments = async (req, res) => {
+  try {
+    const teacher = await v3Teacher(req.user.id);
+    if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const { subjectAssignments, classTeacherClasses } = await v66JTeacherAssignments(teacher, req.user.schoolCode);
+    const byClass = new Map();
+    const classTeacher = classTeacherClasses[0] || null;
+
+    for (const cls of classTeacherClasses) {
+      byClass.set(String(cls.id), { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream, role:'class_teacher', subjects:v66SubjectListForClass(cls) });
+    }
+    for (const a of subjectAssignments) {
+      if (!byClass.has(String(a.classId))) byClass.set(String(a.classId), { id:a.classId, name:a.className, grade:a.grade, stream:a.stream, role:'subject_teacher', subjects:[] });
+      const row = byClass.get(String(a.classId));
+      if (a.subject && !row.subjects.some(s => v66JSame(s, a.subject))) row.subjects.push(a.subject);
+    }
+
+    const subjects = subjectAssignments.map(a => ({
+      classId:a.classId,
+      className:a.className,
+      grade:a.grade,
+      stream:a.stream,
+      subject:a.subject,
+      role:'subject_teacher',
+      isClassTeacher: classTeacherClasses.some(c => Number(c.id) === Number(a.classId))
+    }));
+
+    res.json({ success:true, data:{
+      teacherId: teacher.id,
+      teacherName: teacher.User?.name,
+      department: teacher.department || '',
+      role: classTeacher ? 'class_teacher' : 'subject_teacher',
+      classTeacher: classTeacher ? { id:classTeacher.id, name:classTeacher.name, grade:classTeacher.grade, stream:classTeacher.stream, subjects:v66SubjectListForClass(classTeacher) } : null,
+      classes:[...byClass.values()],
+      subjects
+    }});
+  } catch(error) { console.error('V66J get assignments error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+// Stricter permission: subject teacher only assigned subject/class; class teacher can review/publish their class.
+v66CanEnterMarks = async function(teacher, cls, subject) {
+  const { subjectAssignments, classTeacherClasses } = await v66JTeacherAssignments(teacher, cls.schoolCode || teacher.User?.schoolCode);
+  const isClassTeacher = classTeacherClasses.some(c => Number(c.id) === Number(cls.id));
+  const assignedSubjects = subjectAssignments.filter(a => Number(a.classId) === Number(cls.id)).map(a => String(a.subject || '').trim()).filter(Boolean);
+  const isSubjectTeacher = subject ? assignedSubjects.some(s => v66JSame(s, subject)) : assignedSubjects.length > 0;
+  return { allowed: isClassTeacher || isSubjectTeacher, isClassTeacher, isSubjectTeacher, assignedSubjects };
+};
+
+// Class gradebook now returns editable record IDs and recalculated values.
+exports.getClassGradebook = async (req, res) => {
+  try {
+    const { classId, term = 'Term 1', year = new Date().getFullYear(), assessmentType, assessmentName } = req.query;
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = classId ? await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }) : null;
+    if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = await v66CanEnterMarks(teacher, cls, null);
+    if (!access.isClassTeacher) return res.status(403).json({ success:false, message:'Only the class teacher can review the full class report' });
+    const meta = await v66SchoolMeta(req.user.schoolCode);
+    const students = await Student.unscoped().findAll({ where:v66StudentClassWhere(cls), include:[{ model:User, attributes:['id','name','profileImage'] }], order:[['createdAt','ASC']] });
+    const ids = students.map(s => s.id);
+    const where = { schoolCode:req.user.schoolCode, studentId:{ [Op.in]:ids }, term, year:Number(year) };
+    if (assessmentType) where.assessmentType = assessmentType;
+    if (assessmentName) where.assessmentName = assessmentName;
+    const records = await AcademicRecord.findAll({ where, order:[['subject','ASC'],['assessmentName','ASC'],['createdAt','DESC']] });
+    const subjects = [...new Set([...v66SubjectListForClass(cls), ...records.map(r => r.subject)].filter(Boolean))].sort();
+    const data = students.map(st => {
+      const recs = records.filter(r => Number(r.studentId) === Number(st.id));
+      const scores = {}; const recordIds = {}; const grades = {}; const statuses = {};
+      subjects.forEach(sub => {
+        const rows = recs.filter(r => v66JSame(r.subject, sub));
+        if (rows.length) {
+          const latest = rows[0];
+          const avg = Math.round(rows.reduce((a,b)=>a+Number(b.score||0),0)/rows.length);
+          scores[sub] = avg;
+          recordIds[sub] = latest.id;
+          grades[sub] = getGradeFromScore(avg, meta.system, meta.level, meta.gradingScale);
+          statuses[sub] = latest.status || (latest.isPublished ? 'published' : 'draft');
+        } else { scores[sub] = null; recordIds[sub] = null; grades[sub] = null; statuses[sub] = 'missing'; }
+      });
+      const vals=Object.values(scores).filter(v=>v!==null && Number.isFinite(Number(v)));
+      const overallAverage = vals.length?Math.round(vals.reduce((a,b)=>a+Number(b),0)/vals.length):null;
+      const finalGrade = overallAverage == null ? null : getGradeFromScore(overallAverage, meta.system, meta.level, meta.gradingScale);
+      const missingSubjects = subjects.filter(sub => scores[sub] === null || scores[sub] === undefined);
+      return { id:st.id, name:st.User?.name || 'Student', elimuid:st.elimuid, admissionNumber:st.admissionNumber, scores, recordIds, grades, statuses, overallAverage, finalGrade, missingSubjects };
+    });
+    res.json({ success:true, data:{ classId:cls.id, className:cls.name, subjects, students:data, canPublish:true, curriculum:meta.system, schoolLevel:meta.level, term, year:Number(year) } });
+  } catch(error) { console.error('V66J gradebook error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+// Class teacher can edit unpublished marks before publishing; subject teacher can edit their own unpublished marks.
+exports.updateMark = async (req, res) => {
+  try {
+    const { recordId } = req.params;
+    const { score, remarks } = req.body;
+    const record = await AcademicRecord.findByPk(recordId);
+    if (!record) return res.status(404).json({ success:false, message:'Record not found' });
+    if (record.schoolCode !== req.user.schoolCode) return res.status(403).json({ success:false, message:'Forbidden' });
+    if (record.isPublished || record.status === 'published' || record.status === 'locked') return res.status(409).json({ success:false, message:'Published marks cannot be edited here' });
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = record.classId ? await Class.findOne({ where:{ id:record.classId, schoolCode:req.user.schoolCode, isActive:true } }) : null;
+    if (!cls) return res.status(404).json({ success:false, message:'Class not found for this mark' });
+    const access = await v66CanEnterMarks(teacher, cls, record.subject);
+    if (!access.isClassTeacher && Number(record.teacherId) !== Number(teacher.id)) return res.status(403).json({ success:false, message:'Only the original subject teacher or class teacher can edit this mark before publish' });
+    const numericScore = Number(score);
+    if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > 100) return res.status(400).json({ success:false, message:'Score must be between 0 and 100' });
+    const meta = await v66SchoolMeta(req.user.schoolCode);
+    const grade = getGradeFromScore(numericScore, meta.system, meta.level, meta.gradingScale);
+    await record.update({ score:numericScore, grade, remarks: remarks !== undefined ? remarks : record.remarks, curriculum:meta.system, gradingScale:meta.gradingScale || record.gradingScale, status:'submitted' });
+    res.json({ success:true, data:record, meta:{ grade, curriculum:meta.system, schoolLevel:meta.level } });
+  } catch(error) { console.error('V66J update mark error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.publishMarks = async (req,res) => {
+  try {
+    const { classId, term='Term 1', year=new Date().getFullYear(), assessmentType, assessmentName } = req.body;
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = await v66CanEnterMarks(teacher, cls, null);
+    if (!access.isClassTeacher) return res.status(403).json({ success:false, message:'Only the class teacher can publish final marks for this class' });
+    const students = await Student.unscoped().findAll({ where:v66StudentClassWhere(cls), attributes:['id'] }); const ids=students.map(s=>s.id);
+    const where = { schoolCode:req.user.schoolCode, studentId:{ [Op.in]:ids }, term, year:Number(year), status:{ [Op.ne]:'locked' } };
+    if (assessmentType) where.assessmentType = assessmentType;
+    if (assessmentName) where.assessmentName = assessmentName;
+    const now = new Date();
+    const [count] = await AcademicRecord.update({ isPublished:true, status:'published', publishedAt:now, publishedBy:req.user.id }, { where });
+    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. Student and parent report cards are now updated.`, data:{ count, classId:cls.id, term, year:Number(year) } });
+  } catch(error) { console.error('V66J publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
