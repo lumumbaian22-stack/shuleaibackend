@@ -50,7 +50,15 @@ io.on('connection', (socket) => {
     }
 
     socket.on('join', (userId) => {
-        if (userId) socket.join(`user-${userId}`);
+        // Users may only join their own personal room.
+        if (userId && String(userId) === String(socket.userId)) socket.join(`user-${userId}`);
+    });
+
+    socket.on('join-school', (schoolCode) => {
+        // Users may only join their authenticated school room.
+        const requested = String(schoolCode || '').trim();
+        const ownSchool = String(socket.schoolCode || '').trim();
+        if (requested && ownSchool && requested === ownSchool) socket.join(`school-${ownSchool}`);
     });
 
     socket.on('private-message', (data) => {

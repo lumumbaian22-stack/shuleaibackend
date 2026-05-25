@@ -1,6 +1,7 @@
 const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, Subscription, SubscriptionPayment, SchoolPaymentSetting } = require('../models');
 const daraja = require('../services/darajaService');
 const subscriptionController = require('./subscriptionController');
+const realtimeSync = require('../services/realtimeSyncService');
 
 function ref(prefix){ return `${prefix}-${Date.now()}-${Math.floor(Math.random()*100000).toString().padStart(5,'0')}`; }
 function cleanAmount(v){ const n = Math.round(Number(v)); if(!Number.isFinite(n) || n < 1) throw new Error('Payment amount must be at least KES 1'); return n; }
@@ -58,19 +59,21 @@ async function getSchoolPaymentConfig(schoolCodeValue){
   return { school, row:modelRow, settings:merged };
 }
 async function applyFeePayment(payment, receipt='manual'){
-  if(!payment?.feeId || payment.status === 'completed') return null;
+  if(!payment?.feeId) return null;
   const fee = await Fee.findByPk(payment.feeId);
   if(!fee) return null;
-  const beforePaid = Number(fee.paidAmount || 0);
-  const newPaid = Math.min(Number(fee.totalAmount || 0), beforePaid + Number(payment.amount || 0));
   const payments = Array.isArray(fee.payments) ? fee.payments : [];
   const exists = payments.some(p => String(p.paymentId) === String(payment.id) || (receipt && p.receipt && String(p.receipt) === String(receipt)));
-  if(!exists){ payments.push({ paymentId:payment.id, amount:payment.amount, reference:payment.reference, receipt, paidAt:new Date().toISOString(), gateway:payment.paymentGateway || 'manual_mpesa', elimuId:payment.metadata?.studentElimuid }); }
+  if(exists) return fee;
+  const beforePaid = Number(fee.paidAmount || 0);
+  const newPaid = Math.min(Number(fee.totalAmount || 0), beforePaid + Number(payment.amount || 0));
+  payments.push({ paymentId:payment.id, amount:payment.amount, reference:payment.reference, receipt, paidAt:new Date().toISOString(), gateway:payment.paymentGateway || 'manual_mpesa', elimuId:payment.metadata?.studentElimuid });
   const feeTrail = Array.isArray(fee.auditTrail) ? fee.auditTrail : [];
   feeTrail.push({ action:'payment_applied', at:new Date().toISOString(), paymentId:payment.id, amount:payment.amount, receipt });
   await fee.update({ paidAmount:newPaid, status:feeStatus(fee.totalAmount, newPaid), payments, auditTrail:feeTrail, lastReconciledAt:new Date() });
   return fee;
 }
+
 async function createManualPayment(req, { student, parent, fee, amount, mpesaCode, phone, notes }){
   const reference = String(mpesaCode || ref(`MAN-${student.id}`)).trim().toUpperCase();
   const existing = await Payment.findOne({ where:{ reference, schoolCode:studentSchoolCode(student) } });
@@ -84,6 +87,14 @@ async function createManualPayment(req, { student, parent, fee, amount, mpesaCod
     auditTrail:[auditEntry('manual_payment_submitted', req.user, { reference, amount, elimuId:studentElimuId(student) })]
   });
   await writeAudit(req, { module:'payments', action:'manual_payment_submitted', entityType:'Payment', entityId:String(payment.id), after:payment.toJSON(), metadata:{reference, amount} });
+  realtimeSync.emitPaymentUpdate(studentSchoolCode(student), {
+    paymentId: payment.id,
+    studentId: student.id,
+    feeId: fee?.id || null,
+    amount,
+    status: 'pending',
+    action: 'manual_payment_submitted'
+  });
   return payment;
 }
 
@@ -335,6 +346,18 @@ exports.getManualVerificationQueue = async (req, res) => {
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
 
+
+exports.getAdminPaymentRecords = async (req, res) => {
+  try {
+    const rows = await Payment.findAll({
+      where:{ schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school' },
+      include:[{ model:Student, include:[{model:User, attributes:['id','name','schoolCode']}] }, { model:Parent, include:[{model:User, attributes:['id','name','phone','email']}] }, { model:Fee }],
+      order:[['createdAt','DESC']], limit:500
+    });
+    res.json({ success:true, data:rows });
+  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+};
+
 exports.approveManualPayment = async (req, res) => {
   try {
     const payment = await Payment.findOne({ where:{ id:req.params.paymentId, schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school' } });
@@ -345,6 +368,14 @@ exports.approveManualPayment = async (req, res) => {
     await payment.update({ status:'completed', completedAt:new Date(), verifiedBy:req.user.id, verifiedAt:new Date(), notes:req.body?.notes || payment.notes, auditTrail:trail });
     const fee = await applyFeePayment(payment, payment.reference);
     await writeAudit(req, { module:'payments', action:'manual_payment_approved', entityType:'Payment', entityId:String(payment.id), after:payment.toJSON() });
+    realtimeSync.emitPaymentUpdate(payment.schoolCode || req.user.schoolCode, {
+      paymentId: payment.id,
+      studentId: payment.studentId,
+      feeId: payment.feeId,
+      amount: payment.amount,
+      status: 'completed',
+      action: 'manual_payment_approved'
+    });
     res.json({ success:true, message:'Payment approved. Student fee balance updated.', data:{ payment, fee } });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
@@ -357,6 +388,14 @@ exports.rejectManualPayment = async (req, res) => {
     trail.push(auditEntry('manual_payment_rejected', req.user, { reason:req.body?.reason || 'Rejected by finance/admin' }));
     await payment.update({ status:'failed', verifiedBy:req.user.id, verifiedAt:new Date(), notes:req.body?.reason || 'Rejected by school finance/admin', auditTrail:trail });
     await writeAudit(req, { module:'payments', action:'manual_payment_rejected', entityType:'Payment', entityId:String(payment.id), after:payment.toJSON() });
+    realtimeSync.emitPaymentUpdate(payment.schoolCode || req.user.schoolCode, {
+      paymentId: payment.id,
+      studentId: payment.studentId,
+      feeId: payment.feeId,
+      amount: payment.amount,
+      status: 'failed',
+      action: 'manual_payment_rejected'
+    });
     res.json({ success:true, message:'Payment rejected. No balance was updated.', data:payment });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
@@ -524,6 +563,14 @@ exports.darajaCallback = async (req, res) => {
         if (student) await student.upgradeSubscription(payment.plan || 'basic', payment.amount);
       }
       await AuditLog?.create({ schoolCode:payment.schoolCode, module:'payments', action:success?'payment_completed':'payment_failed', entityType:'Payment', entityId:String(payment.id), before, after:payment.toJSON(), metadata:{ parsed } });
+      realtimeSync.emitPaymentUpdate(payment.schoolCode, {
+        paymentId: payment.id,
+        studentId: payment.studentId,
+        feeId: payment.feeId,
+        amount: payment.amount,
+        status: success ? 'completed' : 'failed',
+        action: success ? 'daraja_payment_completed' : 'daraja_payment_failed'
+      });
     }
     res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
   } catch(error){ console.error('Daraja callback error:', error); res.json({ ResultCode: 0, ResultDesc:'Accepted with internal logging error' }); }
