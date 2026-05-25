@@ -1,4 +1,4 @@
-const { FeeStructure, Fee, Student, Class } = require('../models');
+const { FeeStructure, Fee, Student, Class, User } = require('../models');
 const service = require('../services/feeStructureService');
 
 function schoolCode(req) { return req.user?.schoolCode || req.query.schoolCode || req.body.schoolCode; }
@@ -66,7 +66,11 @@ exports.studentFeeAccounts = async (req, res) => {
     if (req.query.studentId) where.studentId = req.query.studentId;
     if (req.query.term) where.term = req.query.term;
     if (req.query.year) where.year = Number(req.query.year);
-    const data = await Fee.findAll({ where, include: [{ model: Student }], order: [['updatedAt', 'DESC']] });
+    const data = await Fee.findAll({
+      where,
+      include: [{ model: Student, include: [{ model: User, attributes: ['id','name','email','schoolCode'] }] }],
+      order: [['updatedAt', 'DESC']]
+    });
     res.json({ success: true, data });
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
