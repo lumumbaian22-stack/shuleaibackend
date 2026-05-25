@@ -1,4 +1,4 @@
-const { FeeStructure, Fee, Student, Class, User, Payment } = require('../models');
+const { FeeStructure, Fee, Student, Class, User } = require('../models');
 const service = require('../services/feeStructureService');
 
 function schoolCode(req) { return req.user?.schoolCode || req.query.schoolCode || req.body.schoolCode; }
@@ -37,10 +37,7 @@ exports.update = async (req, res) => {
 };
 
 exports.activate = async (req, res) => {
-  try {
-    const data = await service.activateStructure({ user: req.user, id: req.params.id });
-    res.json({ success: true, message: 'Fee structure activated and assigned to eligible students', data });
-  }
+  try { const data = await service.activateStructure({ user: req.user, id: req.params.id }); res.json({ success: true, message: 'Fee structure activated', data }); }
   catch (error) { res.status(400).json({ success: false, message: error.message }); }
 };
 
@@ -65,30 +62,15 @@ exports.adjustFee = async (req, res) => {
 
 exports.studentFeeAccounts = async (req, res) => {
   try {
-    const sc = schoolCode(req);
-    await service.repairSchoolFeeAccounts({ user: req.user, schoolCode: sc }).catch(e => console.warn('[fees] background repair skipped:', e.message));
-    const where = { schoolCode: sc };
+    const where = { schoolCode: schoolCode(req) };
     if (req.query.studentId) where.studentId = req.query.studentId;
     if (req.query.term) where.term = req.query.term;
     if (req.query.year) where.year = Number(req.query.year);
-    const data = await Fee.unscoped().findAll({
+    const data = await Fee.findAll({
       where,
-      include: [
-        { model: Student.unscoped ? Student.unscoped() : Student, include: [
-          { model: User, attributes: ['id','name','email','schoolCode'] },
-          { model: Class, attributes: ['id','name','grade','stream','schoolCode'], required:false }
-        ]},
-        { model: Class, attributes: ['id','name','grade','stream'], required:false }
-      ],
-      order: [['year', 'DESC'], ['term', 'DESC'], ['updatedAt', 'DESC']]
+      include: [{ model: Student, include: [{ model: User, attributes: ['id','name','email','schoolCode'] }] }],
+      order: [['updatedAt', 'DESC']]
     });
     res.json({ success: true, data });
-  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
-};
-
-exports.repair = async (req, res) => {
-  try {
-    const data = await service.repairSchoolFeeAccounts({ user: req.user, schoolCode: schoolCode(req) });
-    res.json({ success: true, message: 'Finance fee accounts repaired', data });
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };

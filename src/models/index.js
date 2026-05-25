@@ -188,25 +188,22 @@ Student.hasMany(Attendance, { foreignKey: 'studentId' });
 // Fee Structure
 FeeStructure.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
 School.hasMany(FeeStructure, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
-FeeStructure.hasMany(Fee, { foreignKey: 'feeStructureId', sourceKey: 'id', constraints: false });
-Fee.belongsTo(FeeStructure, { foreignKey: 'feeStructureId', targetKey: 'id', constraints: false });
-
-// Student <-> Class association for finance/account generation.
-// Students do NOT have schoolCode directly; the school comes from Student.User.schoolCode.
-Student.belongsTo(Class, { foreignKey: 'classId', constraints: false });
-Class.hasMany(Student, { foreignKey: 'classId', constraints: false });
+FeeStructure.hasMany(Fee, { foreignKey: 'feeStructureId', sourceKey: 'id' });
 
 // Fee
 Fee.belongsTo(Student, { foreignKey: 'studentId' });
 Student.hasMany(Fee, { foreignKey: 'studentId' });
-Fee.belongsTo(Class, { foreignKey: 'classId', constraints: false });
-Class.hasMany(Fee, { foreignKey: 'classId', constraints: false });
+Fee.belongsTo(FeeStructure, { foreignKey: 'feeStructureId', targetKey: 'id' });
+
+// Class membership
+Student.belongsTo(Class, { foreignKey: 'classId' });
+Class.hasMany(Student, { foreignKey: 'classId' });
 
 // Payment
 Payment.belongsTo(Student, { foreignKey: 'studentId' });
 Payment.belongsTo(Parent, { foreignKey: 'parentId' });
-Payment.belongsTo(Fee, { foreignKey: 'feeId', constraints: false });
-Fee.hasMany(Payment, { foreignKey: 'feeId', constraints: false });
+Payment.belongsTo(Fee, { foreignKey: 'feeId' });
+Fee.hasMany(Payment, { foreignKey: 'feeId' });
 Student.hasMany(Payment, { foreignKey: 'studentId' });
 Parent.hasMany(Payment, { foreignKey: 'parentId' });
 

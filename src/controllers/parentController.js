@@ -1,6 +1,5 @@
 const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, Class, sequelize } = require('../models');
 const { createAlert } = require('../services/notificationService');
-const feeStructureService = require('../services/feeStructureService');
 function rolloutMoneyDisabled(res) {
   return res.status(503).json({ success: false, message: 'Real money collection is disabled in this national rollout school-operations build. Fee/payment records can be enabled after Daraja live audit.' });
 }
@@ -457,29 +456,28 @@ exports.confirmPayment = async (req, res) => {
 exports.getPayments = async (req, res) => {
   try {
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    
+    if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
+
     const payments = await Payment.findAll({
       where: { parentId: parent.id },
       include: [
-        { 
-          model: Student, 
-          include: [{ model: User, attributes: ['name'] }] 
-        }
+        { model: Student, include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }] },
+        { model: Fee, required: false }
       ],
       order: [['createdAt', 'DESC']]
     });
 
-    const school = await School.findOne({ 
+    const school = await School.findOne({
       where: { schoolId: req.user.schoolCode },
       attributes: ['name', 'bankDetails']
     });
 
-    res.json({ 
-      success: true, 
-      data: {
-        payments,
-        school: school
-      } 
+    // Return both shapes: older frontend reads data as array; newer frontend can read metadata.
+    res.json({
+      success: true,
+      data: payments,
+      payments,
+      school
     });
   } catch (error) {
     console.error('Get payments error:', error);
@@ -743,17 +741,13 @@ exports.getFees = async (req, res) => {
   try {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    const StudentModel = Student.unscoped ? Student.unscoped() : Student;
-    const student = await StudentModel.findByPk(studentId, { include:[{ model: User, attributes:['id','name','schoolCode'] }, { model: Class, attributes:['id','name','grade','stream','schoolCode'], required:false }] });
-    if (!student || !parent || !(await parent.hasStudent(student))) {
+    const student = await Student.unscoped().findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
+    if (!student || !(await parent.hasStudent(student))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
-    const sc = student.User?.schoolCode || req.user.schoolCode;
-    await feeStructureService.ensureFeeAccountsForStudent({ user:req.user, studentId:student.id, schoolCode:sc }).catch(e => console.warn('[parent fees] ensure accounts skipped:', e.message));
-    await feeStructureService.reconcileOrphanPayments({ schoolCode:sc }).catch(e => console.warn('[parent fees] reconcile skipped:', e.message));
-    const fees = await (Fee.unscoped ? Fee.unscoped() : Fee).findAll({
-      where: { studentId, schoolCode: sc },
-      include:[{ model: Class, attributes:['id','name','grade','stream'], required:false }],
+    const fees = await Fee.findAll({
+      where: { studentId, schoolCode: student.User?.schoolCode || req.user.schoolCode },
+      include: [{ model: Payment, required: false }],
       order: [['year', 'DESC'], ['term', 'DESC']]
     });
     res.json({ success: true, data: fees });

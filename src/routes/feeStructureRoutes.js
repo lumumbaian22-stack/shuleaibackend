@@ -7,7 +7,6 @@ router.use(protect);
 router.get('/', authorize('admin', 'super_admin'), ctrl.list);
 router.post('/', authorize('admin', 'super_admin'), ctrl.create);
 router.get('/student-accounts', authorize('admin', 'super_admin', 'teacher'), ctrl.studentFeeAccounts);
-router.post('/repair', authorize('admin', 'super_admin'), ctrl.repair);
 router.get('/:id', authorize('admin', 'super_admin'), ctrl.get);
 router.put('/:id', authorize('admin', 'super_admin'), ctrl.update);
 router.post('/:id/activate', authorize('admin', 'super_admin'), ctrl.activate);
