@@ -193,10 +193,17 @@ FeeStructure.hasMany(Fee, { foreignKey: 'feeStructureId', sourceKey: 'id' });
 // Fee
 Fee.belongsTo(Student, { foreignKey: 'studentId' });
 Student.hasMany(Fee, { foreignKey: 'studentId' });
+Fee.belongsTo(FeeStructure, { foreignKey: 'feeStructureId', targetKey: 'id' });
+
+// Class membership
+Student.belongsTo(Class, { foreignKey: 'classId' });
+Class.hasMany(Student, { foreignKey: 'classId' });
 
 // Payment
 Payment.belongsTo(Student, { foreignKey: 'studentId' });
 Payment.belongsTo(Parent, { foreignKey: 'parentId' });
+Payment.belongsTo(Fee, { foreignKey: 'feeId' });
+Fee.hasMany(Payment, { foreignKey: 'feeId' });
 Student.hasMany(Payment, { foreignKey: 'studentId' });
 Parent.hasMany(Payment, { foreignKey: 'parentId' });
 

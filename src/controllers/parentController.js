@@ -456,29 +456,28 @@ exports.confirmPayment = async (req, res) => {
 exports.getPayments = async (req, res) => {
   try {
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    
+    if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
+
     const payments = await Payment.findAll({
       where: { parentId: parent.id },
       include: [
-        { 
-          model: Student, 
-          include: [{ model: User, attributes: ['name'] }] 
-        }
+        { model: Student, include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }] },
+        { model: Fee, required: false }
       ],
       order: [['createdAt', 'DESC']]
     });
 
-    const school = await School.findOne({ 
+    const school = await School.findOne({
       where: { schoolId: req.user.schoolCode },
       attributes: ['name', 'bankDetails']
     });
 
-    res.json({ 
-      success: true, 
-      data: {
-        payments,
-        school: school
-      } 
+    // Return both shapes: older frontend reads data as array; newer frontend can read metadata.
+    res.json({
+      success: true,
+      data: payments,
+      payments,
+      school
     });
   } catch (error) {
     console.error('Get payments error:', error);
@@ -742,12 +741,13 @@ exports.getFees = async (req, res) => {
   try {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    const student = await Student.findByPk(studentId);
+    const student = await Student.unscoped().findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
     if (!student || !(await parent.hasStudent(student))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
     const fees = await Fee.findAll({
-      where: { studentId },
+      where: { studentId, schoolCode: student.User?.schoolCode || req.user.schoolCode },
+      include: [{ model: Payment, required: false }],
       order: [['year', 'DESC'], ['term', 'DESC']]
     });
     res.json({ success: true, data: fees });
