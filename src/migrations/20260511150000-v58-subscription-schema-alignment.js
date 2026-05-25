@@ -73,55 +73,106 @@ module.exports = {
     await addColumnIfMissing(queryInterface, 'SubscriptionPayments', 'auditTrail', { type: Sequelize.JSONB, defaultValue: [] });
     await addColumnIfMissing(queryInterface, 'Payments', 'auditTrail', { type: Sequelize.JSONB, defaultValue: [] });
 
+    const aliasMap = (plan) => plan.ownerType === 'child'
+      ? (plan.code === 'child_essential'
+        ? ['basic', 'essential', 'child_essential']
+        : plan.code === 'child_smart'
+          ? ['premium', 'smart', 'child_smart']
+          : ['ultimate', 'genius', 'child_genius'])
+      : (plan.code === 'school_starter'
+        ? ['starter', 'school_starter']
+        : plan.code === 'school_growth'
+          ? ['growth', 'school_growth']
+          : ['enterprise', 'school_enterprise']);
+
     for (const plan of plans) {
-      await queryInterface.sequelize.query(`
-        UPDATE "SubscriptionPlans"
-        SET "code" = :code,
-            "name" = :name,
-            "displayName" = :displayName,
-            "ownerType" = :ownerType,
-            "price_kes" = :price_kes,
-            "monthlyPriceKes" = :monthlyPriceKes,
-            "yearlyPriceKes" = :yearlyPriceKes,
-            "setupFeeMinKes" = :setupFeeMinKes,
-            "setupFeeMaxKes" = :setupFeeMaxKes,
-            "features" = CAST(:features AS JSONB),
-            "lockedFeatures" = CAST(:lockedFeatures AS JSONB),
-            "limits" = CAST(:limits AS JSONB),
-            "sortOrder" = :sortOrder,
-            "isActive" = true,
-            "updatedAt" = NOW()
+      const aliases = aliasMap(plan);
+      const replacements = {
+        ...plan,
+        aliases,
+        features: JSON.stringify(plan.features || []),
+        lockedFeatures: JSON.stringify(plan.lockedFeatures || []),
+        limits: JSON.stringify(plan.limits || {}),
+        setupFeeMinKes: plan.setupFeeMinKes || null,
+        setupFeeMaxKes: plan.setupFeeMaxKes || null
+      };
+
+      const matches = await queryInterface.sequelize.query(`
+        SELECT "id", "code", "name"
+        FROM "SubscriptionPlans"
         WHERE LOWER("name") IN (:aliases)
-           OR LOWER(COALESCE("code", '')) IN (:aliases);
+           OR LOWER(COALESCE("code", '')) IN (:aliases)
+           OR "code" = :code
+        ORDER BY
+          CASE WHEN "code" = :code THEN 0 ELSE 1 END,
+          "id" ASC;
       `, {
-        replacements: {
-          ...plan,
-          aliases: plan.ownerType === 'child'
-            ? (plan.code === 'child_essential' ? ['basic','essential','child_essential'] : plan.code === 'child_smart' ? ['premium','smart','child_smart'] : ['ultimate','genius','child_genius'])
-            : (plan.code === 'school_starter' ? ['starter','school_starter'] : plan.code === 'school_growth' ? ['growth','school_growth'] : ['enterprise','school_enterprise']),
-          features: JSON.stringify(plan.features || []),
-          lockedFeatures: JSON.stringify(plan.lockedFeatures || []),
-          limits: JSON.stringify(plan.limits || {}),
-          setupFeeMinKes: plan.setupFeeMinKes || null,
-          setupFeeMaxKes: plan.setupFeeMaxKes || null
-        }
+        replacements,
+        type: queryInterface.sequelize.QueryTypes.SELECT
       });
 
-      await queryInterface.sequelize.query(`
-        INSERT INTO "SubscriptionPlans"
-          ("code","name","displayName","ownerType","price_kes","monthlyPriceKes","yearlyPriceKes","setupFeeMinKes","setupFeeMaxKes","features","lockedFeatures","limits","sortOrder","isActive","createdAt","updatedAt")
-        SELECT :code,:name,:displayName,:ownerType,:price_kes,:monthlyPriceKes,:yearlyPriceKes,:setupFeeMinKes,:setupFeeMaxKes,CAST(:features AS JSONB),CAST(:lockedFeatures AS JSONB),CAST(:limits AS JSONB),:sortOrder,true,NOW(),NOW()
-        WHERE NOT EXISTS (SELECT 1 FROM "SubscriptionPlans" WHERE "code" = :code);
-      `, {
-        replacements: {
-          ...plan,
-          features: JSON.stringify(plan.features || []),
-          lockedFeatures: JSON.stringify(plan.lockedFeatures || []),
-          limits: JSON.stringify(plan.limits || {}),
-          setupFeeMinKes: plan.setupFeeMinKes || null,
-          setupFeeMaxKes: plan.setupFeeMaxKes || null
-        }
-      });
+      if (matches.length > 0) {
+        const targetId = matches[0].id;
+
+        // Production-safe/idempotent duplicate handling:
+        // Older builds can contain both legacy names like "starter" and canonical codes
+        // like "school_starter". Updating all alias rows to the same unique code causes
+        // Postgres error 23505. Keep one canonical row and neutralize duplicates first.
+        await queryInterface.sequelize.query(`
+          UPDATE "SubscriptionPlans"
+          SET "code" = NULL,
+              "isActive" = false,
+              "updatedAt" = NOW()
+          WHERE "id" <> :targetId
+            AND (
+              LOWER("name") IN (:aliases)
+              OR LOWER(COALESCE("code", '')) IN (:aliases)
+              OR "code" = :code
+            );
+        `, { replacements: { ...replacements, targetId } });
+
+        await queryInterface.sequelize.query(`
+          UPDATE "SubscriptionPlans"
+          SET "code" = :code,
+              "name" = :name,
+              "displayName" = :displayName,
+              "ownerType" = :ownerType,
+              "price_kes" = :price_kes,
+              "monthlyPriceKes" = :monthlyPriceKes,
+              "yearlyPriceKes" = :yearlyPriceKes,
+              "setupFeeMinKes" = :setupFeeMinKes,
+              "setupFeeMaxKes" = :setupFeeMaxKes,
+              "features" = CAST(:features AS JSONB),
+              "lockedFeatures" = CAST(:lockedFeatures AS JSONB),
+              "limits" = CAST(:limits AS JSONB),
+              "sortOrder" = :sortOrder,
+              "isActive" = true,
+              "updatedAt" = NOW()
+          WHERE "id" = :targetId;
+        `, { replacements: { ...replacements, targetId } });
+      } else {
+        await queryInterface.sequelize.query(`
+          INSERT INTO "SubscriptionPlans"
+            ("code","name","displayName","ownerType","price_kes","monthlyPriceKes","yearlyPriceKes","setupFeeMinKes","setupFeeMaxKes","features","lockedFeatures","limits","sortOrder","isActive","createdAt","updatedAt")
+          VALUES
+            (:code,:name,:displayName,:ownerType,:price_kes,:monthlyPriceKes,:yearlyPriceKes,:setupFeeMinKes,:setupFeeMaxKes,CAST(:features AS JSONB),CAST(:lockedFeatures AS JSONB),CAST(:limits AS JSONB),:sortOrder,true,NOW(),NOW())
+          ON CONFLICT ("code") DO UPDATE SET
+            "name" = EXCLUDED."name",
+            "displayName" = EXCLUDED."displayName",
+            "ownerType" = EXCLUDED."ownerType",
+            "price_kes" = EXCLUDED."price_kes",
+            "monthlyPriceKes" = EXCLUDED."monthlyPriceKes",
+            "yearlyPriceKes" = EXCLUDED."yearlyPriceKes",
+            "setupFeeMinKes" = EXCLUDED."setupFeeMinKes",
+            "setupFeeMaxKes" = EXCLUDED."setupFeeMaxKes",
+            "features" = EXCLUDED."features",
+            "lockedFeatures" = EXCLUDED."lockedFeatures",
+            "limits" = EXCLUDED."limits",
+            "sortOrder" = EXCLUDED."sortOrder",
+            "isActive" = true,
+            "updatedAt" = NOW();
+        `, { replacements });
+      }
     }
   },
   async down() {}
