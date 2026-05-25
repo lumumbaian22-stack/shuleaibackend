@@ -1,4 +1,4 @@
-const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, Subscription, SubscriptionPayment } = require('../models');
+const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, Subscription, SubscriptionPayment, SchoolPaymentSetting } = require('../models');
 const daraja = require('../services/darajaService');
 const subscriptionController = require('./subscriptionController');
 
@@ -19,6 +19,72 @@ async function findStudentForParent(req, studentId){
 
 async function currentSchool(req){
   return School.findOne({ where:{ schoolId:req.user.schoolCode } });
+}
+
+function feeBalance(fee){ return Math.max(0, Number(fee?.totalAmount || 0) - Number(fee?.paidAmount || 0)); }
+function feeStatus(total, paid){ const t=Number(total||0), p=Number(paid||0); if(p >= t && t > 0) return 'paid'; if(p > 0) return 'partial'; return 'unpaid'; }
+function studentSchoolCode(student){ return student?.User?.schoolCode || student?.schoolCode || null; }
+function studentElimuId(student){ return student?.elimuid || student?.elimuId || student?.admissionNumber || `STU-${student?.id}`; }
+function paymentAccountReference(student, fee, format='elimuid'){
+  const f = String(format || 'elimuid').toLowerCase();
+  if (f.includes('admission')) return student?.admissionNumber || studentElimuId(student);
+  if (f.includes('studentid')) return String(student?.id || studentElimuId(student));
+  if (f.includes('term')) return `${studentElimuId(student)}-${fee?.term || ''}`.slice(0,12);
+  return String(studentElimuId(student)).slice(0,12);
+}
+async function getSchoolPaymentConfig(schoolCodeValue){
+  const school = await School.findOne({ where:{ schoolId:schoolCodeValue } });
+  const existingSettings = school?.settings?.paymentSettings || {};
+  const modelRow = await SchoolPaymentSetting?.findOne({ where:{ schoolCode:schoolCodeValue } }).catch(()=>null);
+  const merged = {
+    paymentMode: modelRow?.paymentMode || existingSettings.paymentMode || 'manual',
+    mpesaType: modelRow?.mpesaType || existingSettings.mpesaType || 'paybill',
+    paybillNumber: modelRow?.paybillNumber || existingSettings.paybill || existingSettings.paybillNumber || '',
+    tillNumber: modelRow?.tillNumber || existingSettings.till || existingSettings.tillNumber || '',
+    businessShortCode: modelRow?.businessShortCode || existingSettings.businessShortcode || existingSettings.businessShortCode || existingSettings.paybill || existingSettings.till || '',
+    accountReferenceFormat: modelRow?.accountReferenceFormat || existingSettings.accountReferenceFormat || existingSettings.referenceFormat || 'elimuid',
+    darajaEnabled: modelRow?.darajaEnabled === true || existingSettings.darajaEnabled === true || existingSettings.paymentMode === 'daraja',
+    darajaConsumerKey: modelRow?.darajaConsumerKey || existingSettings.consumerKey || existingSettings.darajaConsumerKey || '',
+    darajaConsumerSecret: modelRow?.darajaConsumerSecret || existingSettings.consumerSecret || existingSettings.darajaConsumerSecret || '',
+    darajaPasskey: modelRow?.darajaPasskey || existingSettings.passkey || existingSettings.darajaPasskey || '',
+    darajaShortcode: modelRow?.darajaShortcode || existingSettings.shortcode || existingSettings.businessShortcode || existingSettings.businessShortCode || '',
+    darajaEnvironment: modelRow?.darajaEnvironment || existingSettings.darajaEnvironment || existingSettings.environment || process.env.DARAJA_ENV || 'sandbox',
+    callbackUrl: modelRow?.callbackUrl || existingSettings.callbackUrl || process.env.DARAJA_CALLBACK_URL || process.env.MPESA_CALLBACK_URL || '',
+    isActive: modelRow ? modelRow.isActive !== false : existingSettings.active !== false,
+    schoolName: school?.name || existingSettings.accountName || 'School'
+  };
+  merged.canUseDaraja = merged.isActive && (merged.paymentMode === 'daraja' || merged.darajaEnabled) && merged.darajaConsumerKey && merged.darajaConsumerSecret && merged.darajaPasskey && merged.darajaShortcode;
+  merged.manualAccount = merged.mpesaType === 'till' ? merged.tillNumber : merged.paybillNumber;
+  return { school, row:modelRow, settings:merged };
+}
+async function applyFeePayment(payment, receipt='manual'){
+  if(!payment?.feeId || payment.status === 'completed') return null;
+  const fee = await Fee.findByPk(payment.feeId);
+  if(!fee) return null;
+  const beforePaid = Number(fee.paidAmount || 0);
+  const newPaid = Math.min(Number(fee.totalAmount || 0), beforePaid + Number(payment.amount || 0));
+  const payments = Array.isArray(fee.payments) ? fee.payments : [];
+  const exists = payments.some(p => String(p.paymentId) === String(payment.id) || (receipt && p.receipt && String(p.receipt) === String(receipt)));
+  if(!exists){ payments.push({ paymentId:payment.id, amount:payment.amount, reference:payment.reference, receipt, paidAt:new Date().toISOString(), gateway:payment.paymentGateway || 'manual_mpesa', elimuId:payment.metadata?.studentElimuid }); }
+  const feeTrail = Array.isArray(fee.auditTrail) ? fee.auditTrail : [];
+  feeTrail.push({ action:'payment_applied', at:new Date().toISOString(), paymentId:payment.id, amount:payment.amount, receipt });
+  await fee.update({ paidAmount:newPaid, status:feeStatus(fee.totalAmount, newPaid), payments, auditTrail:feeTrail, lastReconciledAt:new Date() });
+  return fee;
+}
+async function createManualPayment(req, { student, parent, fee, amount, mpesaCode, phone, notes }){
+  const reference = String(mpesaCode || ref(`MAN-${student.id}`)).trim().toUpperCase();
+  const existing = await Payment.findOne({ where:{ reference, schoolCode:studentSchoolCode(student) } });
+  if(existing) throw new Error('This M-Pesa code/reference has already been submitted.');
+  const payment = await Payment.create({
+    studentId:student.id, parentId:parent?.id || null, feeId:fee?.id || null,
+    amount, method:'mpesa', reference, status:'pending', transactionId:`MANUAL-${reference}`,
+    accountReference:paymentAccountReference(student, fee, 'elimuid'), schoolCode:studentSchoolCode(student), paymentType:'fee', currency:'KES', paymentGateway:'manual_mpesa', paidTo:'school', payerPhone:phone || null, locked:true,
+    notes:notes || 'Manual M-Pesa payment awaiting school verification',
+    metadata:{ studentElimuid:studentElimuId(student), feeId:fee?.id || null, term:fee?.term, year:fee?.year, submittedBy:'parent', manual:true },
+    auditTrail:[auditEntry('manual_payment_submitted', req.user, { reference, amount, elimuId:studentElimuId(student) })]
+  });
+  await writeAudit(req, { module:'payments', action:'manual_payment_submitted', entityType:'Payment', entityId:String(payment.id), after:payment.toJSON(), metadata:{reference, amount} });
+  return payment;
 }
 
 function normalizePlanInput(plan, ownerType){
@@ -79,12 +145,26 @@ exports.getAdminPaymentSettings = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const settings = school.settings || {};
+    const { settings } = await getSchoolPaymentConfig(school.schoolId);
     res.json({ success:true, data: {
       schoolName: school.name,
       schoolCode: school.schoolId,
-      paymentSettings: settings.paymentSettings || {
-        paybill: '', till: '', accountName: school.name, settlementBank: '', settlementAccount: '', supportPhone: school.contact?.phone || '', currency: 'KES', acceptedMethods: ['mpesa'], feeCategories: ['Tuition Fees','Transport','Lunch','Uniform','Activity Fees'], active: false
+      paymentSettings: {
+        paymentMode: settings.paymentMode,
+        mpesaType: settings.mpesaType,
+        paybill: settings.paybillNumber,
+        till: settings.tillNumber,
+        businessShortcode: settings.businessShortCode,
+        shortcode: settings.darajaShortcode || settings.businessShortCode,
+        accountReferenceFormat: settings.accountReferenceFormat || 'elimuid',
+        darajaEnabled: !!settings.canUseDaraja,
+        darajaEnvironment: settings.darajaEnvironment,
+        callbackUrl: settings.callbackUrl,
+        active: settings.isActive,
+        accountName: settings.schoolName,
+        manualAccount: settings.manualAccount,
+        currency: 'KES',
+        acceptedMethods: ['mpesa']
       },
       bankDetails: school.bankDetails || {}
     }});
@@ -96,59 +176,82 @@ exports.updateAdminPaymentSettings = async (req, res) => {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
     const incoming = req.body || {};
+    const paymentMode = incoming.paymentMode || incoming.mode || 'manual';
+    const mpesaType = incoming.mpesaType || incoming.type || 'paybill';
+    const paybillNumber = incoming.paybillNumber || incoming.paybill || incoming.businessShortcode || '';
+    const tillNumber = incoming.tillNumber || incoming.till || '';
+    const businessShortCode = incoming.businessShortCode || incoming.businessShortcode || incoming.shortcode || (mpesaType === 'till' ? tillNumber : paybillNumber) || '';
+    const accountReferenceFormat = incoming.accountReferenceFormat || incoming.referenceFormat || 'elimuid';
+    const rowPayload = {
+      schoolId: school.id,
+      schoolCode: school.schoolId,
+      paymentMode,
+      mpesaType,
+      tillNumber,
+      paybillNumber,
+      businessShortCode,
+      accountReferenceFormat,
+      bankName: incoming.bankName || incoming.bankDetails?.bankName || '',
+      bankAccountName: incoming.accountName || incoming.bankDetails?.accountName || school.name,
+      bankAccountNumber: incoming.bankAccount || incoming.accountNumber || incoming.bankDetails?.accountNumber || '',
+      bankBranch: incoming.branch || incoming.bankDetails?.branch || '',
+      darajaEnabled: paymentMode === 'daraja' || incoming.darajaEnabled === true,
+      darajaConsumerKey: incoming.consumerKey || incoming.darajaConsumerKey || '',
+      darajaConsumerSecret: incoming.consumerSecret || incoming.darajaConsumerSecret || '',
+      darajaPasskey: incoming.passkey || incoming.darajaPasskey || '',
+      darajaShortcode: incoming.shortcode || incoming.darajaShortcode || businessShortCode,
+      darajaEnvironment: incoming.environment || incoming.darajaEnvironment || process.env.DARAJA_ENV || 'sandbox',
+      callbackUrl: incoming.callbackUrl || process.env.DARAJA_CALLBACK_URL || process.env.MPESA_CALLBACK_URL || '',
+      isActive: incoming.active !== false,
+      metadata: { updatedBy:req.user.id, updatedAt:new Date().toISOString() },
+      auditTrail: [auditEntry('school_payment_settings_saved', req.user, { paymentMode, mpesaType })]
+    };
+    const [paymentRow] = await SchoolPaymentSetting.findOrCreate({ where:{ schoolCode:school.schoolId }, defaults:rowPayload });
+    await paymentRow.update(rowPayload);
     const settings = school.settings || {};
-    const existingPaymentSettings = settings.paymentSettings || {};
     settings.paymentSettings = {
-      ...existingPaymentSettings,
-      paymentMode: incoming.paymentMode || existingPaymentSettings.paymentMode || 'manual',
-      mpesaType: incoming.mpesaType || existingPaymentSettings.mpesaType || 'paybill',
-      paybill: incoming.paybill || incoming.businessShortcode || existingPaymentSettings.paybill || '',
-      till: incoming.till || incoming.tillNumber || existingPaymentSettings.till || '',
-      businessShortcode: incoming.businessShortcode || incoming.paybill || incoming.till || existingPaymentSettings.businessShortcode || '',
-      accountReferenceFormat: incoming.referenceFormat || incoming.accountReferenceFormat || existingPaymentSettings.accountReferenceFormat || 'admissionNumber',
-      accountName: incoming.accountName || existingPaymentSettings.accountName || school.name,
-      settlementBank: incoming.settlementBank || incoming.bankName || existingPaymentSettings.settlementBank || '',
-      settlementAccount: incoming.settlementAccount || incoming.bankAccount || incoming.accountNumber || existingPaymentSettings.settlementAccount || '',
-      supportPhone: incoming.supportPhone || existingPaymentSettings.supportPhone || '',
-      currency: incoming.currency || existingPaymentSettings.currency || 'KES',
-      acceptedMethods: incoming.acceptedMethods || existingPaymentSettings.acceptedMethods || ['mpesa'],
-      feeCategories: incoming.feeCategories || existingPaymentSettings.feeCategories || [],
-      active: incoming.active === true || existingPaymentSettings.active === true,
-      updatedAt: new Date().toISOString(),
-      updatedBy: req.user.id
+      ...(settings.paymentSettings || {}),
+      paymentMode, mpesaType, paybill:paybillNumber, till:tillNumber, businessShortcode:businessShortCode,
+      accountReferenceFormat, referenceFormat:accountReferenceFormat, active:incoming.active !== false,
+      darajaEnabled: rowPayload.darajaEnabled,
+      shortcode: rowPayload.darajaShortcode,
+      callbackUrl: rowPayload.callbackUrl,
+      updatedAt:new Date().toISOString(), updatedBy:req.user.id
     };
     const bankDetails = {
       ...(school.bankDetails || {}),
-      ...(incoming.bankDetails || {}),
-      bankName: incoming.bankName || incoming.bankDetails?.bankName || school.bankDetails?.bankName || '',
-      accountName: incoming.accountName || incoming.bankDetails?.accountName || school.bankDetails?.accountName || school.name,
-      accountNumber: incoming.bankAccount || incoming.accountNumber || incoming.bankDetails?.accountNumber || school.bankDetails?.accountNumber || '',
-      branch: incoming.branch || incoming.bankDetails?.branch || school.bankDetails?.branch || ''
+      bankName: rowPayload.bankName,
+      accountName: rowPayload.bankAccountName,
+      accountNumber: rowPayload.bankAccountNumber,
+      branch: rowPayload.bankBranch
     };
     await school.update({ settings, bankDetails });
-    await writeAudit(req, { module:'payments', action:'school_payment_settings_updated', entityType:'School', entityId:school.schoolId, after:{settings:settings.paymentSettings, bankDetails} });
-    res.json({ success:true, message:'School payment settings saved', data: { paymentSettings: settings.paymentSettings, bankDetails } });
+    await writeAudit(req, { module:'payments', action:'school_payment_settings_updated', entityType:'SchoolPaymentSetting', entityId:String(paymentRow.id), after:rowPayload });
+    res.json({ success:true, message:'School payment settings saved', data: { paymentSettings: settings.paymentSettings, schoolPaymentSetting: paymentRow, bankDetails } });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
-
 
 exports.testAdminPaymentConnection = async (req, res) => {
   try {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const cfg = daraja.getEnv();
+    const { settings } = await getSchoolPaymentConfig(school.schoolId);
+    if (settings.paymentMode !== 'daraja' && !settings.darajaEnabled) return res.json({ success:true, message:'Manual M-Pesa mode is active. No Daraja test is required.', data:{ paymentMode:'manual', account:settings.manualAccount } });
     const missing = [];
-    ['consumerKey','consumerSecret','shortcode','passkey','callbackUrl'].forEach(k => { if (!cfg[k]) missing.push(k); });
-    if (missing.length) {
-      return res.status(400).json({ success:false, message:`Daraja backend configuration missing: ${missing.join(', ')}` });
-    }
-    await daraja.getAccessToken();
-    res.json({ success:true, message:'Daraja connection verified successfully.', data:{ environment:cfg.mode, shortcode:cfg.shortcode, callbackUrl:cfg.callbackUrl } });
+    if(!settings.darajaConsumerKey) missing.push('consumerKey');
+    if(!settings.darajaConsumerSecret) missing.push('consumerSecret');
+    if(!settings.darajaShortcode) missing.push('shortcode');
+    if(!settings.darajaPasskey) missing.push('passkey');
+    if(!settings.callbackUrl) missing.push('callbackUrl');
+    if (missing.length) return res.status(400).json({ success:false, message:`School Daraja settings missing: ${missing.join(', ')}` });
+    await daraja.getAccessToken({ consumerKey:settings.darajaConsumerKey, consumerSecret:settings.darajaConsumerSecret, shortcode:settings.darajaShortcode, passkey:settings.darajaPasskey, callbackUrl:settings.callbackUrl, mode:settings.darajaEnvironment });
+    res.json({ success:true, message:'School Daraja connection verified successfully.', data:{ environment:settings.darajaEnvironment, shortcode:settings.darajaShortcode, callbackUrl:settings.callbackUrl } });
   } catch(error) {
-    console.error('Daraja test connection failed:', error.message);
+    console.error('School Daraja test connection failed:', error.message);
     res.status(400).json({ success:false, message:error.message || 'Daraja connection test failed' });
   }
 };
+
 
 exports.getPlatformPaymentSettings = async (req, res) => {
   try {
@@ -180,15 +283,84 @@ exports.parentFeeSTK = async (req, res) => {
     if(!student) return res.status(404).json({ success:false, message:'Student not found or not linked to this parent' });
     const parent = await currentParent(req);
     if(!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-    const fee = feeId ? await Fee.findOne({ where:{ id:feeId, studentId:student.id, schoolCode:schoolCode(req) } }) : null;
+    const realSchoolCode = studentSchoolCode(student) || schoolCode(req);
+    const fee = feeId ? await Fee.findOne({ where:{ id:feeId, studentId:student.id, schoolCode:realSchoolCode } }) : await Fee.findOne({ where:{ studentId:student.id, schoolCode:realSchoolCode }, order:[['year','DESC'],['term','DESC']] });
     const payAmount = cleanAmount(amount);
-    if(fee && payAmount > Math.max(0, Number(fee.totalAmount||0)-Number(fee.paidAmount||0))) return res.status(400).json({ success:false, message:'Payment amount exceeds outstanding balance' });
+    if(fee && payAmount > feeBalance(fee)) return res.status(400).json({ success:false, message:'Payment amount exceeds outstanding balance' });
+    const { settings } = await getSchoolPaymentConfig(realSchoolCode);
+    if(!settings.canUseDaraja){
+      return res.status(400).json({ success:false, message:'This school is in Manual M-Pesa mode. Submit the M-Pesa code after paying to the displayed school account.', data:{ paymentMode:'manual', paybill:settings.paybillNumber, till:settings.tillNumber, mpesaType:settings.mpesaType, accountReference:paymentAccountReference(student, fee, settings.accountReferenceFormat), elimuId:studentElimuId(student), amount:payAmount } });
+    }
+    const accountReference = paymentAccountReference(student, fee, settings.accountReferenceFormat);
     const reference = ref(`FEE-${student.id}`);
-    const stk = await daraja.initiateSTKPush({ phone, amount: payAmount, accountReference: reference, transactionDesc:`School fees for ${student.elimuid || student.id}`, metadata:{ type:'fee', schoolCode:schoolCode(req), studentId:student.id, feeId, reference } });
-    const payment = await createPendingPayment(req, { studentId:student.id, parentId:parent.id, feeId, amount:payAmount, reference, phone, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, accountReference:reference, schoolCode:schoolCode(req), paymentType:'fee', paidTo:'school', gatewayResponse:stk, metadata:{ studentElimuid:student.elimuid, feeId } });
-    res.json({ success:true, message:'M-PESA prompt sent. Payment will be marked paid only after Daraja callback confirmation.', data:{ paymentId:payment.id, reference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
+    const stk = await daraja.initiateSTKPush({
+      phone,
+      amount: payAmount,
+      accountReference,
+      transactionDesc:`School fees for ${studentElimuId(student)}`,
+      callbackUrl: settings.callbackUrl,
+      credentials:{ consumerKey:settings.darajaConsumerKey, consumerSecret:settings.darajaConsumerSecret, shortcode:settings.darajaShortcode, passkey:settings.darajaPasskey, mode:settings.darajaEnvironment, callbackUrl:settings.callbackUrl },
+      metadata:{ type:'fee', schoolCode:realSchoolCode, studentId:student.id, feeId:fee?.id || feeId, reference, elimuId:studentElimuId(student), paidTo:'school' }
+    });
+    const payment = await createPendingPayment(req, { studentId:student.id, parentId:parent.id, feeId:fee?.id || feeId, amount:payAmount, reference, phone, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, accountReference, schoolCode:realSchoolCode, paymentType:'fee', paidTo:'school', gatewayResponse:stk, metadata:{ studentElimuid:studentElimuId(student), feeId:fee?.id || feeId, paymentMode:'daraja', schoolPaymentMode:settings.paymentMode } });
+    res.json({ success:true, message:'M-PESA prompt sent. Fee balance updates after Daraja callback confirmation.', data:{ paymentId:payment.id, reference, accountReference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
   } catch(error){ console.error('Parent fee STK error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
+
+exports.parentFeeManual = async (req, res) => {
+  try {
+    const { studentId, feeId, amount, mpesaCode, phone, notes } = req.body || {};
+    if(!studentId || !amount || !mpesaCode) return res.status(400).json({ success:false, message:'studentId, amount, and M-Pesa code are required' });
+    const student = await findStudentForParent(req, studentId);
+    if(!student) return res.status(404).json({ success:false, message:'Student not found or not linked to this parent' });
+    const parent = await currentParent(req);
+    if(!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
+    const realSchoolCode = studentSchoolCode(student) || schoolCode(req);
+    const fee = feeId ? await Fee.findOne({ where:{ id:feeId, studentId:student.id, schoolCode:realSchoolCode } }) : await Fee.findOne({ where:{ studentId:student.id, schoolCode:realSchoolCode }, order:[['year','DESC'],['term','DESC']] });
+    const payAmount = cleanAmount(amount);
+    if(fee && payAmount > feeBalance(fee)) return res.status(400).json({ success:false, message:'Payment amount exceeds outstanding balance' });
+    const payment = await createManualPayment(req, { student, parent, fee, amount:payAmount, mpesaCode, phone, notes });
+    res.json({ success:true, message:'Payment submitted for school finance verification. Balance updates after approval.', data:{ paymentId:payment.id, reference:payment.reference, status:payment.status, elimuId:studentElimuId(student), amount:payAmount } });
+  } catch(error){ console.error('Manual school fee payment error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getManualVerificationQueue = async (req, res) => {
+  try {
+    const rows = await Payment.findAll({
+      where:{ schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school', paymentGateway:'manual_mpesa', status:'pending' },
+      include:[{ model:Student, include:[{model:User, attributes:['id','name','schoolCode']}] }, { model:Parent, include:[{model:User, attributes:['id','name','phone','email']}] }],
+      order:[['createdAt','DESC']], limit:200
+    });
+    res.json({ success:true, data:rows });
+  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.approveManualPayment = async (req, res) => {
+  try {
+    const payment = await Payment.findOne({ where:{ id:req.params.paymentId, schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school' } });
+    if(!payment) return res.status(404).json({ success:false, message:'Payment not found' });
+    if(payment.status === 'completed') return res.json({ success:true, message:'Payment already approved', data:payment });
+    const trail = Array.isArray(payment.auditTrail) ? payment.auditTrail : [];
+    trail.push(auditEntry('manual_payment_approved', req.user, { reference:payment.reference, amount:payment.amount }));
+    await payment.update({ status:'completed', completedAt:new Date(), verifiedBy:req.user.id, verifiedAt:new Date(), notes:req.body?.notes || payment.notes, auditTrail:trail });
+    const fee = await applyFeePayment(payment, payment.reference);
+    await writeAudit(req, { module:'payments', action:'manual_payment_approved', entityType:'Payment', entityId:String(payment.id), after:payment.toJSON() });
+    res.json({ success:true, message:'Payment approved. Student fee balance updated.', data:{ payment, fee } });
+  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.rejectManualPayment = async (req, res) => {
+  try {
+    const payment = await Payment.findOne({ where:{ id:req.params.paymentId, schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school' } });
+    if(!payment) return res.status(404).json({ success:false, message:'Payment not found' });
+    const trail = Array.isArray(payment.auditTrail) ? payment.auditTrail : [];
+    trail.push(auditEntry('manual_payment_rejected', req.user, { reason:req.body?.reason || 'Rejected by finance/admin' }));
+    await payment.update({ status:'failed', verifiedBy:req.user.id, verifiedAt:new Date(), notes:req.body?.reason || 'Rejected by school finance/admin', auditTrail:trail });
+    await writeAudit(req, { module:'payments', action:'manual_payment_rejected', entityType:'Payment', entityId:String(payment.id), after:payment.toJSON() });
+    res.json({ success:true, message:'Payment rejected. No balance was updated.', data:payment });
+  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+};
+
 
 exports.parentSubscriptionSTK = async (req, res) => {
   try {
@@ -322,17 +494,12 @@ exports.darajaCallback = async (req, res) => {
         auditTrail: trail,
         metadata: { ...(payment.metadata || {}), darajaCallback: parsed, mpesaReceiptNumber: parsed.mpesaReceiptNumber, phoneNumber: parsed.phoneNumber }
       });
-      if (success && payment.feeId) {
-        const fee = await Fee.findByPk(payment.feeId);
-        if (fee) {
-          const paidAmount = Number(fee.paidAmount || 0) + Number(payment.amount || 0);
-          const status = paidAmount >= Number(fee.totalAmount || 0) ? 'paid' : 'partial';
-          const payments = Array.isArray(fee.payments) ? fee.payments : [];
-          payments.push({ paymentId:payment.id, amount:payment.amount, reference:payment.reference, receipt:parsed.mpesaReceiptNumber, paidAt:new Date().toISOString(), gateway:'daraja' });
-          const feeTrail = Array.isArray(fee.auditTrail) ? fee.auditTrail : [];
-          feeTrail.push({ action:'payment_applied', at:new Date().toISOString(), paymentId:payment.id, amount:payment.amount, receipt:parsed.mpesaReceiptNumber });
-          await fee.update({ paidAmount, status, payments, auditTrail: feeTrail, lastReconciledAt:new Date() });
+      if (success && payment.feeId && before.status !== 'completed') {
+        const actualAmount = parsed.amount ? cleanAmount(parsed.amount) : Number(payment.amount || 0);
+        if (actualAmount && actualAmount !== Number(payment.amount || 0)) {
+          await payment.update({ amount: actualAmount, metadata: { ...(payment.metadata || {}), darajaCallback: parsed, actualDarajaAmount: actualAmount, mpesaReceiptNumber: parsed.mpesaReceiptNumber, phoneNumber: parsed.phoneNumber } });
         }
+        await applyFeePayment(payment, parsed.mpesaReceiptNumber || payment.reference);
       }
       if (payment.paymentType === 'subscription' && payment.subscriptionPaymentId) {
         const subscriptionPayment = await SubscriptionPayment.findByPk(payment.subscriptionPaymentId);

@@ -5,7 +5,6 @@ const studentController = require('../controllers/studentController');
 const authController = require('../controllers/authController');
 const analyticsController = require('../controllers/analyticsController');
 const { MoodCheckin } = require('../models');
-const { requireFeature } = require('../middleware/subscription');
 
 router.post('/set-first-password', authController.setFirstPassword);
 
@@ -14,7 +13,7 @@ router.use(protect, authorize('student'));
 router.get('/dashboard', studentController.getDashboard);
 router.get('/materials', studentController.getMaterials);
 router.get('/grades', studentController.getGrades);
-router.get('/recommendations', requireFeature('study_recommendations', { ownerType: 'child' }), studentController.getGradeRecommendations);
+router.get('/recommendations', studentController.getGradeRecommendations);
 router.get('/attendance', studentController.getAttendance);
 router.post('/message', studentController.sendMessage);
 router.get('/messages/:otherUserId', studentController.getMessages);
@@ -23,7 +22,7 @@ router.post('/group-message', studentController.sendGroupMessage);
 router.get('/group-messages', studentController.getGroupMessages);
 
 // Analytics (NEW)
-router.get('/analytics', requireFeature('study_analytics', { ownerType: 'child' }), analyticsController.getStudentAnalytics);
+router.get('/analytics', analyticsController.getStudentAnalytics);
 
 router.post('/mood', protect, authorize('student'), async (req, res) => {
     try {
