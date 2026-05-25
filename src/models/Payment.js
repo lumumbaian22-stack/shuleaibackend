@@ -94,6 +94,10 @@ module.exports = (sequelize, DataTypes) => {
     planCode: { type: DataTypes.STRING, allowNull: true },
     planName: { type: DataTypes.STRING, allowNull: true },
     refundReason: DataTypes.TEXT,
+    idempotencyKey: { type: DataTypes.STRING, allowNull: true },
+    callbackAttempts: { type: DataTypes.INTEGER, defaultValue: 0 },
+    lastCallbackAt: { type: DataTypes.DATE, allowNull: true },
+    lastStatusQueryAt: { type: DataTypes.DATE, allowNull: true },
     refundedAt: DataTypes.DATE,
     refundedBy: DataTypes.INTEGER
   }, {

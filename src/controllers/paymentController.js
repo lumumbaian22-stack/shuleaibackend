@@ -351,11 +351,39 @@ exports.getAdminPaymentRecords = async (req, res) => {
   try {
     const rows = await Payment.findAll({
       where:{ schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school' },
-      include:[{ model:Student, include:[{model:User, attributes:['id','name','schoolCode']}] }, { model:Parent, include:[{model:User, attributes:['id','name','phone','email']}] }, { model:Fee }],
-      order:[['createdAt','DESC']], limit:500
+      include:[
+        { model:Student, include:[{model:User, attributes:['id','name','schoolCode']}] },
+        { model:Parent, include:[{model:User, attributes:['id','name','phone','email']}] },
+        { model:Fee, required:false }
+      ],
+      order:[['createdAt','DESC']],
+      limit:1000
     });
-    res.json({ success:true, data:rows });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+
+    const data = rows.map((payment) => {
+      const row = payment.toJSON ? payment.toJSON() : payment;
+      const fee = row.Fee || null;
+      const total = Number(fee?.totalAmount || 0);
+      const paid = Number(fee?.paidAmount || 0);
+      const balance = Math.max(0, total - paid);
+      return {
+        ...row,
+        studentName: row.Student?.User?.name || row.Student?.name || row.metadata?.studentName || null,
+        parentName: row.Parent?.User?.name || row.metadata?.parentName || null,
+        className: row.Student?.grade || row.metadata?.className || fee?.className || null,
+        feeTerm: fee?.term || row.metadata?.term || null,
+        feeYear: fee?.year || row.metadata?.year || null,
+        feeTotalAmount: total,
+        feePaidAmount: paid,
+        feeBalance: balance
+      };
+    });
+
+    res.json({ success:true, data });
+  } catch(error){
+    console.error('Admin payment records error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
 };
 
 exports.approveManualPayment = async (req, res) => {

@@ -1,9 +1,22 @@
 const { randomUUID } = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
+
+const requestStore = new AsyncLocalStorage();
 
 function requestContext(req, res, next) {
-  req.requestId = req.headers['x-request-id'] || randomUUID();
-  res.setHeader('X-Request-Id', req.requestId);
-  next();
+  const context = { requestId: req.headers['x-request-id'] || randomUUID(), user: null };
+  req.requestId = context.requestId;
+  res.setHeader('X-Request-Id', context.requestId);
+  requestStore.run(context, () => next());
+}
+
+function setTenantUser(user) {
+  const store = requestStore.getStore();
+  if (store) store.user = user;
+}
+
+function getTenantContext() {
+  return requestStore.getStore() || {};
 }
 
 function productionErrorHandler(err, req, res, next) {
@@ -15,4 +28,4 @@ function productionErrorHandler(err, req, res, next) {
   res.status(status).json({ success: false, message: safeMessage, requestId: req.requestId });
 }
 
-module.exports = { requestContext, productionErrorHandler };
+module.exports = { requestContext, productionErrorHandler, setTenantUser, getTenantContext };

@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { User } = require('../models');
+const { setTenantUser } = require('./requestContext');
 
 const protect = async (req, res, next) => {
   let token;
@@ -20,6 +21,10 @@ const protect = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'User not found or inactive' });
     }
     req.user = user;
+    setTenantUser(user);
+    if (user.role !== 'super_admin' && !user.schoolCode) {
+      return res.status(403).json({ success: false, message: 'User is not attached to a school tenant' });
+    }
     next();
   } catch (error) {
     return res.status(401).json({ success: false, message: 'Invalid token' });

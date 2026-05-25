@@ -11,6 +11,7 @@ const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 
 async function ensureAnalyticsRuntimeColumns() {
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') return;
     // Last-line protection for live Postgres/Render databases that missed older migrations.
     // This prevents /api/admin/analytics from crashing when Sequelize selects Student.classId.
     await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "classId" INTEGER');

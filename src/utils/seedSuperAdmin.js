@@ -21,7 +21,7 @@ async function seedSuperAdmin() {
     const superAdmin = await User.create({
       name: 'Super Admin',
       email: process.env.SUPER_ADMIN_EMAIL || 'super@shuleai.com',
-      password: process.env.SUPER_ADMIN_PASSWORD || 'SuperAdmin123!',
+      password: process.env.SUPER_ADMIN_PASSWORD || require('./passwords').generateTemporaryPassword(),
       role: 'super_admin',
       isActive: true
     });

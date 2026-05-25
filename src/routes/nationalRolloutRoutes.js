@@ -2,6 +2,7 @@ const express = require('express');
 const { Op } = require('sequelize');
 const { protect, authorize } = require('../middleware/auth');
 const { User, Teacher, Student, Parent, Class, AcademicRecord, Attendance, School, Alert, Task, Payment } = require('../models');
+const paymentController = require('../controllers/paymentController');
 
 const router = express.Router();
 router.use(protect);
@@ -13,16 +14,18 @@ async function assertSchoolUser(user, schoolCode){ return user && (!schoolCode |
 async function teacherById(id, schoolCode){ return Teacher.findByPk(id, { include:[{ model:User, attributes:['id','name','email','phone','schoolCode','isActive','role'] }] }).then(t => t && t.User?.schoolCode === schoolCode ? t : null); }
 async function studentById(id, schoolCode){ return Student.findByPk(id, { include:[{ model:User, attributes:['id','name','email','phone','schoolCode','isActive','role'] }] }).then(s => s && s.User?.schoolCode === schoolCode ? s : null); }
 
-// ============ REAL MONEY DISABLED ============
-function moneyDisabled(req,res){ return fail(res, 503, 'Real money collection is disabled in this national rollout school-operations build. Enable Daraja only after live payment audit.'); }
-router.post('/payments/parent/fee/stk', moneyDisabled);
-router.post('/payments/parent/subscription/stk', moneyDisabled);
-router.post('/payments/admin/name-change/stk', moneyDisabled);
-router.post('/payments/platform/stk', moneyDisabled);
-router.post('/parent/pay', moneyDisabled);
-router.post('/parent/upgrade-plan', moneyDisabled);
-router.post('/subscription/upgrade', moneyDisabled);
-router.post('/subscription/initiate-payment', moneyDisabled);
+// ============ REAL MONEY ROUTE COMPATIBILITY ============
+// These routes used to hard-disable money collection. In the rollout build they are
+// compatibility aliases into the audited payment controller. Real collection still
+// depends on Daraja env vars and school payment settings being configured.
+router.post('/payments/parent/fee/stk', authorize('parent'), paymentController.parentFeeSTK);
+router.post('/payments/parent/subscription/stk', authorize('parent'), paymentController.parentSubscriptionSTK);
+router.post('/payments/admin/name-change/stk', authorize('admin'), paymentController.adminNameChangePaymentSTK);
+router.post('/payments/platform/stk', paymentController.genericPlatformSTK);
+router.post('/parent/pay', authorize('parent'), paymentController.parentFeeSTK);
+router.post('/parent/upgrade-plan', authorize('parent'), paymentController.parentSubscriptionSTK);
+router.post('/subscription/upgrade', authorize('parent'), paymentController.parentSubscriptionSTK);
+router.post('/subscription/initiate-payment', authorize('parent'), paymentController.parentSubscriptionSTK);
 
 // ============ ADMIN COMPLETION ROUTES ============
 router.post('/admin/teachers/:teacherId/activate', authorize('admin','super_admin'), async (req,res)=>{ try{ const t=await teacherById(req.params.teacherId, req.user.schoolCode); if(!t) return fail(res,404,'Teacher not found'); await t.User.update({ isActive:true }); await t.update({ approvalStatus:'approved', approvedBy:req.user.id, approvedAt:new Date() }); return ok(res,t,'Teacher activated successfully'); }catch(e){ return fail(res,500,e.message); } });

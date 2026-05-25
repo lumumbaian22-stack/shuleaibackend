@@ -12,7 +12,7 @@ function intEnv(name, fallback) {
 const pool = {
   max: intEnv('DB_POOL_MAX', isProduction ? 25 : 10),
   min: intEnv('DB_POOL_MIN', isProduction ? 2 : 0),
-  acquire: intEnv('DB_POOL_ACQUIRE_MS', 30000),
+  acquire: intEnv('DB_POOL_ACQUIRE_MS', 60000),
   idle: intEnv('DB_POOL_IDLE_MS', 10000),
   evict: intEnv('DB_POOL_EVICT_MS', 10000)
 };
@@ -28,11 +28,13 @@ const commonOptions = {
   },
   dialectOptions: shouldUseSsl ? {
     ssl: { require: true, rejectUnauthorized: false },
-    statement_timeout: intEnv('DB_STATEMENT_TIMEOUT_MS', 30000),
-    idle_in_transaction_session_timeout: intEnv('DB_IDLE_TX_TIMEOUT_MS', 30000)
+    statement_timeout: intEnv('DB_STATEMENT_TIMEOUT_MS', 60000),
+    connectionTimeoutMillis: intEnv('DB_CONNECTION_TIMEOUT_MS', 10000),
+    idle_in_transaction_session_timeout: intEnv('DB_IDLE_TX_TIMEOUT_MS', 60000)
   } : {
-    statement_timeout: intEnv('DB_STATEMENT_TIMEOUT_MS', 30000),
-    idle_in_transaction_session_timeout: intEnv('DB_IDLE_TX_TIMEOUT_MS', 30000)
+    statement_timeout: intEnv('DB_STATEMENT_TIMEOUT_MS', 60000),
+    connectionTimeoutMillis: intEnv('DB_CONNECTION_TIMEOUT_MS', 10000),
+    idle_in_transaction_session_timeout: intEnv('DB_IDLE_TX_TIMEOUT_MS', 60000)
   }
 };
 

@@ -3,6 +3,7 @@ const { createAlert } = require('../services/notificationService');
 // Removed self-import bug
 const { Op } = require('sequelize');
 const { sequelize } = require('../models');
+const { generateTemporaryPassword } = require('../utils/passwords');
 
 // @desc    Get platform overview
 // @route   GET /api/super-admin/overview
@@ -224,7 +225,7 @@ exports.createSchool = async (req, res) => {
         const adminUser = await User.create({
             name: adminName || `Admin ${school.name}`,
             email: adminEmail || `admin@${school.shortCode.toLowerCase()}.edu`,
-            password: adminPassword || 'Admin123!',
+            password: adminPassword || generateTemporaryPassword(),
             role: 'admin',
             schoolCode: school.schoolId,
             isActive: true

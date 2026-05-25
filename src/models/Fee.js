@@ -47,7 +47,6 @@ module.exports = (sequelize, DataTypes) => {
     adjustments: { type: DataTypes.JSONB, defaultValue: [] },
     lastReconciledAt: { type: DataTypes.DATE, allowNull: true }
   }, {
-    defaultScope: { attributes: { exclude: ['classId'] } },
     timestamps: true
   });
 

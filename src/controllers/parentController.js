@@ -1,9 +1,5 @@
 const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, Class, sequelize } = require('../models');
 const { createAlert } = require('../services/notificationService');
-function rolloutMoneyDisabled(res) {
-  return res.status(503).json({ success: false, message: 'Real money collection is disabled in this national rollout school-operations build. Fee/payment records can be enabled after Daraja live audit.' });
-}
-
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
@@ -348,7 +344,6 @@ exports.getSubscriptionPlans = async (req, res) => {
 // @route   POST /api/parent/pay
 // @access  Private/Parent
 exports.makePayment = async (req, res) => {
-  return rolloutMoneyDisabled(res);
   try {
     const { studentId, amount, method, reference, plan } = req.body;
     
@@ -406,7 +401,6 @@ exports.makePayment = async (req, res) => {
 // @route   POST /api/parent/payment-confirm
 // @access  Private/Parent
 exports.confirmPayment = async (req, res) => {
-  return rolloutMoneyDisabled(res);
   try {
     const { paymentId, transactionId } = req.body;
     
@@ -459,26 +453,37 @@ exports.getPayments = async (req, res) => {
     if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
 
     const payments = await Payment.findAll({
-      where: { parentId: parent.id },
+      where: { parentId: parent.id, schoolCode: req.user.schoolCode },
       include: [
         { model: Student, include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }] },
-        { model: Fee, required: false }
+        { model: Fee }
       ],
-      order: [['createdAt', 'DESC']]
+      order: [['createdAt', 'DESC']],
+      limit: 500
     });
 
     const school = await School.findOne({
       where: { schoolId: req.user.schoolCode },
-      attributes: ['name', 'bankDetails']
+      attributes: ['name', 'bankDetails', 'settings']
     });
 
-    // Return both shapes: older frontend reads data as array; newer frontend can read metadata.
-    res.json({
-      success: true,
-      data: payments,
-      payments,
-      school
+    const normalized = payments.map((payment) => {
+      const row = payment.toJSON ? payment.toJSON() : payment;
+      const fee = row.Fee || null;
+      const total = Number(fee?.totalAmount || 0);
+      const paid = Number(fee?.paidAmount || 0);
+      return {
+        ...row,
+        feeTerm: fee?.term || row.metadata?.term || null,
+        feeYear: fee?.year || row.metadata?.year || null,
+        feeTotalAmount: total,
+        feePaidAmount: paid,
+        feeBalance: Math.max(0, total - paid),
+        category: row.paymentType === 'fee' ? 'school_fee' : row.paymentType || 'payment'
+      };
     });
+
+    res.json({ success: true, data: { payments: normalized, school } });
   } catch (error) {
     console.error('Get payments error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -489,7 +494,6 @@ exports.getPayments = async (req, res) => {
 // @route   POST /api/parent/upgrade-plan
 // @access  Private/Parent
 exports.upgradePlan = async (req, res) => {
-  return rolloutMoneyDisabled(res);
   try {
     const { studentId, newPlan } = req.body;
     
@@ -741,16 +745,23 @@ exports.getFees = async (req, res) => {
   try {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    const student = await Student.unscoped().findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
-    if (!student || !(await parent.hasStudent(student))) {
+    if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
+    const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
+    if (!student || !(await parent.hasStudent(student)) || student.User?.schoolCode !== req.user.schoolCode) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
     const fees = await Fee.findAll({
-      where: { studentId, schoolCode: student.User?.schoolCode || req.user.schoolCode },
-      include: [{ model: Payment, required: false }],
+      where: { studentId, schoolCode: req.user.schoolCode },
+      include: [{ model: Payment, required: false, where: { schoolCode: req.user.schoolCode, paymentType: 'fee' } }],
       order: [['year', 'DESC'], ['term', 'DESC']]
     });
-    res.json({ success: true, data: fees });
+    const normalized = fees.map((fee) => {
+      const row = fee.toJSON ? fee.toJSON() : fee;
+      const total = Number(row.totalAmount || 0);
+      const paid = Number(row.paidAmount || 0);
+      return { ...row, balance: Math.max(0, total - paid), payments: row.Payments || row.payments || [] };
+    });
+    res.json({ success: true, data: normalized });
   } catch (error) {
     console.error('Get fees error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -761,20 +772,19 @@ exports.getFees = async (req, res) => {
 // @route   POST /api/parent/fees/pay
 // @access  Private/Parent
 exports.addPayment = async (req, res) => {
-  return rolloutMoneyDisabled(res);
   try {
     const { studentId, term, year, amount, method, reference } = req.body;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    const student = await Student.findByPk(studentId);
+    const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
     if (!student || !(await parent.hasStudent(student))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
-    let fee = await Fee.findOne({ where: { studentId, term, year } });
+    let fee = await Fee.findOne({ where: { studentId, schoolCode: req.user.schoolCode, term, year } });
     if (!fee) {
       fee = await Fee.create({
         studentId,
-        schoolCode: student.User.schoolCode,
+        schoolCode: student.User?.schoolCode || req.user.schoolCode,
         term,
         year,
         totalAmount: 5000,
@@ -812,7 +822,7 @@ exports.getChildTodayAttendance = async (req, res) => {
   try {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    const student = await Student.findByPk(studentId);
+    const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
     if (!student || !(await parent.hasStudent(student))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }

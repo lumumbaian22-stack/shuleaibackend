@@ -249,6 +249,10 @@ async function ensureSchoolCalendarTable() {
 }
 
 async function ensureRuntimeSchema() {
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') {
+    console.log('[schemaSafety] Production runtime schema mutation disabled; run migrations instead.');
+    return;
+  }
   if (process.env.DISABLE_SCHEMA_SAFETY === 'true') {
     console.log('[schemaSafety] Disabled by DISABLE_SCHEMA_SAFETY=true');
     return;

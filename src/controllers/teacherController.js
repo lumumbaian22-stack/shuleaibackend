@@ -10,7 +10,16 @@ const moment = require('moment');
 const crypto = require('crypto');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 const sequelize = require('../config/database');
+const { generateTemporaryPassword } = require('../utils/passwords');
 
+
+
+function safeTempCsvPath(originalName) {
+  const safe = path.basename(String(originalName || 'students.csv')).replace(/[^a-zA-Z0-9._-]/g, '_');
+  const dir = process.env.UPLOAD_TMP_DIR || path.join(process.cwd(), 'uploads', 'tmp');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${Date.now()}-${safe}`);
+}
 
 async function linkParentToStudentSafely(parentId, studentId) {
   const now = new Date();
@@ -233,7 +242,7 @@ exports.addStudent = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Student name and grade are required' });
     }
 
-    const defaultPassword = 'Student123!';
+    const defaultPassword = generateTemporaryPassword();
 
     const user = await User.create({
       name,
@@ -1039,7 +1048,7 @@ exports.uploadStudentsCSV = async (req, res) => {
     if (!teacher.classTeacher) return res.status(403).json({ success: false, message: 'Only class teachers can upload students' });
     
     const file = req.files.file;
-    const filePath = path.join('/tmp', `${Date.now()}-${file.name}`);
+    const filePath = safeTempCsvPath(file.name);
     await file.mv(filePath);
     
     const results = [];
@@ -1050,7 +1059,7 @@ exports.uploadStudentsCSV = async (req, res) => {
       .pipe(csv())
       .on('data', (data) => results.push(data))
       .on('end', async () => {
-        const defaultPassword = 'Student123!';
+        const defaultPassword = generateTemporaryPassword();
         let successCount = 0;
         const targetGrade = teacher.classTeacher;
         
@@ -1489,13 +1498,13 @@ exports.uploadStudentsCSV = async (req,res) => {
     const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
     const classItem = await Class.findOne({ where:{ teacherId: teacher.id, schoolCode:req.user.schoolCode, isActive:true } });
     if (!classItem) return res.status(403).json({ success:false, message:'Only the assigned class teacher can upload students for that class' });
-    const filePath = path.join('/tmp', `${Date.now()}-${req.files.file.name}`); await req.files.file.mv(filePath);
+    const filePath = safeTempCsvPath(req.files.file.name); await req.files.file.mv(filePath);
     const rows=[], errors=[], elimuids=[];
     fs.createReadStream(filePath).pipe(csv()).on('data', r => rows.push(r)).on('end', async () => {
       let successCount=0;
       for (const row of rows) { try {
         const name = row.name || row.fullName || row.studentName; if (!name) { errors.push({ row, error:'Missing name' }); continue; }
-        const user = await User.create({ name, email: row.email || null, phone: row.phone || null, password:'Student123!', role:'student', schoolCode:req.user.schoolCode, isActive:true, firstLogin:true });
+        const user = await User.create({ name, email: row.email || null, phone: row.phone || null, password: generateTemporaryPassword(), role:'student', schoolCode:req.user.schoolCode, isActive:true, firstLogin:true });
         const student = await Student.create({ userId:user.id, grade:classItem.name, dateOfBirth: row.dob || row.dateOfBirth || null, gender: row.gender || null, assessmentNumber: row.assessmentNumber || row.assessment_number || null, nemisNumber: row.nemisNumber || row.nemis_number || null, location: row.location || null, parentName: row.parentName || row.parent_name || null, parentEmail: row.parentEmail || row.parent_email || null, parentPhone: row.parentPhone || row.parent_phone || null, parentRelationship: row.parentRelationship || row.relationship || 'guardian', isPrefect: String(row.isPrefect || '').toLowerCase() === 'true' });
         elimuids.push({ name, elimuid:student.elimuid, assessmentNumber:student.assessmentNumber }); successCount++;
       } catch(err) { errors.push({ row, error:err.message }); } }

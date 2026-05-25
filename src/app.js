@@ -55,8 +55,16 @@ const app = express();
 app.use(requestContext);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
+const allowedOrigins = (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (!allowedOrigins.length || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Origin not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -73,7 +81,7 @@ app.use(compression());
 app.use(fileUpload({
   limits: { fileSize: process.env.MAX_FILE_SIZE || 50 * 1024 * 1024 },
   useTempFiles: true,
-  tempFileDir: '/tmp/',
+  tempFileDir: process.env.UPLOAD_TMP_DIR || path.join(process.cwd(), 'uploads', 'tmp'),
   createParentPath: true
 }));
 
@@ -115,11 +123,38 @@ app.get('/api/health', (req, res) => {
   res.json({ success: true, timestamp: new Date().toISOString() });
 });
 
+app.get('/api/health/detailed', async (req, res) => {
+  const started = Date.now();
+  const checks = { database: { ok: false }, daraja: { ok: false }, aiTutor: { ok: false }, storage: { ok: false } };
+  try {
+    const { sequelize } = require('./models');
+    await sequelize.query('SELECT 1');
+    checks.database = { ok: true };
+  } catch (e) { checks.database = { ok: false, error: e.message }; }
+  try {
+    checks.daraja = {
+      ok: Boolean(process.env.DARAJA_CONSUMER_KEY && process.env.DARAJA_CONSUMER_SECRET && process.env.DARAJA_PASSKEY && process.env.DARAJA_SHORTCODE),
+      configured: Boolean(process.env.DARAJA_CONSUMER_KEY && process.env.DARAJA_CONSUMER_SECRET && process.env.DARAJA_PASSKEY && process.env.DARAJA_SHORTCODE),
+      env: process.env.DARAJA_ENV || 'sandbox'
+    };
+  } catch (e) { checks.daraja = { ok: false, error: e.message }; }
+  checks.aiTutor = { ok: Boolean(process.env.ANTHROPIC_API_KEY), configured: Boolean(process.env.ANTHROPIC_API_KEY), model: process.env.ANTHROPIC_MODEL || null };
+  try {
+    const tmp = path.join(uploadDir, `.health-${Date.now()}.tmp`);
+    fs.writeFileSync(tmp, 'ok'); fs.unlinkSync(tmp);
+    checks.storage = { ok: true, uploadDir };
+  } catch (e) { checks.storage = { ok: false, error: e.message, uploadDir }; }
+  const ok = Object.values(checks).every(x => x.ok);
+  res.status(ok ? 200 : 503).json({ success: ok, status: ok ? 'ready' : 'degraded', uptime: process.uptime(), latencyMs: Date.now() - started, timestamp: new Date().toISOString(), checks });
+});
+
 
 // V42: run the schema guard once on first API request too. This protects Render deployments
 // where startup migrations are skipped, delayed, or the old process remains warm.
 let __v42SchemaGuardPromise = null;
 app.use('/api', async (req, res, next) => {
+  const allowRuntimeSchemaRepair = process.env.ALLOW_RUNTIME_SCHEMA_REPAIR === 'true' || process.env.NODE_ENV !== 'production';
+  if (!allowRuntimeSchemaRepair) return next();
   try {
     if (!__v42SchemaGuardPromise) {
       __v42SchemaGuardPromise = ensureRuntimeSchema().catch((err) => {
@@ -136,6 +171,7 @@ app.use('/api', async (req, res, next) => {
 
 
 async function ensureCriticalDashboardColumns(req, res, next) {
+  if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true' && process.env.NODE_ENV === 'production') return next();
   try {
     const { sequelize } = require('./models');
     await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
@@ -158,7 +194,10 @@ async function ensureCriticalDashboardColumns(req, res, next) {
 }
 app.use('/api', ensureCriticalDashboardColumns);
 
-app.post('/api/system/repair-schema', ensureCriticalDashboardColumns, (req, res) => {
+app.post('/api/system/repair-schema', (req, res, next) => {
+  if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') return res.status(403).json({ success:false, message:'Runtime schema repair is disabled. Run migrations instead.' });
+  return ensureCriticalDashboardColumns(req, res, next);
+}, (req, res) => {
   res.json({ success: true, message: 'Critical dashboard schema repair completed' });
 });
 

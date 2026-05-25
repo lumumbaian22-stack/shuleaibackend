@@ -193,17 +193,12 @@ FeeStructure.hasMany(Fee, { foreignKey: 'feeStructureId', sourceKey: 'id' });
 // Fee
 Fee.belongsTo(Student, { foreignKey: 'studentId' });
 Student.hasMany(Fee, { foreignKey: 'studentId' });
-Fee.belongsTo(FeeStructure, { foreignKey: 'feeStructureId', targetKey: 'id' });
-
-// Class membership
-Student.belongsTo(Class, { foreignKey: 'classId' });
-Class.hasMany(Student, { foreignKey: 'classId' });
 
 // Payment
-Payment.belongsTo(Student, { foreignKey: 'studentId' });
-Payment.belongsTo(Parent, { foreignKey: 'parentId' });
 Payment.belongsTo(Fee, { foreignKey: 'feeId' });
 Fee.hasMany(Payment, { foreignKey: 'feeId' });
+Payment.belongsTo(Student, { foreignKey: 'studentId' });
+Payment.belongsTo(Parent, { foreignKey: 'parentId' });
 Student.hasMany(Payment, { foreignKey: 'studentId' });
 Parent.hasMany(Payment, { foreignKey: 'parentId' });
 
@@ -430,6 +425,36 @@ function attachRealtimeHooks(model, modelName) {
   [Class, 'Class'],
   [Timetable, 'Timetable']
 ].forEach(([model, name]) => attachRealtimeHooks(model, name));
+
+
+
+// Production tenant guard: after a protected request is authenticated, all direct
+// queries against models that carry schoolCode are automatically constrained to
+// req.user.schoolCode unless the user is super_admin or the query explicitly sets
+// skipTenantScope. This is a backstop; controllers should still pass tenant filters.
+function installTenantHooks(models) {
+  let getTenantContext = null;
+  try { ({ getTenantContext } = require('../middleware/requestContext')); } catch (_) {}
+  if (!getTenantContext) return;
+  Object.values(models).forEach((model) => {
+    if (!model || !model.rawAttributes || !model.rawAttributes.schoolCode || model.__tenantHookInstalled) return;
+    model.__tenantHookInstalled = true;
+    model.addHook('beforeFind', (options = {}) => {
+      const ctx = getTenantContext() || {};
+      const user = ctx.user;
+      if (!user || user.role === 'super_admin' || options.skipTenantScope === true) return;
+      if (!user.schoolCode) return;
+      options.where = options.where || {};
+      if (options.where.schoolCode && options.where.schoolCode !== user.schoolCode) {
+        const err = new Error('Cross-school data access blocked');
+        err.status = 403;
+        throw err;
+      }
+      options.where.schoolCode = user.schoolCode;
+    });
+  });
+}
+installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, AuditLog });
 
 module.exports = {
     sequelize,

@@ -3,6 +3,14 @@ const CSVProcessor = require('../services/csv/csvProcessor');
 const path = require('path');
 const fs = require('fs');
 
+function safeUploadPath(originalName) {
+  const base = path.basename(String(originalName || 'upload.csv')).replace(/[^a-zA-Z0-9._-]/g, '_');
+  const tmpRoot = process.env.UPLOAD_TMP_DIR || path.join(process.cwd(), 'uploads', 'tmp');
+  if (!fs.existsSync(tmpRoot)) fs.mkdirSync(tmpRoot, { recursive: true });
+  return path.join(tmpRoot, `${Date.now()}-${base}`);
+}
+function safeUnlink(filePath) { try { if (filePath && fs.existsSync(filePath)) safeUnlink(filePath); } catch (_) {} }
+
 // @desc    Upload students CSV (creates students with random ELIMUIDs)
 // @route   POST /api/upload/students
 // @access  Private/Teacher/Admin
@@ -13,13 +21,13 @@ exports.uploadStudents = async (req, res) => {
     }
 
     const file = req.files.file;
-    const filePath = path.join('/tmp', `${Date.now()}-${file.name}`);
+    const filePath = safeUploadPath(file.name);
     await file.mv(filePath);
 
     const processor = new CSVProcessor(req.user.schoolCode, req.user.id);
     const result = await processor.processStudentUpload(filePath);
 
-    fs.unlinkSync(filePath);
+    safeUnlink(filePath);
 
     // Log upload
     await UploadLog.create({
@@ -53,13 +61,13 @@ exports.uploadMarks = async (req, res) => {
     }
 
     const file = req.files.file;
-    const filePath = path.join('/tmp', `${Date.now()}-${file.name}`);
+    const filePath = safeUploadPath(file.name);
     await file.mv(filePath);
 
     const processor = new CSVProcessor(req.user.schoolCode, req.user.id);
     const result = await processor.processMarksUpload(filePath);
 
-    fs.unlinkSync(filePath);
+    safeUnlink(filePath);
 
     await UploadLog.create({
       type: 'marks',
@@ -92,13 +100,13 @@ exports.uploadAttendance = async (req, res) => {
     }
 
     const file = req.files.file;
-    const filePath = path.join('/tmp', `${Date.now()}-${file.name}`);
+    const filePath = safeUploadPath(file.name);
     await file.mv(filePath);
 
     const processor = new CSVProcessor(req.user.schoolCode, req.user.id);
     const result = await processor.processAttendanceUpload(filePath);
 
-    fs.unlinkSync(filePath);
+    safeUnlink(filePath);
 
     await UploadLog.create({
       type: 'attendance',

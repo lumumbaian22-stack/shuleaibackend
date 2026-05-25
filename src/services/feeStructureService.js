@@ -66,7 +66,7 @@ async function createOrUpdateStructure({ user, id, payload }) {
   if (!data.term) throw new Error('term is required');
 
   if (id) {
-    const structure = await FeeStructure.unscoped().findOne({ where: { id, schoolCode } });
+    const structure = await FeeStructure.findOne({ where: { id, schoolCode } });
     if (!structure) throw new Error('Fee structure not found');
     if (structure.status === 'locked') throw new Error('Locked fee structures cannot be edited. Create an adjustment instead.');
     const before = structure.toJSON();
@@ -84,29 +84,38 @@ async function createOrUpdateStructure({ user, id, payload }) {
 
 async function activateStructure({ user, id }) {
   const schoolCode = user.schoolCode;
-  const structure = await FeeStructure.unscoped().findOne({ where: { id, schoolCode } });
+  const structure = await FeeStructure.findOne({ where: { id, schoolCode } });
   if (!structure) throw new Error('Fee structure not found');
   const before = structure.toJSON();
   const trail = Array.isArray(structure.auditTrail) ? structure.auditTrail : [];
   trail.push(audit('activated', user));
   await structure.update({ status: 'active', auditTrail: trail, updatedBy: user.id });
-  await writeAudit({ schoolCode, user, action: 'fee_structure_activated', entityType: 'FeeStructure', entityId: id, before, after: structure.toJSON() });
 
-  // Production behavior: activation must immediately create/update fee accounts
-  // for students in the target class. This prevents the admin from seeing
-  // active structures but empty finance totals / parent balances.
+  // Rollout behavior: activation must immediately create/update fee accounts for
+  // students in the target class. This prevents "No fee accounts found" after an
+  // admin has already activated a class fee structure.
+  let assignment = { results: [] };
   try {
-    const assigned = await assignStructureToStudents({ user, structureId: id, overwrite: false });
-    return { structure, assigned };
+    assignment = await assignStructureToStudents({
+      user,
+      structureId: structure.id,
+      classId: structure.classId || null,
+      studentIds: [],
+      overwrite: false
+    });
   } catch (e) {
-    e.message = `Fee structure activated, but student fee accounts were not created: ${e.message}`;
+    trail.push(audit('activation_assignment_failed', user, { error: e.message }));
+    await structure.update({ auditTrail: trail, updatedBy: user.id });
     throw e;
   }
+
+  await writeAudit({ schoolCode, user, action: 'fee_structure_activated', entityType: 'FeeStructure', entityId: id, before, after: structure.toJSON(), metadata: { assignedAccounts: assignment.results?.length || 0 } });
+  return { structure, assignment };
 }
 
 async function lockStructure({ user, id }) {
   const schoolCode = user.schoolCode;
-  const structure = await FeeStructure.unscoped().findOne({ where: { id, schoolCode } });
+  const structure = await FeeStructure.findOne({ where: { id, schoolCode } });
   if (!structure) throw new Error('Fee structure not found');
   const before = structure.toJSON();
   const trail = Array.isArray(structure.auditTrail) ? structure.auditTrail : [];
@@ -127,13 +136,17 @@ async function assignStructureToStudents({ user, structureId, studentIds = [], c
       trail.push(audit('auto_activated_before_assignment', user));
       await structure.update({ status: 'active', auditTrail: trail, updatedBy: user.id || null }, { transaction });
     }
-    const where = {};
-    const include = [{ model: User, attributes: ['id', 'name', 'schoolCode'], where: { schoolCode }, required: true }];
-    if (studentIds.length) where.id = studentIds;
-    else if (classId || structure.classId) where.classId = Number(classId || structure.classId);
-    else if (structure.className) where.grade = structure.className;
+    const studentWhere = {};
+    if (studentIds.length) studentWhere.id = studentIds;
+    else if (classId) studentWhere.classId = classId;
+    else if (structure.classId) studentWhere.classId = structure.classId;
+    else if (structure.className) studentWhere.grade = structure.className;
 
-    const students = await Student.unscoped().findAll({ where, include, transaction });
+    const students = await Student.findAll({
+      where: studentWhere,
+      include: [{ model: User, where: { schoolCode, role: 'student' }, attributes: ['id', 'name', 'schoolCode'] }],
+      transaction
+    });
     const results = [];
     for (const student of students) {
       const existing = await Fee.findOne({ where: { studentId: student.id, schoolCode, term: structure.term, year: structure.year }, transaction });
