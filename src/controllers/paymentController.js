@@ -1,7 +1,8 @@
-const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, Subscription, SubscriptionPayment, SchoolPaymentSetting } = require('../models');
+const { Payment, Fee, Parent, Student, User, School, Class, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, Subscription, SubscriptionPayment, SchoolPaymentSetting } = require('../models');
 const daraja = require('../services/darajaService');
 const subscriptionController = require('./subscriptionController');
 const realtimeSync = require('../services/realtimeSyncService');
+const feeStructureService = require('../services/feeStructureService');
 
 function ref(prefix){ return `${prefix}-${Date.now()}-${Math.floor(Math.random()*100000).toString().padStart(5,'0')}`; }
 function cleanAmount(v){ const n = Math.round(Number(v)); if(!Number.isFinite(n) || n < 1) throw new Error('Payment amount must be at least KES 1'); return n; }
@@ -10,7 +11,8 @@ function auditEntry(action, actor, extra={}){ return { action, actorUserId: acto
 async function writeAudit(req, data){ try { await AuditLog?.create({ schoolCode: schoolCode(req) || data.schoolCode || 'platform', actorUserId:req.user?.id, actorRole:req.user?.role, ipAddress:req.ip, userAgent:req.get?.('user-agent'), ...data }); } catch(e){ console.error('Payment audit failed:', e.message); } }
 async function currentParent(req){ return Parent.findOne({ where:{ userId:req.user.id } }); }
 async function findStudentForParent(req, studentId){
-  const student = await Student.findByPk(studentId, { include:[{model:User, attributes:['id','name','schoolCode']}] });
+  const StudentModel = Student.unscoped ? Student.unscoped() : Student;
+  const student = await StudentModel.findByPk(studentId, { include:[{model:User, attributes:['id','name','schoolCode']}, {model:Class, attributes:['id','name','grade','stream','schoolCode'], required:false}] });
   if(!student) return null;
   if(req.user.role !== 'parent') return student;
   const parent = await currentParent(req);
@@ -295,7 +297,8 @@ exports.parentFeeSTK = async (req, res) => {
     const parent = await currentParent(req);
     if(!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
     const realSchoolCode = studentSchoolCode(student) || schoolCode(req);
-    const fee = feeId ? await Fee.findOne({ where:{ id:feeId, studentId:student.id, schoolCode:realSchoolCode } }) : await Fee.findOne({ where:{ studentId:student.id, schoolCode:realSchoolCode }, order:[['year','DESC'],['term','DESC']] });
+    await feeStructureService.ensureFeeAccountsForStudent({ user:req.user, studentId:student.id, schoolCode:realSchoolCode }).catch(e => console.warn('[payments] ensure fee account skipped:', e.message));
+    const fee = feeId ? await (Fee.unscoped ? Fee.unscoped() : Fee).findOne({ where:{ id:feeId, studentId:student.id, schoolCode:realSchoolCode } }) : await (Fee.unscoped ? Fee.unscoped() : Fee).findOne({ where:{ studentId:student.id, schoolCode:realSchoolCode }, order:[['year','DESC'],['term','DESC']] });
     const payAmount = cleanAmount(amount);
     if(fee && payAmount > feeBalance(fee)) return res.status(400).json({ success:false, message:'Payment amount exceeds outstanding balance' });
     const { settings } = await getSchoolPaymentConfig(realSchoolCode);
@@ -327,7 +330,8 @@ exports.parentFeeManual = async (req, res) => {
     const parent = await currentParent(req);
     if(!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
     const realSchoolCode = studentSchoolCode(student) || schoolCode(req);
-    const fee = feeId ? await Fee.findOne({ where:{ id:feeId, studentId:student.id, schoolCode:realSchoolCode } }) : await Fee.findOne({ where:{ studentId:student.id, schoolCode:realSchoolCode }, order:[['year','DESC'],['term','DESC']] });
+    await feeStructureService.ensureFeeAccountsForStudent({ user:req.user, studentId:student.id, schoolCode:realSchoolCode }).catch(e => console.warn('[payments] ensure fee account skipped:', e.message));
+    const fee = feeId ? await (Fee.unscoped ? Fee.unscoped() : Fee).findOne({ where:{ id:feeId, studentId:student.id, schoolCode:realSchoolCode } }) : await (Fee.unscoped ? Fee.unscoped() : Fee).findOne({ where:{ studentId:student.id, schoolCode:realSchoolCode }, order:[['year','DESC'],['term','DESC']] });
     const payAmount = cleanAmount(amount);
     if(fee && payAmount > feeBalance(fee)) return res.status(400).json({ success:false, message:'Payment amount exceeds outstanding balance' });
     const payment = await createManualPayment(req, { student, parent, fee, amount:payAmount, mpesaCode, phone, notes });
@@ -339,7 +343,7 @@ exports.getManualVerificationQueue = async (req, res) => {
   try {
     const rows = await Payment.findAll({
       where:{ schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school', paymentGateway:'manual_mpesa', status:'pending' },
-      include:[{ model:Student, include:[{model:User, attributes:['id','name','schoolCode']}] }, { model:Parent, include:[{model:User, attributes:['id','name','phone','email']}] }],
+      include:[{ model:(Student.unscoped ? Student.unscoped() : Student), include:[{model:User, attributes:['id','name','schoolCode']}, {model:Class, attributes:['id','name','grade','stream','schoolCode'], required:false}] }, { model:Parent, include:[{model:User, attributes:['id','name','phone','email']}] }, { model:(Fee.unscoped ? Fee.unscoped() : Fee), required:false }],
       order:[['createdAt','DESC']], limit:200
     });
     res.json({ success:true, data:rows });
@@ -349,13 +353,38 @@ exports.getManualVerificationQueue = async (req, res) => {
 
 exports.getAdminPaymentRecords = async (req, res) => {
   try {
+    await feeStructureService.repairSchoolFeeAccounts({ user:req.user, schoolCode:req.user.schoolCode }).catch(e => console.warn('[payments] fee account repair skipped:', e.message));
+    await feeStructureService.reconcileOrphanPayments({ schoolCode:req.user.schoolCode }).catch(e => console.warn('[payments] payment reconciliation skipped:', e.message));
+
+    const StudentModel = Student.unscoped ? Student.unscoped() : Student;
     const rows = await Payment.findAll({
       where:{ schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school' },
-      include:[{ model:Student, include:[{model:User, attributes:['id','name','schoolCode']}] }, { model:Parent, include:[{model:User, attributes:['id','name','phone','email']}] }, { model:Fee }],
-      order:[['createdAt','DESC']], limit:500
+      include:[
+        { model:StudentModel, include:[{model:User, attributes:['id','name','schoolCode']}, {model:Class, attributes:['id','name','grade','stream','schoolCode'], required:false}] },
+        { model:Parent, include:[{model:User, attributes:['id','name','phone','email']}] },
+        { model:Fee.unscoped ? Fee.unscoped() : Fee, required:false }
+      ],
+      order:[['createdAt','DESC']], limit:1000
     });
-    res.json({ success:true, data:rows });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+
+    const data = rows.map(row => {
+      const json = row.toJSON ? row.toJSON() : row;
+      const fee = json.Fee || null;
+      const student = json.Student || {};
+      const expected = Number(fee?.totalAmount || 0);
+      const paid = Number(fee?.paidAmount || 0);
+      const balance = Math.max(0, expected - paid);
+      return {
+        ...json,
+        className: student?.Class?.name || student?.grade || json.metadata?.className || fee?.Class?.name || 'Unassigned',
+        term: fee?.term || json.metadata?.term || null,
+        year: fee?.year || json.metadata?.year || null,
+        feeAccount: fee,
+        financeSummary: { expected, paid, balance, accountStatus: fee?.status || (balance === 0 && expected > 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid') }
+      };
+    });
+    res.json({ success:true, data });
+  } catch(error){ console.error('Admin payment records error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 
 exports.approveManualPayment = async (req, res) => {
