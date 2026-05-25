@@ -168,12 +168,32 @@ module.exports = {
           "monthlyPriceKes" = EXCLUDED."monthlyPriceKes",
           "termlyPriceKes" = EXCLUDED."termlyPriceKes",
           "yearlyPriceKes" = EXCLUDED."yearlyPriceKes",
+          "setupFeeMinKes" = EXCLUDED."setupFeeMinKes",
+          "setupFeeMaxKes" = EXCLUDED."setupFeeMaxKes",
           "features" = EXCLUDED."features",
           "lockedFeatures" = EXCLUDED."lockedFeatures",
           "limits" = EXCLUDED."limits",
           "sortOrder" = EXCLUDED."sortOrder",
           "updatedAt" = EXCLUDED."updatedAt";
-      `, { replacements: { ...plan, features: JSON.stringify(plan.features||[]), lockedFeatures: JSON.stringify(plan.lockedFeatures||[]), limits: JSON.stringify(plan.limits||{}), now } });
+      `, {
+        replacements: {
+          code: plan.code,
+          name: plan.name,
+          displayName: plan.displayName,
+          ownerType: plan.ownerType,
+          price_kes: plan.price_kes ?? 0,
+          monthlyPriceKes: plan.monthlyPriceKes ?? null,
+          termlyPriceKes: plan.termlyPriceKes ?? null,
+          yearlyPriceKes: plan.yearlyPriceKes ?? null,
+          setupFeeMinKes: plan.setupFeeMinKes ?? null,
+          setupFeeMaxKes: plan.setupFeeMaxKes ?? null,
+          features: JSON.stringify(plan.features || []),
+          lockedFeatures: JSON.stringify(plan.lockedFeatures || []),
+          limits: JSON.stringify(plan.limits || {}),
+          sortOrder: plan.sortOrder ?? 0,
+          now
+        }
+      });
     }
   },
 
