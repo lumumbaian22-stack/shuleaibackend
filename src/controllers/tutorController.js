@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { TutorSession, TutorMessage, TutorProgress, TutorUsage, Student, AcademicRecord, Attendance, Subscription, SubscriptionPlan } = require('../models');
+const { TutorSession, TutorMessage, TutorProgress, TutorUsage, Student, User, AcademicRecord, Attendance, Subscription, SubscriptionPlan } = require('../models');
 const { detectCommand } = require('../services/tutor/commandDetector');
 const { LEVELS, normalizeGrade, getLevelByGrade, detectSubject } = require('../services/tutor/curriculumSubjects');
 const { detectTopic, buildTutorAnswer } = require('../services/tutor/tutorKnowledge');
@@ -50,7 +50,21 @@ function safeTutorText(value, fallback = 'Tutor message') {
 
 async function resolveStudent(req) {
   if (req.user.role !== 'student') return null;
-  return Student.findOne({ where: { userId: req.user.id, schoolCode: req.user.schoolCode } });
+
+  // Student records do NOT carry schoolCode in the current schema.
+  // Tenant ownership is enforced through the linked User.schoolCode.
+  // This prevents the production error: column Student.schoolCode does not exist.
+  const student = await Student.findOne({
+    where: { userId: req.user.id },
+    include: [{
+      model: User,
+      attributes: ['id', 'name', 'email', 'schoolCode'],
+      required: true,
+      where: { schoolCode: req.user.schoolCode }
+    }]
+  });
+
+  return student;
 }
 
 async function getActiveChildSubscription(studentId, schoolCode) {

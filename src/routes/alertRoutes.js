@@ -14,6 +14,7 @@ router.put('/read-all', alertController.markAllAsRead);
 
 // Shule AI suggestion for admin parent announcements
 router.post('/suggest-parent-message', authorize('admin', 'super_admin'), alertController.suggestParentAlert);
+router.post('/suggest-announcement', authorize('admin', 'super_admin'), alertController.suggestParentAlert);
 
 // Create alert (admin/super_admin only) - FOR ANNOUNCEMENTS
 router.post('/', authorize('admin', 'super_admin'), alertController.createAlert);

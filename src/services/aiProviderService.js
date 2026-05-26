@@ -37,8 +37,8 @@ function buildStudentTutorSystemPrompt() {
 
 function buildAlertSuggestionSystemPrompt() {
   return [
-    'You are Shule AI, an assistant that helps school admins write clear parent alerts.',
-    'Write concise, respectful, professional messages suitable for parents in Kenya.',
+    'You are Shule AI, an assistant that helps school admins write clear announcements and parent alerts.',
+    'Write concise, respectful, professional messages suitable for parents, teachers, students, or the whole school in Kenya.',
     'Do not include threats, shame, sensitive student details, or private financial details beyond the user provided summary.',
     'Return JSON only with keys: title, message, tone, reason, alternatives.',
     'alternatives must be an array of 2 shorter alternative messages.'
@@ -127,7 +127,7 @@ async function generateParentAlertSuggestion({ audience, topic, tone, descriptio
     schoolName: schoolName || 'the school',
     briefDescription: description || '',
     extraContext: extraContext || {},
-    instructions: 'Generate a parent-facing alert. Keep it specific, respectful, and easy to understand.'
+    instructions: 'Generate a school announcement or parent-facing alert. Keep it specific, respectful, and easy to understand. The admin must review before sending.'
   };
   const result = await callDeepSeekChat({
     messages: [

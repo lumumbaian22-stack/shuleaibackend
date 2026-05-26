@@ -6,7 +6,7 @@ exports.getMyAlerts = async (req, res) => {
     const alerts = await Alert.findAll({
       where: { userId: req.user.id },
       order: [['createdAt', 'DESC']],
-      limit: 50
+      limit: Number(req.query.limit || 120)
     });
     res.json({ success: true, data: alerts });
   } catch (error) {
@@ -18,7 +18,7 @@ exports.getMyAlerts = async (req, res) => {
 exports.markAlertAsRead = async (req, res) => {
   try {
     const { id } = req.params;
-    await Alert.update({ isRead: true }, { where: { id, userId: req.user.id } });
+    await Alert.update({ isRead: true, readAt: new Date() }, { where: { id, userId: req.user.id } });
     res.json({ success: true });
   } catch (error) {
     console.error('Mark read error:', error);
@@ -28,7 +28,7 @@ exports.markAlertAsRead = async (req, res) => {
 
 exports.markAllAsRead = async (req, res) => {
   try {
-    await Alert.update({ isRead: true }, { where: { userId: req.user.id, isRead: false } });
+    await Alert.update({ isRead: true, readAt: new Date() }, { where: { userId: req.user.id, isRead: false } });
     res.json({ success: true });
   } catch (error) {
     console.error('Mark all read error:', error);
@@ -124,6 +124,23 @@ exports.suggestParentAlert = async (req, res) => {
   }
 };
 
+
+function normalizeAlertDbType(value) {
+  const raw = String(value || '').toLowerCase();
+  if (/academic|grade|mark|homework|study/.test(raw)) return 'academic';
+  if (/attendance|physical|safety|absent|late/.test(raw)) return 'attendance';
+  if (/fee|payment|finance|bursary|subscription|cash|bank|mpesa|balance/.test(raw)) return 'fee';
+  if (/duty/.test(raw)) return 'duty';
+  if (/approval|approve|reject/.test(raw)) return 'approval';
+  if (/improvement|insight|ai|recommend/.test(raw)) return 'improvement';
+  return 'system';
+}
+
+function buildDedupeKey({ req, recipient, type, category, title, data }) {
+  const eventId = data?.eventId || data?.paymentId || data?.studentId || data?.announcementId || '';
+  return [req.user.schoolCode || '', recipient.id, data?.studentId || '', category || type || 'system', title || '', eventId].join(':').slice(0, 480);
+}
+
 // Create alerts with severity and audience support
 exports.createAlert = async (req, res) => {
   try {
@@ -135,6 +152,15 @@ exports.createAlert = async (req, res) => {
       targetAudience,
       type,
       category,
+      categoryLabel,
+      sourceType,
+      sourceLabel,
+      priority,
+      actionUrl,
+      actionLabel,
+      studentId,
+      classId,
+      dedupeKey,
       severity,
       title,
       message,
@@ -167,7 +193,7 @@ exports.createAlert = async (req, res) => {
       if (user) recipients = [user];
     } else {
       const selectedRoles = Array.isArray(roles) && roles.length ? roles : (role ? [role] : (Array.isArray(targetAudience) ? targetAudience : ['student']));
-      const cleanRoles = selectedRoles.map(r => String(r).toLowerCase()).filter(r => ['student','parent','teacher','admin'].includes(r));
+      const cleanRoles = selectedRoles.map(r => String(r).toLowerCase()).filter(r => ['student','parent','teacher','admin','super_admin'].includes(r));
       recipients = await User.findAll({
         where: {
           role: cleanRoles.length ? cleanRoles : ['student'],
@@ -183,22 +209,44 @@ exports.createAlert = async (req, res) => {
 
     const created = [];
     for (const recipient of recipients) {
-      const alert = await Alert.create({
+      const finalCategory = categoryLabel || category || type || 'System';
+      const finalData = {
+        ...(data || {}),
+        category: finalCategory,
+        sourceType: sourceType || data?.sourceType || 'manual_admin',
+        sourceLabel: sourceLabel || data?.aiLabel || 'Admin announcement',
+        severityLevel: rawSeverity,
+        deliveryMethods: deliveryMethods || ['in_app'],
+        scheduledAt: scheduledAt || null,
+        createdBy: req.user.id,
+        createdByRole: req.user.role,
+        studentId: studentId || data?.studentId || null,
+        classId: classId || data?.classId || null
+      };
+      const finalDedupeKey = dedupeKey || buildDedupeKey({ req, recipient, type, category: finalCategory, title, data: finalData });
+      let alert = await Alert.findOne({ where: { userId: recipient.id, dedupeKey: finalDedupeKey } }).catch(() => null);
+      const payload = {
         userId: recipient.id,
-        role: recipient.role,
-        type: type || category || 'system',
+        role: recipient.role === 'superadmin' ? 'super_admin' : recipient.role,
+        type: normalizeAlertDbType(type || category || finalCategory),
+        categoryLabel: finalCategory,
+        sourceType: finalData.sourceType,
+        sourceLabel: finalData.sourceLabel,
+        targetRole: recipient.role,
+        targetUserId: recipient.id,
+        studentId: studentId || data?.studentId || null,
+        classId: classId || data?.classId || null,
+        priority: priority || rawSeverity,
+        dedupeKey: finalDedupeKey,
+        actionUrl: actionUrl || data?.actionUrl || null,
+        actionLabel: actionLabel || data?.actionLabel || null,
         severity: dbSeverity,
         title,
         message,
-        data: {
-          ...(data || {}),
-          severityLevel: rawSeverity,
-          deliveryMethods: deliveryMethods || ['in_app'],
-          scheduledAt: scheduledAt || null,
-          createdBy: req.user.id,
-          createdByRole: req.user.role
-        }
-      });
+        data: finalData
+      };
+      if (alert) alert = await alert.update({ ...payload, isRead: false, readAt: null });
+      else alert = await Alert.create(payload);
       created.push(alert);
       if (global.io) global.io.to(`user-${recipient.id}`).emit('alert', alert);
     }

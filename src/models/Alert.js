@@ -12,7 +12,7 @@ module.exports = (sequelize, DataTypes) => {
       }
     },
     role: {
-      type: DataTypes.ENUM('student', 'parent', 'teacher', 'admin'),
+      type: DataTypes.ENUM('student', 'parent', 'teacher', 'admin', 'super_admin'),
       allowNull: false,
       defaultValue: 'admin'
     },
@@ -28,6 +28,17 @@ module.exports = (sequelize, DataTypes) => {
     },
     title: DataTypes.STRING,
     message: DataTypes.TEXT,
+    categoryLabel: DataTypes.STRING,
+    sourceType: DataTypes.STRING,
+    sourceLabel: DataTypes.STRING,
+    targetRole: DataTypes.STRING,
+    targetUserId: DataTypes.INTEGER,
+    studentId: DataTypes.INTEGER,
+    classId: DataTypes.INTEGER,
+    priority: DataTypes.STRING,
+    dedupeKey: DataTypes.STRING,
+    actionLabel: DataTypes.STRING,
+    readAt: DataTypes.DATE,
     data: DataTypes.JSONB,
     isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
     isActioned: { type: DataTypes.BOOLEAN, defaultValue: false },
