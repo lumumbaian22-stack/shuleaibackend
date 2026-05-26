@@ -1,7 +1,8 @@
-const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, Subscription, SubscriptionPayment, SchoolPaymentSetting } = require('../models');
+const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, Subscription, SubscriptionPayment, SchoolPaymentSetting, Class } = require('../models');
 const daraja = require('../services/darajaService');
 const subscriptionController = require('./subscriptionController');
 const realtimeSync = require('../services/realtimeSyncService');
+const financeLedger = require('../services/financeLedgerService');
 
 function ref(prefix){ return `${prefix}-${Date.now()}-${Math.floor(Math.random()*100000).toString().padStart(5,'0')}`; }
 function cleanAmount(v){ const n = Math.round(Number(v)); if(!Number.isFinite(n) || n < 1) throw new Error('Payment amount must be at least KES 1'); return n; }
@@ -60,18 +61,10 @@ async function getSchoolPaymentConfig(schoolCodeValue){
 }
 async function applyFeePayment(payment, receipt='manual'){
   if(!payment?.feeId) return null;
-  const fee = await Fee.findByPk(payment.feeId);
-  if(!fee) return null;
-  const payments = Array.isArray(fee.payments) ? fee.payments : [];
-  const exists = payments.some(p => String(p.paymentId) === String(payment.id) || (receipt && p.receipt && String(p.receipt) === String(receipt)));
-  if(exists) return fee;
-  const beforePaid = Number(fee.paidAmount || 0);
-  const newPaid = Math.min(Number(fee.totalAmount || 0), beforePaid + Number(payment.amount || 0));
-  payments.push({ paymentId:payment.id, amount:payment.amount, reference:payment.reference, receipt, paidAt:new Date().toISOString(), gateway:payment.paymentGateway || 'manual_mpesa', elimuId:payment.metadata?.studentElimuid });
-  const feeTrail = Array.isArray(fee.auditTrail) ? fee.auditTrail : [];
-  feeTrail.push({ action:'payment_applied', at:new Date().toISOString(), paymentId:payment.id, amount:payment.amount, receipt });
-  await fee.update({ paidAmount:newPaid, status:feeStatus(fee.totalAmount, newPaid), payments, auditTrail:feeTrail, lastReconciledAt:new Date() });
-  return fee;
+  // V75: balances are reconciled from the student-specific ledger so approved
+  // M-Pesa, manual, bank, cash, card, bursary and waiver rows all update the
+  // same fee account without double-counting.
+  return financeLedger.recalculateFeeAccount(payment.feeId);
 }
 
 async function createManualPayment(req, { student, parent, fee, amount, mpesaCode, phone, notes }){
@@ -122,8 +115,11 @@ async function createPendingPayment(req, payload){
     studentId: payload.studentId || null,
     parentId: payload.parentId || null,
     feeId: payload.feeId || null,
+    feeStructureId: payload.feeStructureId || payload.metadata?.feeStructureId || null,
     amount: payload.amount,
-    method: 'mpesa',
+    method: payload.method || 'mpesa_stk',
+    transactionType: payload.transactionType || 'payment',
+    source: payload.source || 'parent',
     reference: payload.reference,
     plan: payload.plan || payload.planCode || null,
     status: 'pending',
@@ -602,4 +598,229 @@ exports.darajaCallback = async (req, res) => {
     }
     res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
   } catch(error){ console.error('Daraja callback error:', error); res.json({ ResultCode: 0, ResultDesc:'Accepted with internal logging error' }); }
+};
+
+// ============================================================================
+// V75 FINAL FINANCE LEDGER OVERRIDES
+// Student-specific payment history, all payment methods, bursaries/credits,
+// admin manual recording, and no mixed sibling/classmate finance records.
+// ============================================================================
+
+exports.getParentStudentFeeAccounts = async (req, res) => {
+  try {
+    const data = await financeLedger.getStudentFinance({
+      schoolCode: req.user.schoolCode,
+      studentId: req.params.studentId,
+      parentUserId: req.user.id
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(403).json({ success: false, message: error.message });
+  }
+};
+
+exports.getParentStudentPaymentHistory = async (req, res) => {
+  try {
+    const data = await financeLedger.getStudentHistory({
+      schoolCode: req.user.schoolCode,
+      studentId: req.params.studentId,
+      parentUserId: req.user.id,
+      status: req.query.status || 'all',
+      transactionType: req.query.transactionType || req.query.type || 'all',
+      method: req.query.method || 'all',
+      feeId: req.query.feeId || null
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(403).json({ success: false, message: error.message });
+  }
+};
+
+exports.getAdminFinanceSummary = async (req, res) => {
+  try {
+    const data = await financeLedger.getAdminSummary({ schoolCode: req.user.schoolCode });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getAdminStudentFinance = async (req, res) => {
+  try {
+    const data = await financeLedger.getStudentFinance({ schoolCode: req.user.schoolCode, studentId: req.params.studentId });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(404).json({ success: false, message: error.message });
+  }
+};
+
+exports.getAdminStudentHistory = async (req, res) => {
+  try {
+    const data = await financeLedger.getStudentHistory({
+      schoolCode: req.user.schoolCode,
+      studentId: req.params.studentId,
+      status: req.query.status || 'all',
+      transactionType: req.query.transactionType || req.query.type || 'all',
+      method: req.query.method || 'all',
+      feeId: req.query.feeId || null
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(404).json({ success: false, message: error.message });
+  }
+};
+
+exports.recordAdminManualPayment = async (req, res) => {
+  try {
+    const studentId = Number(req.params.studentId || req.body.studentId);
+    const status = req.body.status || 'completed';
+    const payment = await financeLedger.recordTransaction({
+      user: req.user,
+      schoolCode: req.user.schoolCode,
+      studentId,
+      feeId: Number(req.body.feeId || req.body.feeAccountId),
+      amount: req.body.amount,
+      method: req.body.method || 'cash',
+      transactionType: req.body.transactionType || 'payment',
+      status,
+      reference: req.body.reference || req.body.referenceNumber || req.body.receiptNumber,
+      source: 'admin',
+      parentId: req.body.parentId || null,
+      notes: req.body.notes || null,
+      processedBy: req.user.id,
+      approvedBy: ['completed','approved','successful','success'].includes(String(status).toLowerCase()) ? req.user.id : null,
+      paymentDate: req.body.paymentDate || null,
+      receiptUrl: req.body.receiptUrl || null,
+      metadata: { recordedBy: req.user.id }
+    });
+    const finance = await financeLedger.getStudentFinance({ schoolCode: req.user.schoolCode, studentId });
+    res.json({ success: true, message: 'Payment recorded and student balance updated.', data: { payment, finance } });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+exports.recordAdminBursary = async (req, res) => {
+  try {
+    const studentId = Number(req.params.studentId || req.body.studentId);
+    const status = req.body.status || 'completed';
+    const payment = await financeLedger.recordTransaction({
+      user: req.user,
+      schoolCode: req.user.schoolCode,
+      studentId,
+      feeId: Number(req.body.feeId || req.body.feeAccountId),
+      amount: req.body.amount,
+      method: req.body.method || req.body.bursaryType || 'bursary',
+      transactionType: req.body.transactionType || 'bursary',
+      status,
+      reference: req.body.reference || req.body.referenceNumber || `BURSARY-${Date.now()}-${studentId}`,
+      source: req.body.source || req.body.sponsor || 'admin',
+      parentId: req.body.parentId || null,
+      notes: req.body.notes || null,
+      processedBy: req.user.id,
+      approvedBy: ['completed','approved','successful','success'].includes(String(status).toLowerCase()) ? req.user.id : null,
+      paymentDate: req.body.paymentDate || null,
+      receiptUrl: req.body.receiptUrl || null,
+      metadata: { bursaryType: req.body.bursaryType, sponsor: req.body.sponsor, recordedBy: req.user.id }
+    });
+    const finance = await financeLedger.getStudentFinance({ schoolCode: req.user.schoolCode, studentId });
+    res.json({ success: true, message: 'Bursary/credit recorded and student balance updated after approval.', data: { payment, finance } });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+exports.getAdminPaymentRecords = async (req, res) => {
+  try {
+    const summary = await financeLedger.getAdminSummary({ schoolCode: req.user.schoolCode });
+    const payments = await Payment.findAll({
+      where: { schoolCode: req.user.schoolCode, paymentType: 'fee', paidTo: 'school' },
+      include: [
+        { model: Student, include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }, { model: Class, required: false }] },
+        { model: Parent, include: [{ model: User, attributes: ['id', 'name', 'phone', 'email'] }], required: false },
+        { model: Fee, required: false }
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: 1000
+    });
+    const data = summary.accounts.map(account => {
+      const studentPayments = payments.filter(p => Number(p.studentId) === Number(account.studentId) && (!account.id || Number(p.feeId) === Number(account.id))).map(financeLedger.decoratePayment);
+      const last = studentPayments[0] || null;
+      return {
+        ...account,
+        feeId: account.id,
+        studentId: account.studentId,
+        studentName: account.studentName,
+        className: account.className,
+        feeTotalAmount: account.totalAmount,
+        feeParentPaidAmount: account.parentPaidAmount,
+        feeCreditAmount: account.creditAmount,
+        feePaidAmount: account.paidAmount,
+        feeBalance: account.balance,
+        lastPayment: last,
+        paymentHistory: studentPayments,
+        recordType: 'fee_account'
+      };
+    });
+    res.json({ success: true, data, summary });
+  } catch (error) {
+    console.error('Admin payment records error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getManualVerificationQueue = async (req, res) => {
+  try {
+    const rows = await Payment.findAll({
+      where: { schoolCode: req.user.schoolCode, paymentType: 'fee', paidTo: 'school', status: 'pending' },
+      include: [
+        { model: Student, include: [{ model: User, attributes: ['id','name','schoolCode'] }, { model: Class, required:false }] },
+        { model: Parent, include: [{model:User, attributes:['id','name','phone','email']}], required:false },
+        { model: Fee, required:false }
+      ],
+      order: [['createdAt','DESC']],
+      limit: 200
+    });
+    res.json({ success:true, data: rows.map(financeLedger.decoratePayment) });
+  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.approveManualPayment = async (req, res) => {
+  try {
+    const data = await financeLedger.updateTransactionStatus({ user: req.user, schoolCode: req.user.schoolCode, paymentId: req.params.paymentId, status: 'completed', notes: req.body?.notes || null });
+    res.json({ success:true, message:'Payment approved. Student fee balance updated.', data });
+  } catch(error){ res.status(400).json({ success:false, message:error.message }); }
+};
+
+exports.rejectManualPayment = async (req, res) => {
+  try {
+    const data = await financeLedger.updateTransactionStatus({ user: req.user, schoolCode: req.user.schoolCode, paymentId: req.params.paymentId, status: 'rejected', notes: req.body?.reason || req.body?.notes || 'Rejected by finance/admin' });
+    res.json({ success:true, message:'Payment rejected. No balance was updated.', data });
+  } catch(error){ res.status(400).json({ success:false, message:error.message }); }
+};
+
+exports.parentFeeManual = async (req, res) => {
+  try {
+    const { studentId, feeId, amount, mpesaCode, reference, phone, notes, method = 'manual_mpesa' } = req.body || {};
+    if(!studentId || !amount || !(mpesaCode || reference)) return res.status(400).json({ success:false, message:'studentId, amount, and reference/M-Pesa code are required' });
+    const { parent, student } = await financeLedger.assertParentOwnsStudent({ parentUserId: req.user.id, studentId, schoolCode: req.user.schoolCode });
+    const payment = await financeLedger.recordTransaction({
+      user: req.user,
+      schoolCode: req.user.schoolCode,
+      studentId: student.id,
+      parentId: parent.id,
+      feeId: Number(feeId),
+      amount,
+      method,
+      transactionType: 'payment',
+      status: 'pending',
+      reference: mpesaCode || reference,
+      source: 'parent',
+      notes: notes || `${method} payment awaiting school verification`,
+      processedBy: req.user.id,
+      paymentDate: new Date(),
+      metadata: { phone, submittedBy: 'parent' }
+    });
+    res.json({ success:true, message:'Payment submitted for school finance verification. Balance updates after approval.', data:{ paymentId:payment.id, reference:payment.reference, status:payment.status, amount:payment.amount } });
+  } catch(error){ console.error('Manual school fee payment error:', error); res.status(400).json({ success:false, message:error.message }); }
 };

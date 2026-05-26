@@ -25,9 +25,17 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.INTEGER,
       defaultValue: 0
     },
+    parentPaidAmount: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
+    creditAmount: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
     balance: {
       type: DataTypes.VIRTUAL,
-      get() { return this.totalAmount - this.paidAmount; }
+      get() { return Math.max(0, Number(this.totalAmount || 0) - Number(this.parentPaidAmount ?? this.paidAmount ?? 0) - Number(this.creditAmount || 0)); }
     },
     dueDate: DataTypes.DATE,
     status: {
@@ -45,7 +53,9 @@ module.exports = (sequelize, DataTypes) => {
     locked: { type: DataTypes.BOOLEAN, defaultValue: false },
     auditTrail: { type: DataTypes.JSONB, defaultValue: [] },
     adjustments: { type: DataTypes.JSONB, defaultValue: [] },
-    lastReconciledAt: { type: DataTypes.DATE, allowNull: true }
+    lastReconciledAt: { type: DataTypes.DATE, allowNull: true },
+    sourceBreakdown: { type: DataTypes.JSONB, defaultValue: {} },
+    lastTransactionAt: { type: DataTypes.DATE, allowNull: true }
   }, {
     timestamps: true
   });

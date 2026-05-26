@@ -12,6 +12,17 @@ router.put('/admin/school-settings', protect, authorize('admin'), ctrl.updateAdm
 router.post('/admin/test-connection', protect, authorize('admin'), ctrl.testAdminPaymentConnection);
 router.get('/admin/manual-queue', protect, authorize('admin'), ctrl.getManualVerificationQueue);
 router.get('/admin/records', protect, authorize('admin'), ctrl.getAdminPaymentRecords);
+// V75 student-specific finance ledger endpoints
+router.get('/parent/students/:studentId/fee-accounts', protect, authorize('parent'), ctrl.getParentStudentFeeAccounts);
+router.get('/parent/students/:studentId/history', protect, authorize('parent'), ctrl.getParentStudentPaymentHistory);
+router.get('/admin/finance-summary', protect, authorize('admin'), ctrl.getAdminFinanceSummary);
+router.get('/admin/students/:studentId/finance', protect, authorize('admin'), ctrl.getAdminStudentFinance);
+router.get('/admin/students/:studentId/history', protect, authorize('admin'), ctrl.getAdminStudentHistory);
+router.post('/admin/students/:studentId/manual-payment', protect, authorize('admin'), ctrl.recordAdminManualPayment);
+router.post('/admin/students/:studentId/bursary', protect, authorize('admin'), ctrl.recordAdminBursary);
+router.post('/admin/transactions/:paymentId/approve', protect, authorize('admin'), ctrl.approveManualPayment);
+router.post('/admin/transactions/:paymentId/reject', protect, authorize('admin'), ctrl.rejectManualPayment);
+
 router.post('/admin/manual-queue/:paymentId/approve', protect, authorize('admin'), ctrl.approveManualPayment);
 router.post('/admin/manual-queue/:paymentId/reject', protect, authorize('admin'), ctrl.rejectManualPayment);
 

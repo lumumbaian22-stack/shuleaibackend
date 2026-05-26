@@ -19,8 +19,9 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false
     },
     method: {
-      type: DataTypes.ENUM('mpesa', 'bank', 'cash', 'card'),
-      allowNull: false
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'mpesa_stk'
     },
     reference: {
       type: DataTypes.STRING,
@@ -32,7 +33,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     status: {
-      type: DataTypes.ENUM('pending', 'completed', 'failed', 'refunded'),
+      type: DataTypes.STRING,
       defaultValue: 'pending'
     },
     transactionDate: { 
@@ -62,7 +63,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false
     },
     paymentType: {
-      type: DataTypes.ENUM('subscription', 'fee', 'upgrade', 'other'),
+      type: DataTypes.STRING,
       defaultValue: 'subscription'
     },
     currency: {
@@ -79,7 +80,7 @@ module.exports = (sequelize, DataTypes) => {
     merchantRequestId: { type: DataTypes.STRING, allowNull: true },
     mpesaReceiptNumber: { type: DataTypes.STRING, allowNull: true },
     payerPhone: { type: DataTypes.STRING, allowNull: true },
-    paidTo: { type: DataTypes.ENUM('school', 'platform'), allowNull: false, defaultValue: 'platform' },
+    paidTo: { type: DataTypes.STRING, allowNull: false, defaultValue: 'platform' },
     locked: { type: DataTypes.BOOLEAN, defaultValue: true },
     auditTrail: { type: DataTypes.JSONB, defaultValue: [] },
     gatewayResponse: {
@@ -94,6 +95,13 @@ module.exports = (sequelize, DataTypes) => {
     planCode: { type: DataTypes.STRING, allowNull: true },
     planName: { type: DataTypes.STRING, allowNull: true },
     refundReason: DataTypes.TEXT,
+    transactionType: { type: DataTypes.STRING, allowNull: false, defaultValue: 'payment' },
+    source: { type: DataTypes.STRING, allowNull: false, defaultValue: 'system' },
+    approvedBy: { type: DataTypes.INTEGER, allowNull: true },
+    processedBy: { type: DataTypes.INTEGER, allowNull: true },
+    paymentDate: { type: DataTypes.DATE, allowNull: true },
+    feeStructureId: { type: DataTypes.STRING, allowNull: true },
+    receiptUrl: { type: DataTypes.TEXT, allowNull: true },
     idempotencyKey: { type: DataTypes.STRING, allowNull: true },
     callbackAttempts: { type: DataTypes.INTEGER, defaultValue: 0 },
     lastCallbackAt: { type: DataTypes.DATE, allowNull: true },

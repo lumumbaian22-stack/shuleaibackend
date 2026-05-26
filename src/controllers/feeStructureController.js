@@ -1,5 +1,6 @@
 const { FeeStructure, Fee, Student, Class, User } = require('../models');
 const service = require('../services/feeStructureService');
+const ledger = require('../services/financeLedgerService');
 
 function schoolCode(req) { return req.user?.schoolCode || req.query.schoolCode || req.body.schoolCode; }
 
@@ -66,11 +67,13 @@ exports.studentFeeAccounts = async (req, res) => {
     if (req.query.studentId) where.studentId = req.query.studentId;
     if (req.query.term) where.term = req.query.term;
     if (req.query.year) where.year = Number(req.query.year);
-    const data = await Fee.findAll({
+    if (req.query.feeStructureId) where.feeStructureId = String(req.query.feeStructureId);
+    const rows = await Fee.findAll({
       where,
-      include: [{ model: Student, include: [{ model: User, attributes: ['id','name','email','schoolCode'] }] }],
-      order: [['updatedAt', 'DESC']]
+      include: [{ model: Student, include: [{ model: User, attributes: ['id','name','email','schoolCode'] }, { model: Class, attributes:['id','name','grade','stream'], required:false }] }],
+      order: [['year', 'DESC'], ['term', 'DESC'], ['updatedAt', 'DESC']]
     });
+    const data = rows.map(row => ledger.decorateFeeAccount(row, row.Student));
     res.json({ success: true, data });
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };

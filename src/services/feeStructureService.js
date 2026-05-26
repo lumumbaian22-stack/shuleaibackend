@@ -1,4 +1,6 @@
+const { Op } = require('sequelize');
 const { sequelize, FeeStructure, Fee, Student, Class, User, AuditLog } = require('../models');
+const ledger = require('./financeLedgerService');
 
 function amount(value) {
   const n = Math.round(Number(value || 0));
@@ -9,7 +11,7 @@ function amount(value) {
 function normalizeItems(items = []) {
   if (!Array.isArray(items) || !items.length) throw new Error('At least one fee item is required');
   return items.map((item, index) => {
-    const name = String(item.name || item.label || '').trim();
+    const name = String(item.name || item.label || item.itemName || '').trim();
     if (!name) throw new Error(`Fee item ${index + 1} requires a name`);
     return {
       id: item.id || `item_${index + 1}`,
@@ -38,20 +40,69 @@ async function writeAudit({ schoolCode, user, module = 'fees', action, entityTyp
   }
 }
 
+function uniqueNumbers(values = []) {
+  return [...new Set(values.map(v => Number(v)).filter(v => Number.isInteger(v) && v > 0))];
+}
+
+async function resolveClasses({ schoolCode, payload, existingStructure = null, transaction = null }) {
+  let ids = uniqueNumbers(payload.classIds || payload.classes || payload.selectedClassIds || []);
+  if (payload.classId) ids.push(Number(payload.classId));
+  ids = uniqueNumbers(ids);
+
+  let classes = [];
+  if (ids.length) {
+    classes = await Class.findAll({ where: { schoolCode, id: ids }, order: [['grade', 'ASC'], ['name', 'ASC']], transaction });
+  } else if (existingStructure?.classIds?.length) {
+    classes = await Class.findAll({ where: { schoolCode, id: existingStructure.classIds }, order: [['grade', 'ASC'], ['name', 'ASC']], transaction });
+  } else if (existingStructure?.classId) {
+    classes = await Class.findAll({ where: { schoolCode, id: existingStructure.classId }, transaction });
+  } else if (payload.className || payload.gradeLevel) {
+    const name = String(payload.className || payload.gradeLevel).trim();
+    classes = await Class.findAll({ where: { schoolCode, [Op.or]: [{ name }, { grade: name }] }, order: [['grade', 'ASC'], ['name', 'ASC']], transaction });
+  }
+
+  const assignedClasses = classes.map(c => ({ id: c.id, name: c.name, grade: c.grade, stream: c.stream }));
+  const classIds = classes.map(c => c.id);
+  const className = assignedClasses.length
+    ? assignedClasses.map(c => c.name || c.grade).join(', ')
+    : String(payload.className || payload.gradeLevel || existingStructure?.className || 'Selected Classes').trim();
+
+  return { classIds, assignedClasses, className, classId: classIds[0] || payload.classId || existingStructure?.classId || null };
+}
+
+function buildGroupKey({ schoolCode, name, term, year, curriculum }) {
+  return [schoolCode, name, term, year, curriculum || 'CBC'].map(v => String(v || '').trim().toLowerCase()).join(':');
+}
+
 async function createOrUpdateStructure({ user, id, payload }) {
   const schoolCode = user.schoolCode || payload.schoolCode;
   if (!schoolCode) throw new Error('schoolCode is required');
   const items = normalizeItems(payload.items);
   const totalAmount = totalFromItems(items);
+  const existingStructure = id ? await FeeStructure.findOne({ where: { id, schoolCode } }) : null;
+  if (id && !existingStructure) throw new Error('Fee structure not found');
+  if (existingStructure?.status === 'locked') throw new Error('Locked fee structures cannot be edited. Create an adjustment instead.');
+
+  const resolved = await resolveClasses({ schoolCode, payload, existingStructure });
+  if (!resolved.className) throw new Error('Select at least one class or provide a class name');
+  if (!payload.term) throw new Error('term is required');
+
+  const year = Number(payload.year || existingStructure?.year || new Date().getFullYear());
+  const curriculum = payload.curriculum || existingStructure?.curriculum || 'CBC';
+  const name = payload.name || existingStructure?.name || `${resolved.className} ${payload.term} ${year}`;
+  const groupKey = buildGroupKey({ schoolCode, name, term: payload.term, year, curriculum });
   const data = {
     schoolCode,
-    classId: payload.classId || null,
-    className: payload.className || payload.gradeLevel,
-    gradeLevel: payload.gradeLevel || payload.className,
-    curriculum: payload.curriculum || 'CBC',
+    classId: resolved.classId,
+    classIds: resolved.classIds,
+    assignedClasses: resolved.assignedClasses,
+    className: resolved.className,
+    gradeLevel: payload.gradeLevel || resolved.className,
+    curriculum,
     term: payload.term,
-    year: Number(payload.year || new Date().getFullYear()),
-    name: payload.name || `${payload.className || payload.gradeLevel} ${payload.term} ${payload.year}`,
+    year,
+    name,
+    groupKey,
     description: payload.description || null,
     currency: payload.currency || 'KES',
     items,
@@ -62,22 +113,32 @@ async function createOrUpdateStructure({ user, id, payload }) {
     effectiveFrom: payload.effectiveFrom || null,
     updatedBy: user.id || null
   };
-  if (!data.className) throw new Error('className or gradeLevel is required');
-  if (!data.term) throw new Error('term is required');
 
   if (id) {
-    const structure = await FeeStructure.findOne({ where: { id, schoolCode } });
-    if (!structure) throw new Error('Fee structure not found');
-    if (structure.status === 'locked') throw new Error('Locked fee structures cannot be edited. Create an adjustment instead.');
-    const before = structure.toJSON();
-    const trail = Array.isArray(structure.auditTrail) ? structure.auditTrail : [];
-    trail.push(audit('updated', user, { totalAmount }));
-    await structure.update({ ...data, auditTrail: trail });
-    await writeAudit({ schoolCode, user, action: 'fee_structure_updated', entityType: 'FeeStructure', entityId: structure.id, before, after: structure.toJSON() });
-    return structure;
+    const before = existingStructure.toJSON();
+    const trail = Array.isArray(existingStructure.auditTrail) ? existingStructure.auditTrail : [];
+    trail.push(audit('updated', user, { totalAmount, classIds: resolved.classIds }));
+    await existingStructure.update({ ...data, auditTrail: trail });
+    await writeAudit({ schoolCode, user, action: 'fee_structure_updated', entityType: 'FeeStructure', entityId: existingStructure.id, before, after: existingStructure.toJSON() });
+    return existingStructure;
   }
 
-  const structure = await FeeStructure.create({ ...data, createdBy: user.id || null, auditTrail: [audit('created', user, { totalAmount })] });
+  // Prevent duplicate grouped structures. If the same school/name/term/year/curriculum exists,
+  // update it rather than creating another card.
+  const duplicate = await FeeStructure.findOne({ where: { schoolCode, groupKey } });
+  if (duplicate) {
+    const before = duplicate.toJSON();
+    const mergedClassIds = uniqueNumbers([...(duplicate.classIds || []), ...resolved.classIds]);
+    const classMap = new Map([...(duplicate.assignedClasses || []), ...resolved.assignedClasses].map(c => [String(c.id || c.name), c]));
+    const assignedClasses = [...classMap.values()];
+    const trail = Array.isArray(duplicate.auditTrail) ? duplicate.auditTrail : [];
+    trail.push(audit('merged_duplicate_structure_request', user, { classIds: mergedClassIds }));
+    await duplicate.update({ ...data, classIds: mergedClassIds, assignedClasses, className: assignedClasses.map(c => c.name || c.grade).join(', ') || data.className, auditTrail: trail });
+    await writeAudit({ schoolCode, user, action: 'fee_structure_merged_duplicate', entityType: 'FeeStructure', entityId: duplicate.id, before, after: duplicate.toJSON() });
+    return duplicate;
+  }
+
+  const structure = await FeeStructure.create({ ...data, createdBy: user.id || null, auditTrail: [audit('created', user, { totalAmount, classIds: resolved.classIds })] });
   await writeAudit({ schoolCode, user, action: 'fee_structure_created', entityType: 'FeeStructure', entityId: structure.id, after: structure.toJSON() });
   return structure;
 }
@@ -90,27 +151,9 @@ async function activateStructure({ user, id }) {
   const trail = Array.isArray(structure.auditTrail) ? structure.auditTrail : [];
   trail.push(audit('activated', user));
   await structure.update({ status: 'active', auditTrail: trail, updatedBy: user.id });
-
-  // Rollout behavior: activation must immediately create/update fee accounts for
-  // students in the target class. This prevents "No fee accounts found" after an
-  // admin has already activated a class fee structure.
-  let assignment = { results: [] };
-  try {
-    assignment = await assignStructureToStudents({
-      user,
-      structureId: structure.id,
-      classId: structure.classId || null,
-      studentIds: [],
-      overwrite: false
-    });
-  } catch (e) {
-    trail.push(audit('activation_assignment_failed', user, { error: e.message }));
-    await structure.update({ auditTrail: trail, updatedBy: user.id });
-    throw e;
-  }
-
+  const assignment = await assignStructureToStudents({ user, structureId: structure.id, studentIds: [], classId: null, overwrite: false });
   await writeAudit({ schoolCode, user, action: 'fee_structure_activated', entityType: 'FeeStructure', entityId: id, before, after: structure.toJSON(), metadata: { assignedAccounts: assignment.results?.length || 0 } });
-  return { structure, assignment };
+  return { structure: await structure.reload(), assignment };
 }
 
 async function lockStructure({ user, id }) {
@@ -125,6 +168,22 @@ async function lockStructure({ user, id }) {
   return structure;
 }
 
+async function studentsForStructure({ schoolCode, structure, studentIds = [], classId = null, transaction }) {
+  const where = {};
+  const selectedIds = uniqueNumbers(studentIds);
+  if (selectedIds.length) where.id = selectedIds;
+  else {
+    const classIds = uniqueNumbers([classId, ...(structure.classIds || []), structure.classId]);
+    if (classIds.length) where.classId = classIds;
+    else if (structure.className) where.grade = structure.className;
+  }
+  return Student.findAll({
+    where,
+    include: [{ model: User, where: { schoolCode, role: 'student' }, attributes: ['id', 'name', 'schoolCode'] }],
+    transaction
+  });
+}
+
 async function assignStructureToStudents({ user, structureId, studentIds = [], classId = null, overwrite = false }) {
   const schoolCode = user.schoolCode;
   const structure = await FeeStructure.findOne({ where: { id: structureId, schoolCode } });
@@ -136,44 +195,45 @@ async function assignStructureToStudents({ user, structureId, studentIds = [], c
       trail.push(audit('auto_activated_before_assignment', user));
       await structure.update({ status: 'active', auditTrail: trail, updatedBy: user.id || null }, { transaction });
     }
-    const studentWhere = {};
-    if (studentIds.length) studentWhere.id = studentIds;
-    else if (classId) studentWhere.classId = classId;
-    else if (structure.classId) studentWhere.classId = structure.classId;
-    else if (structure.className) studentWhere.grade = structure.className;
 
-    const students = await Student.findAll({
-      where: studentWhere,
-      include: [{ model: User, where: { schoolCode, role: 'student' }, attributes: ['id', 'name', 'schoolCode'] }],
-      transaction
-    });
+    const students = await studentsForStructure({ schoolCode, structure, studentIds, classId, transaction });
     const results = [];
     for (const student of students) {
-      const existing = await Fee.findOne({ where: { studentId: student.id, schoolCode, term: structure.term, year: structure.year }, transaction });
+      const existing = await Fee.findOne({
+        where: { studentId: student.id, schoolCode, feeStructureId: String(structure.id), term: structure.term, year: structure.year },
+        transaction
+      });
       if (existing && !overwrite) {
         results.push({ studentId: student.id, status: 'skipped_existing', feeId: existing.id });
         continue;
       }
+      const previousParentPaid = Number(existing?.parentPaidAmount ?? existing?.paidAmount ?? 0);
+      const previousCredit = Number(existing?.creditAmount || 0);
       const payload = {
         studentId: student.id,
         schoolCode,
         term: structure.term,
         year: structure.year,
         totalAmount: structure.totalAmount,
-        paidAmount: existing ? existing.paidAmount : 0,
-        status: existing && Number(existing.paidAmount || 0) > 0 ? 'partial' : 'unpaid',
+        parentPaidAmount: previousParentPaid,
+        creditAmount: previousCredit,
+        paidAmount: Math.min(Number(structure.totalAmount || 0), previousParentPaid + previousCredit),
+        status: (previousParentPaid + previousCredit) >= Number(structure.totalAmount || 0) ? 'paid' : ((previousParentPaid + previousCredit) > 0 ? 'partial' : 'unpaid'),
         dueDate: structure.dueDate,
         feeStructureId: String(structure.id),
-        classId: structure.classId || student.classId || null,
+        classId: student.classId || structure.classId || null,
         currency: structure.currency,
         locked: structure.status === 'locked',
         auditTrail: [audit(existing ? 'fee_reassigned_from_structure' : 'fee_assigned_from_structure', user, { structureId: structure.id, totalAmount: structure.totalAmount })]
       };
       const fee = existing ? await existing.update(payload, { transaction }) : await Fee.create(payload, { transaction });
+      await ledger.recalculateFeeAccount(fee.id, { transaction });
       results.push({ studentId: student.id, status: existing ? 'updated' : 'created', feeId: fee.id });
     }
+    const assignedCount = await Fee.count({ where: { schoolCode, feeStructureId: String(structure.id) }, transaction });
+    await structure.update({ studentsAssigned: assignedCount }, { transaction });
     await writeAudit({ schoolCode, user, action: 'fee_structure_assigned', entityType: 'FeeStructure', entityId: structure.id, after: { count: results.length, results }, metadata: { overwrite } });
-    return { structure, results };
+    return { structure: await structure.reload({ transaction }), results };
   });
 }
 
@@ -186,7 +246,7 @@ async function adjustStudentFee({ user, feeId, amount: deltaAmount, reason, type
   const delta = Math.round(Number(deltaAmount));
   if (!Number.isFinite(delta)) throw new Error('Adjustment amount must be a valid number');
   const newTotal = Math.max(0, Number(fee.totalAmount || 0) + delta);
-  const paid = Number(fee.paidAmount || 0);
+  const paid = Number(fee.parentPaidAmount ?? fee.paidAmount ?? 0) + Number(fee.creditAmount || 0);
   const status = paid >= newTotal ? 'paid' : paid > 0 ? 'partial' : 'unpaid';
   const adjustments = Array.isArray(fee.adjustments) ? fee.adjustments : [];
   adjustments.push({ type, amount: delta, reason, actorUserId: user.id, actorRole: user.role, at: new Date().toISOString(), beforeTotal: fee.totalAmount, afterTotal: newTotal });
