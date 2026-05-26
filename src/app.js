@@ -138,7 +138,20 @@ app.get('/api/health/detailed', async (req, res) => {
       env: process.env.DARAJA_ENV || 'sandbox'
     };
   } catch (e) { checks.daraja = { ok: false, error: e.message }; }
-  checks.aiTutor = { ok: Boolean(process.env.ANTHROPIC_API_KEY), configured: Boolean(process.env.ANTHROPIC_API_KEY), model: process.env.ANTHROPIC_MODEL || null };
+  try {
+    const provider = String(process.env.AI_PROVIDER || 'deepseek').toLowerCase().trim();
+    const deepseekConfigured = Boolean(process.env.DEEPSEEK_API_KEY);
+    const anthropicConfigured = Boolean(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY);
+    checks.aiTutor = {
+      ok: provider === 'deepseek' ? deepseekConfigured : anthropicConfigured,
+      configured: provider === 'deepseek' ? deepseekConfigured : anthropicConfigured,
+      provider,
+      model: provider === 'deepseek'
+        ? (process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash')
+        : (process.env.ANTHROPIC_MODEL || process.env.CLAUDE_MODEL || 'claude-haiku-4-5'),
+      baseUrl: provider === 'deepseek' ? (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com') : undefined
+    };
+  } catch (e) { checks.aiTutor = { ok: false, error: e.message }; }
   try {
     const tmp = path.join(uploadDir, `.health-${Date.now()}.tmp`);
     fs.writeFileSync(tmp, 'ok'); fs.unlinkSync(tmp);

@@ -1,4 +1,5 @@
-const { Alert, User } = require('../models');
+const { Alert, User, School, sequelize } = require('../models');
+const { generateParentAlertSuggestion } = require('../services/aiProviderService');
 
 exports.getMyAlerts = async (req, res) => {
   try {
@@ -32,6 +33,94 @@ exports.markAllAsRead = async (req, res) => {
   } catch (error) {
     console.error('Mark all read error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+
+async function getSchoolAiSuggestionLimit(schoolCode) {
+  const row = await sequelize.query(
+    `SELECT sp."limits"
+       FROM "Subscriptions" s
+       LEFT JOIN "SubscriptionPlans" sp ON sp."id" = s."planId"
+      WHERE s."ownerType" = 'school'
+        AND s."schoolCode" = :schoolCode
+        AND s."status" = 'active'
+        AND (s."endDate" IS NULL OR s."endDate" > NOW())
+      ORDER BY s."endDate" DESC NULLS LAST
+      LIMIT 1`,
+    { replacements: { schoolCode }, type: sequelize.QueryTypes.SELECT }
+  ).catch(() => []);
+  const limits = row?.[0]?.limits || {};
+  const explicit = Number(limits.aiAlertSuggestionsPerMonth || limits.aiInsightsPerMonth || limits.aiSuggestionsPerMonth);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return Number(process.env.DEFAULT_SCHOOL_AI_ALERT_SUGGESTIONS_PER_MONTH || 100);
+}
+
+async function getCurrentAiSuggestionUsage(schoolCode, month) {
+  const rows = await sequelize.query(
+    `SELECT "usedCount" FROM "AIInsightUsages" WHERE "schoolCode" = :schoolCode AND "usageMonth" = :month LIMIT 1`,
+    { replacements: { schoolCode, month }, type: sequelize.QueryTypes.SELECT }
+  ).catch(() => []);
+  return Number(rows?.[0]?.usedCount || 0);
+}
+
+async function incrementAiSuggestionUsage({ schoolCode, month, provider, model }) {
+  await sequelize.query(
+    `INSERT INTO "AIInsightUsages" ("schoolCode", "usageMonth", "usedCount", "provider", "model", "createdAt", "updatedAt")
+     VALUES (:schoolCode, :month, 1, :provider, :model, NOW(), NOW())
+     ON CONFLICT ("schoolCode", "usageMonth")
+     DO UPDATE SET "usedCount" = "AIInsightUsages"."usedCount" + 1,
+                   "provider" = EXCLUDED."provider",
+                   "model" = EXCLUDED."model",
+                   "updatedAt" = NOW()`,
+    { replacements: { schoolCode, month, provider, model } }
+  );
+}
+
+exports.suggestParentAlert = async (req, res) => {
+  try {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const schoolCode = req.user.schoolCode;
+    const month = new Date().toISOString().slice(0, 7);
+    const limit = await getSchoolAiSuggestionLimit(schoolCode);
+    const used = await getCurrentAiSuggestionUsage(schoolCode, month);
+    if (used >= limit) {
+      return res.status(403).json({
+        success: false,
+        message: 'Monthly Shule AI alert suggestion limit reached for this school subscription.',
+        data: { used, limit, sourceType: 'ai_generated' }
+      });
+    }
+
+    const { audience, topic, tone, description, extraContext } = req.body || {};
+    if (!String(description || '').trim()) {
+      return res.status(400).json({ success: false, message: 'Brief description is required for Shule AI to suggest a parent alert.' });
+    }
+    const school = schoolCode ? await School.findOne({ where: { schoolId: schoolCode }, skipTenantScope: true }).catch(() => null) : null;
+    const suggestion = await generateParentAlertSuggestion({
+      audience,
+      topic,
+      tone,
+      description,
+      schoolName: school?.name || schoolCode || 'the school',
+      extraContext
+    });
+    await incrementAiSuggestionUsage({ schoolCode, month, provider: suggestion.provider, model: suggestion.model });
+    res.json({
+      success: true,
+      data: {
+        ...suggestion,
+        sourceType: 'ai_generated',
+        aiLabel: 'AI-generated message suggestion',
+        usage: { used: used + 1, limit, month }
+      }
+    });
+  } catch (error) {
+    console.error('Suggest parent alert error:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to generate alert suggestion' });
   }
 };
 

@@ -1,26 +1,76 @@
-const { TutorSession, TutorMessage, TutorProgress, TutorUsage, Student, AcademicRecord, Attendance } = require('../models');
+const { Op } = require('sequelize');
+const { TutorSession, TutorMessage, TutorProgress, TutorUsage, Student, AcademicRecord, Attendance, Subscription, SubscriptionPlan } = require('../models');
 const { detectCommand } = require('../services/tutor/commandDetector');
 const { LEVELS, normalizeGrade, getLevelByGrade, detectSubject } = require('../services/tutor/curriculumSubjects');
 const { detectTopic, buildTutorAnswer } = require('../services/tutor/tutorKnowledge');
-const { callClaudeTutor } = require('../services/claudeTutorService');
+const { callStudentTutorAI, getAIProviderConfig } = require('../services/aiProviderService');
 
-async function resolveStudent(req, requestedStudentId) {
-  if (requestedStudentId) {
-    const s = await Student.findByPk(requestedStudentId);
-    if (s) return s;
-  }
-  if (req.user.role === 'student') {
-    const s = await Student.findOne({ where: { userId: req.user.id } });
-    if (s) return s;
-  }
-  return null;
-}
+const CHILD_AI_PLAN_LIMITS = {
+  child_essential: { daily: 20, monthly: 600, label: 'Essential' },
+  essential: { daily: 20, monthly: 600, label: 'Essential' },
+  basic: { daily: 20, monthly: 600, label: 'Essential' },
+  child_smart: { daily: 75, monthly: 2250, label: 'Smart' },
+  smart: { daily: 75, monthly: 2250, label: 'Smart' },
+  premium: { daily: 75, monthly: 2250, label: 'Smart' },
+  child_genius: { daily: 200, monthly: 6000, label: 'Genius' },
+  genius: { daily: 200, monthly: 6000, label: 'Genius' },
+  ultimate: { daily: 200, monthly: 6000, label: 'Genius' }
+};
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
+function monthKey(date = new Date()) { return date.toISOString().slice(0, 7); }
+
+function normalizePlanCode(value) {
+  const raw = String(value || '').toLowerCase().trim();
+  if (!raw) return '';
+  if (raw.includes('genius') || raw === 'ultimate') return 'child_genius';
+  if (raw.includes('smart') || raw === 'premium') return 'child_smart';
+  if (raw.includes('essential') || raw === 'basic') return 'child_essential';
+  return raw.startsWith('child_') ? raw : `child_${raw}`;
+}
+
+function planLimitsFrom(subscription, plan) {
+  const planCode = normalizePlanCode(subscription?.planCode || plan?.code || plan?.name || subscription?.planName);
+  const defaults = CHILD_AI_PLAN_LIMITS[planCode] || CHILD_AI_PLAN_LIMITS.child_essential;
+  const limits = { ...(plan?.limits || {}), ...(subscription?.limits || {}) };
+  const daily = Number(limits.aiQuestionsPerDay || limits.dailyAiTutorQuestions || limits.dailyQuestions || defaults.daily);
+  const monthly = Number(limits.aiQuestionsPerMonth || limits.monthlyAiTutorQuestions || limits.monthlyQuestions || defaults.monthly || (daily * 30));
+  return {
+    planCode,
+    planName: subscription?.planName || plan?.displayName || plan?.name || defaults.label,
+    dailyLimit: Number.isFinite(daily) && daily > 0 ? daily : defaults.daily,
+    monthlyLimit: Number.isFinite(monthly) && monthly > 0 ? monthly : defaults.monthly
+  };
+}
 
 function safeTutorText(value, fallback = 'Tutor message') {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text || fallback;
+}
+
+async function resolveStudent(req) {
+  if (req.user.role !== 'student') return null;
+  return Student.findOne({ where: { userId: req.user.id, schoolCode: req.user.schoolCode } });
+}
+
+async function getActiveChildSubscription(studentId, schoolCode) {
+  const subscription = await Subscription.findOne({
+    where: {
+      ownerType: 'child',
+      studentId,
+      schoolCode,
+      status: 'active',
+      endDate: { [Op.gt]: new Date() }
+    },
+    include: [{ model: SubscriptionPlan, required: false }],
+    order: [['endDate', 'DESC']]
+  });
+  return subscription;
+}
+
+async function getMonthlyUsage(schoolId, studentId, usageMonth) {
+  const rows = await TutorUsage.findAll({ where: { schoolId, studentId, usageMonth } });
+  return rows.reduce((sum, row) => sum + Number(row.totalQuestions || 0), 0);
 }
 
 async function createTutorMessage({ schoolId, schoolCode, sessionId, studentId, userId, role, text, subject, topic, command, source, metadata }) {
@@ -42,49 +92,121 @@ async function createTutorMessage({ schoolId, schoolCode, sessionId, studentId, 
   });
 }
 
-
 function buildTutorSessionTitle(question, subject, topic, command) {
   const clean = String(question || '').replace(/\s+/g, ' ').trim();
   const safeSubject = String(subject || '').replace(/\s+/g, ' ').trim();
   const safeTopic = String(topic || '').replace(/\s+/g, ' ').trim();
   const safeCommand = String(command || '').replace(/\s+/g, ' ').trim();
-
   if (safeTopic && safeSubject) return `${safeSubject}: ${safeTopic}`.slice(0, 90);
   if (safeSubject) return `${safeSubject} Tutor Session`.slice(0, 90);
   if (safeCommand && safeCommand !== 'ask') return `${safeCommand.charAt(0).toUpperCase() + safeCommand.slice(1)} Tutor Session`.slice(0, 90);
-  if (clean) {
-    const short = clean.length > 64 ? `${clean.slice(0, 61)}...` : clean;
-    return short || 'AI Tutor Session';
-  }
+  if (clean) return (clean.length > 64 ? `${clean.slice(0, 61)}...` : clean) || 'AI Tutor Session';
   return 'AI Tutor Session';
 }
 
 exports.getTutorConfig = async (req, res) => {
-  res.json({ success: true, data: { levels: LEVELS, commands: ['ask', 'explain', 'solve', 'quiz', 'summarize', 'revise', 'homework', 'weakness', 'plan'] } });
+  const providerConfig = getAIProviderConfig();
+  res.json({
+    success: true,
+    data: {
+      levels: LEVELS,
+      commands: ['ask', 'explain', 'solve', 'quiz', 'summarize', 'revise', 'homework', 'weakness', 'plan'],
+      access: 'student_subscription_required',
+      freeTier: false,
+      provider: providerConfig.provider,
+      model: providerConfig.provider === 'anthropic' ? providerConfig.anthropic.model : providerConfig.deepseek.model,
+      plans: [
+        { code: 'child_essential', name: 'Essential', dailyLimit: 20, monthlyLimit: 600, priceKes: 100 },
+        { code: 'child_smart', name: 'Smart', dailyLimit: 75, monthlyLimit: 2250, priceKes: 250 },
+        { code: 'child_genius', name: 'Genius', dailyLimit: 200, monthlyLimit: 6000, priceKes: 500 }
+      ]
+    }
+  });
 };
 
 exports.askTutor = async (req, res) => {
   try {
-    const { question = '', studentId, grade, gradeLevel, level: requestedLevel, subject, mode, curriculum } = req.body;
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ success: false, message: 'AI Tutor is currently available to students only.', data: { locked: true, reason: 'student_only' } });
+    }
+
+    const { question = '', grade, gradeLevel, level: requestedLevel, subject, mode, curriculum } = req.body;
     if (!String(question).trim()) return res.status(400).json({ success: false, message: 'Question is required' });
 
-    const schoolId = req.user.schoolCode || req.body.schoolId || 'default';
-    const student = await resolveStudent(req, studentId);
-    const realStudentId = student?.id || studentId || req.user.id;
-    const rawGrade = grade || gradeLevel || student?.grade || student?.className || student?.Class?.name || 'Grade 5';
+    const schoolId = req.user.schoolCode || 'default';
+    const student = await resolveStudent(req);
+    if (!student) return res.status(403).json({ success: false, message: 'Student profile not found for this account.' });
+    const realStudentId = student.id;
+
+    const subscription = await getActiveChildSubscription(realStudentId, schoolId);
+    if (!subscription) {
+      return res.status(403).json({
+        success: false,
+        message: 'AI Tutor is locked. Ask your parent to activate an Essential, Smart, or Genius plan for this child.',
+        data: { locked: true, subscriptionRequired: true, freeTier: false, plans: ['Essential', 'Smart', 'Genius'] }
+      });
+    }
+
+    const plan = subscription.SubscriptionPlan || await SubscriptionPlan.findByPk(subscription.planId).catch(() => null);
+    const planLimit = planLimitsFrom(subscription, plan);
+    const usageDate = todayISO();
+    const usageMonth = monthKey();
+    let usage = await TutorUsage.findOne({ where: { schoolId, studentId: realStudentId, usageDate } });
+    if (!usage) {
+      usage = await TutorUsage.create({
+        schoolId,
+        schoolCode: schoolId,
+        studentId: realStudentId,
+        subscriptionId: subscription.id,
+        planCode: planLimit.planCode,
+        usageDate,
+        usageMonth,
+        totalQuestions: 0,
+        aiCalls: 0,
+        dailyLimit: planLimit.dailyLimit,
+        monthlyLimit: planLimit.monthlyLimit
+      });
+    }
+
+    const monthlyUsed = await getMonthlyUsage(schoolId, realStudentId, usageMonth);
+    if (Number(usage.totalQuestions || 0) >= planLimit.dailyLimit) {
+      return res.status(403).json({ success: false, message: `Daily AI tutor limit reached for ${planLimit.planName}. Try again tomorrow or upgrade the child's plan.`, data: { locked: true, dailyLimit: planLimit.dailyLimit, usedToday: usage.totalQuestions, plan: planLimit.planName } });
+    }
+    if (monthlyUsed >= planLimit.monthlyLimit) {
+      return res.status(403).json({ success: false, message: `Monthly AI tutor limit reached for ${planLimit.planName}. Renew or upgrade the child's plan to continue.`, data: { locked: true, monthlyLimit: planLimit.monthlyLimit, usedThisMonth: monthlyUsed, plan: planLimit.planName } });
+    }
+
+    const rawGrade = grade || gradeLevel || student.grade || student.className || student.Class?.name || 'Grade 5';
     const realGrade = normalizeGrade(rawGrade || 'Grade 5');
     const level = getLevelByGrade(realGrade) || getLevelByGrade('Grade 5');
     const realSubject = subject || detectSubject(question, realGrade);
     const command = req.body.command || detectCommand(question);
     const topic = detectTopic(question, realSubject);
 
-    let usage = await TutorUsage.findOne({ where: { schoolId, studentId: realStudentId, usageDate: todayISO() } });
-    if (!usage) usage = await TutorUsage.create({ schoolId, schoolCode: schoolId, studentId: realStudentId, usageDate: todayISO(), totalQuestions: 0, aiCalls: 0 });
-    const dailyLimit = req.user.role === 'admin' || req.user.role === 'teacher' ? 500 : 50;
-    if (usage.totalQuestions >= dailyLimit) {
-      return res.status(403).json({ success: false, message: 'Daily tutor limit reached', data: { locked: true, dailyLimit } });
+    const localAnswer = buildTutorAnswer({ question, command, subject: realSubject, topic, grade: realGrade, level });
+    const recentMarks = await AcademicRecord.findAll({ where: { studentId: realStudentId, schoolCode: schoolId }, order: [['createdAt','DESC']], limit: 5 }).catch(() => []);
+    const recentAttendance = await Attendance.findAll({ where: { studentId: realStudentId, schoolCode: schoolId }, order: [['date','DESC']], limit: 5 }).catch(() => []);
+
+    let aiResult;
+    try {
+      aiResult = await callStudentTutorAI({
+        question,
+        command,
+        subject: realSubject,
+        topic,
+        grade: realGrade,
+        curriculum: curriculum || student.curriculum || 'cbc',
+        studentContext: {
+          recentMarks: recentMarks.map(r => ({ subject: r.subject, score: r.score, term: r.term, year: r.year })),
+          recentAttendance: recentAttendance.map(a => ({ date: a.date, status: a.status }))
+        }
+      });
+    } catch (aiError) {
+      console.error('Student AI tutor provider failed:', aiError.message);
+      return res.status(aiError.status || 503).json({ success: false, message: 'Shule AI Tutor could not answer right now. Please try again shortly. Your usage has not been deducted.', data: { usageDeducted: false } });
     }
 
+    const answer = { ...localAnswer, answer: localAnswer.answer || 'Shule AI response', explanation: aiResult.text || localAnswer.explanation, source: aiResult.provider, model: aiResult.model };
     const sessionTitle = buildTutorSessionTitle(question, realSubject, topic, command);
     const session = await TutorSession.create({
       schoolId,
@@ -98,76 +220,96 @@ exports.askTutor = async (req, res) => {
       subject: realSubject,
       mode: mode || command || 'ask',
       lastCommand: command || 'ask',
-      metadata: { source: 'student-dashboard', rawGrade, title: sessionTitle }
+      metadata: { source: 'student-dashboard', rawGrade, title: sessionTitle, provider: aiResult.provider, model: aiResult.model, subscriptionId: subscription.id, planCode: planLimit.planCode }
     });
     await createTutorMessage({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'student', text: question, subject: realSubject, topic, command, source: 'student' });
+    await createTutorMessage({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'tutor', text: answer.explanation, subject: realSubject, topic, command, source: aiResult.provider, metadata: answer });
 
-    const localAnswer = buildTutorAnswer({ question, command, subject: realSubject, topic, grade: realGrade, level });
-
-    const recentMarks = student ? await AcademicRecord.findAll({ where: { studentId: student.id, schoolCode: schoolId }, order: [['createdAt','DESC']], limit: 5 }).catch(()=>[]) : [];
-    const recentAttendance = student ? await Attendance.findAll({ where: { studentId: student.id, schoolCode: schoolId }, order: [['date','DESC']], limit: 5 }).catch(()=>[]) : [];
-    let aiText = null;
-    try {
-      aiText = await callClaudeTutor({ question, command, subject: realSubject, topic, grade: realGrade, curriculum: curriculum || student?.curriculum || 'cbc', studentContext: { recentMarks: recentMarks.map(r=>({subject:r.subject, score:r.score, term:r.term, year:r.year})), recentAttendance: recentAttendance.map(a=>({date:a.date, status:a.status})) } });
-    } catch (aiError) {
-      console.error('Claude tutor failed, using deterministic tutor engine:', aiError.message);
-    }
-    const answer = { ...localAnswer, explanation: aiText || localAnswer.explanation, source: aiText ? 'claude-haiku' : localAnswer.source };
-
-    await createTutorMessage({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'tutor', text: answer.explanation, subject: realSubject, topic, command, source: answer.source, metadata: answer });
     const [progress] = await TutorProgress.findOrCreate({ where: { schoolId, studentId: realStudentId, subject: realSubject, topic }, defaults: { schoolId, schoolCode: schoolId, studentId: realStudentId, grade: realGrade, level: level.id, subject: realSubject, topic, attempts: 0, correct: 0 } });
     await progress.update({ attempts: progress.attempts + 1, lastCommand: command, lastSource: answer.source, lastStudiedAt: new Date() });
-    await usage.update({ totalQuestions: usage.totalQuestions + 1 });
 
-    res.json({ success: true, data: { ...answer, command, subject: realSubject, grade: realGrade, level: level.name, supportedSubjects: level.subjects, sessionId: session.id, usage: { used: usage.totalQuestions + 1, limit: dailyLimit } } });
+    const promptTokens = Number(aiResult.usage?.prompt_tokens || aiResult.usage?.input_tokens || 0);
+    const completionTokens = Number(aiResult.usage?.completion_tokens || aiResult.usage?.output_tokens || 0);
+    await usage.update({
+      totalQuestions: Number(usage.totalQuestions || 0) + 1,
+      monthlyQuestionsUsed: monthlyUsed + 1,
+      aiCalls: Number(usage.aiCalls || 0) + 1,
+      subscriptionId: subscription.id,
+      planCode: planLimit.planCode,
+      dailyLimit: planLimit.dailyLimit,
+      monthlyLimit: planLimit.monthlyLimit,
+      provider: aiResult.provider,
+      model: aiResult.model,
+      inputTokens: Number(usage.inputTokens || 0) + promptTokens,
+      outputTokens: Number(usage.outputTokens || 0) + completionTokens
+    });
+
+    res.json({
+      success: true,
+      data: {
+        ...answer,
+        command,
+        subject: realSubject,
+        grade: realGrade,
+        level: level.name,
+        supportedSubjects: level.subjects,
+        sessionId: session.id,
+        aiLabel: 'Generated by Shule AI Tutor',
+        usage: {
+          used: Number(usage.totalQuestions || 0) + 1,
+          limit: planLimit.dailyLimit,
+          usedThisMonth: monthlyUsed + 1,
+          monthlyLimit: planLimit.monthlyLimit,
+          plan: planLimit.planName,
+          planCode: planLimit.planCode
+        }
+      }
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('Ask tutor error:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.getProgress = async (req, res) => {
   try {
+    if (req.user.role !== 'student') return res.status(403).json({ success: false, message: 'Tutor progress is currently student-only.' });
     const schoolId = req.user.schoolCode || 'default';
-    const student = await resolveStudent(req, req.params.studentId);
-    const realStudentId = student?.id || req.params.studentId || req.user.id;
-    const progress = await TutorProgress.findAll({ where: { schoolId, studentId: realStudentId }, order: [['updatedAt', 'DESC']] });
+    const student = await resolveStudent(req);
+    if (!student) return res.status(403).json({ success: false, message: 'Student profile not found' });
+    const progress = await TutorProgress.findAll({ where: { schoolId, studentId: student.id }, order: [['updatedAt', 'DESC']] });
     res.json({ success: true, data: progress });
-  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+  } catch (error) { res.status(error.status || 500).json({ success: false, message: error.message }); }
 };
 
 exports.getSessionHistory = async (req, res) => {
   try {
+    if (req.user.role !== 'student') return res.status(403).json({ success: false, message: 'Tutor history is currently student-only.' });
     const schoolId = req.user.schoolCode || 'default';
-    const student = await resolveStudent(req, req.params.studentId);
-    const realStudentId = student?.id || req.params.studentId || req.user.id;
-    const messages = await TutorMessage.findAll({ where: { schoolId, studentId: realStudentId }, order: [['createdAt', 'DESC']], limit: 40 });
+    const student = await resolveStudent(req);
+    if (!student) return res.status(403).json({ success: false, message: 'Student profile not found' });
+    const messages = await TutorMessage.findAll({ where: { schoolId, studentId: student.id }, order: [['createdAt', 'DESC']], limit: 40 });
     res.json({ success: true, data: messages.reverse() });
-  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+  } catch (error) { res.status(error.status || 500).json({ success: false, message: error.message }); }
 };
 
 exports.submitPracticeAnswer = async (req, res) => {
   try {
-    const { studentId, subject = 'General', topic = 'Practice', isCorrect = false } = req.body;
+    if (req.user.role !== 'student') return res.status(403).json({ success: false, message: 'Practice answers are currently student-only.' });
+    const { subject = 'General', topic = 'Practice', isCorrect = false } = req.body;
     const schoolId = req.user.schoolCode || 'default';
-    const realStudentId = studentId || req.user.id;
-    const [progress] = await TutorProgress.findOrCreate({ where: { schoolId, studentId: realStudentId, subject, topic }, defaults: { schoolId, schoolCode: schoolId, studentId: realStudentId, subject, topic } });
+    const student = await resolveStudent(req);
+    if (!student) return res.status(403).json({ success: false, message: 'Student profile not found' });
+    const [progress] = await TutorProgress.findOrCreate({ where: { schoolId, studentId: student.id, subject, topic }, defaults: { schoolId, schoolCode: schoolId, studentId: student.id, subject, topic } });
     await progress.update({ attempts: progress.attempts + 1, correct: progress.correct + (isCorrect ? 1 : 0), lastCommand: 'quiz', lastStudiedAt: new Date() });
     res.json({ success: true, data: { correct: !!isCorrect, progress } });
-  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+  } catch (error) { res.status(error.status || 500).json({ success: false, message: error.message }); }
 };
 
 exports.getParentReport = async (req, res) => {
-  try {
-    const schoolId = req.user.schoolCode || 'default';
-    const rows = await TutorProgress.findAll({ where: { schoolId }, order: [['updatedAt', 'DESC']], limit: 100 });
-    res.json({ success: true, data: { summary: 'Tutor progress report', rows } });
-  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+  res.status(403).json({ success: false, message: 'Parent AI reports are not enabled yet. Parents manage child subscriptions and usage only for now.' });
 };
 
 exports.getTeacherReport = async (req, res) => {
-  try {
-    const schoolId = req.user.schoolCode || 'default';
-    const rows = await TutorProgress.findAll({ where: { schoolId }, order: [['attempts', 'DESC']], limit: 100 });
-    res.json({ success: true, data: { weakTopics: rows.filter(r => r.attempts > r.correct), rows } });
-  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+  res.status(403).json({ success: false, message: 'Teacher AI reports are not enabled yet.' });
 };

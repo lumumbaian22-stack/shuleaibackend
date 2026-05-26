@@ -354,6 +354,28 @@ exports.getClasses = async (req, res) => {
 };
 
 
+
+
+exports.getClassStudents = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const classItem = await Class.findOne({ where: { id, schoolCode: req.user.schoolCode, isActive: true } });
+    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
+    const students = await Student.findAll({
+      where: { schoolCode: req.user.schoolCode, [Op.or]: [{ classId: id }, { grade: classItem.name }, { className: classItem.name }] },
+      include: [
+        { model: User, attributes: ['id', 'name', 'email'] },
+        { model: Parent, as: 'parents', include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }] }
+      ],
+      order: [[User, 'name', 'ASC']]
+    });
+    res.json({ success: true, data: students });
+  } catch (error) {
+    console.error('Get class students error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.getClassDetails = async (req, res) => {
   try {
     const { id } = req.params;
