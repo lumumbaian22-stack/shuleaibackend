@@ -54,6 +54,14 @@ exports.assign = async (req, res) => {
   } catch (error) { res.status(400).json({ success: false, message: error.message }); }
 };
 
+
+exports.delete = async (req, res) => {
+  try {
+    const data = await service.deleteOrArchiveStructure({ user: req.user, id: req.params.id });
+    res.json({ success: true, message: data.action === 'deleted' ? 'Fee structure deleted' : 'Fee structure archived because accounts or payments already exist', data });
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+};
+
 exports.adjustFee = async (req, res) => {
   try {
     const data = await service.adjustStudentFee({ user: req.user, feeId: req.params.feeId, amount: req.body.amount, reason: req.body.reason, type: req.body.type });

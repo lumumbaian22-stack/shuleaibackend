@@ -210,8 +210,7 @@ exports.updateAdminPaymentSettings = async (req, res) => {
       darajaEnvironment: incoming.environment || incoming.darajaEnvironment || process.env.DARAJA_ENV || 'sandbox',
       callbackUrl: incoming.callbackUrl || process.env.DARAJA_CALLBACK_URL || process.env.MPESA_CALLBACK_URL || '',
       isActive: incoming.active !== false,
-      metadata: { updatedBy:req.user.id, updatedAt:new Date().toISOString() },
-      auditTrail: [auditEntry('school_payment_settings_saved', req.user, { paymentMode, mpesaType })]
+      metadata: { updatedBy:req.user.id, updatedAt:new Date().toISOString(), auditTrail: [auditEntry('school_payment_settings_saved', req.user, { paymentMode, mpesaType })] }
     };
     const [paymentRow] = await SchoolPaymentSetting.findOrCreate({ where:{ schoolCode:school.schoolId }, defaults:rowPayload });
     await paymentRow.update(rowPayload);
