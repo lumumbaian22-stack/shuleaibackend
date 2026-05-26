@@ -571,13 +571,18 @@ exports.sendMessage = async (req, res) => {
     let recipientName = '';
 
     if (recipientType === 'teacher') {
-      const classTeacher = await Teacher.findOne({
-        where: { classTeacher: student.grade },
-        include: [{ model: User, attributes: ['id', 'name'] }]
-      });
+      let classTeacher = null;
+      const cls = student.classId ? await Class.findOne({ where: { id: student.classId, schoolCode: req.user.schoolCode } }).catch(() => null) : null;
+      if (cls?.teacherId) classTeacher = await Teacher.findByPk(cls.teacherId, { include: [{ model: User, attributes: ['id', 'name'] }] });
+      if (!classTeacher) {
+        classTeacher = await Teacher.findOne({
+          where: { classTeacher: student.grade },
+          include: [{ model: User, attributes: ['id', 'name'] }]
+        });
+      }
 
       if (!classTeacher) {
-        return res.status(404).json({ success: false, message: 'Class teacher not found' });
+        return res.status(404).json({ success: false, message: 'Class teacher has not been assigned yet. Please message the school admin.' });
       }
 
       recipientId = classTeacher.User.id;
@@ -622,7 +627,7 @@ exports.sendMessage = async (req, res) => {
     await createAlert({
       userId: recipientId,
       role: recipientType === 'teacher' ? 'teacher' : 'admin',
-      type: 'message',
+      type: 'system',
       severity: 'info',
       title: `📬 New message from parent of ${student.User.name}`,
       message: message.substring(0, 100) + (message.length > 100 ? '...' : ''),
@@ -636,7 +641,7 @@ exports.sendMessage = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Message sent successfully',
+      message: recipientType === 'admin' ? 'Message sent to school admin.' : 'Message sent to class teacher.',
       data: {
         message: newMessage,
         recipient: recipientName,

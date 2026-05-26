@@ -1,3 +1,21 @@
+// V87 timetable logic helpers: free lessons, P.E., double lessons, breaks/lunch, conflict validation
+function v87NormalizeLessonType(value) {
+  const raw = String(value || 'normal').toLowerCase().trim();
+  if (['free','free_lesson','free lesson'].includes(raw)) return 'free';
+  if (['pe','p.e','p.e.','physical education','sports'].includes(raw)) return 'pe';
+  if (['double','double_lesson','double lesson'].includes(raw)) return 'double';
+  if (['break','lunch','tea'].includes(raw)) return raw === 'lunch' ? 'lunch' : 'break';
+  return 'normal';
+}
+function v87ValidateTimetableSlot(slot, existingSlots = []) {
+  const type = v87NormalizeLessonType(slot.lessonType || slot.type || slot.subject);
+  if (type === 'break' || type === 'lunch' || type === 'free') return { ok:true, type };
+  const sameTime = existingSlots.filter(x => String(x.day || '').toLowerCase() === String(slot.day || '').toLowerCase() && String(x.startTime || x.start || '') === String(slot.startTime || slot.start || ''));
+  if (slot.teacherId && sameTime.some(x => Number(x.teacherId) === Number(slot.teacherId))) return { ok:false, message:'Teacher is already assigned in this time slot.' };
+  if (slot.classId && sameTime.some(x => Number(x.classId) === Number(slot.classId))) return { ok:false, message:'Class already has a lesson in this time slot.' };
+  return { ok:true, type };
+}
+
 const { Timetable, Class, Teacher, User, Student, Parent } = require('../models');
 const moment = require('moment');
 const { Op } = require('sequelize');

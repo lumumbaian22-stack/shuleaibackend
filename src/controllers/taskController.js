@@ -72,16 +72,11 @@ exports.createTask = async (req, res) => {
 // @access  Private
 exports.updateTask = async (req, res) => {
   try {
-    const { id } = req.params;
-    const task = await Task.findOne({ 
-      where: { 
-        id: id,
-        userId: req.user.id 
-      } 
-    });
+    const id = req.params.id || req.params.taskId;
+    const task = await Task.findOne({ where: { id, userId: req.user.id } });
     
     if (!task) {
-      return res.status(404).json({ success: false, message: 'Task not found' });
+      return res.status(404).json({ success: false, message: 'Task not found or not assigned to you' });
     }
     
     await task.update(req.body);
@@ -97,16 +92,11 @@ exports.updateTask = async (req, res) => {
 // @access  Private
 exports.deleteTask = async (req, res) => {
   try {
-    const { id } = req.params;
-    const task = await Task.findOne({ 
-      where: { 
-        id: id,
-        userId: req.user.id 
-      } 
-    });
+    const id = req.params.id || req.params.taskId;
+    const task = await Task.findOne({ where: { id, userId: req.user.id } });
     
     if (!task) {
-      return res.status(404).json({ success: false, message: 'Task not found' });
+      return res.status(404).json({ success: false, message: 'Task not found or not assigned to you' });
     }
     
     await task.destroy();
@@ -122,16 +112,11 @@ exports.deleteTask = async (req, res) => {
 // @access  Private
 exports.completeTask = async (req, res) => {
   try {
-    const { id } = req.params;
-    const task = await Task.findOne({ 
-      where: { 
-        id: id,
-        userId: req.user.id 
-      } 
-    });
+    const id = req.params.id || req.params.taskId;
+    const task = await Task.findOne({ where: { id, userId: req.user.id } });
     
     if (!task) {
-      return res.status(404).json({ success: false, message: 'Task not found' });
+      return res.status(404).json({ success: false, message: 'Task not found or not assigned to you' });
     }
     
     task.status = 'completed';

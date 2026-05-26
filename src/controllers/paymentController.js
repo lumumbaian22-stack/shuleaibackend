@@ -823,3 +823,24 @@ exports.parentFeeManual = async (req, res) => {
     res.json({ success:true, message:'Payment submitted for school finance verification. Balance updates after approval.', data:{ paymentId:payment.id, reference:payment.reference, status:payment.status, amount:payment.amount } });
   } catch(error){ console.error('Manual school fee payment error:', error); res.status(400).json({ success:false, message:error.message }); }
 };
+
+
+exports.getParentSchoolPaymentSettings = async (req, res) => {
+  try {
+    const { settings, bankDetails } = await getSchoolPaymentConfig(req.user.schoolCode);
+    res.json({ success:true, data:{
+      paymentMode: settings.paymentMode || 'manual',
+      mpesaType: settings.mpesaType || 'paybill',
+      paybill: settings.paybillNumber || settings.paybill || settings.businessShortcode || '',
+      till: settings.tillNumber || settings.till || '',
+      shortcode: settings.darajaShortcode || settings.businessShortcode || settings.shortcode || '',
+      referenceFormat: settings.accountReferenceFormat || 'elimuid',
+      bankName: bankDetails?.bankName || settings.bankName || '',
+      accountName: bankDetails?.accountName || settings.accountName || '',
+      accountNumber: bankDetails?.accountNumber || settings.bankAccount || settings.accountNumber || '',
+      branch: bankDetails?.branch || settings.branch || '',
+      manualInstructions: settings.manualInstructions || 'Use the displayed account details, then submit your payment reference for verification.',
+      supports: { stk: !!settings.canUseDaraja, manualMpesa: true, bank: true, cash: true, card: true }
+    }});
+  } catch (error) { res.status(500).json({ success:false, message:error.message }); }
+};

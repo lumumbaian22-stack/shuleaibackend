@@ -1,4 +1,12 @@
 const { Op } = require('sequelize');
+
+function v87IsValidISODate(value) {
+  if (!value || typeof value !== 'string') return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(value + 'T00:00:00Z');
+  return Number.isFinite(d.getTime()) && d.toISOString().slice(0,10) === value;
+}
+
 const { User, Teacher, School, DutyRoster, Alert } = require('../models');
 const moment = require('moment');
 const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
@@ -582,6 +590,7 @@ exports.updateDutyPreferences = async (req, res) => {
 exports.requestDutySwap = async (req, res) => {
   try {
     const { dutyDate, reason, targetTeacherId } = req.body;
+    if (!v87IsValidISODate(dutyDate)) return res.status(400).json({ success:false, message:'Please select a valid duty date.' });
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 

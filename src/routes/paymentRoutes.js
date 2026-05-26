@@ -13,6 +13,7 @@ router.post('/admin/test-connection', protect, authorize('admin'), ctrl.testAdmi
 router.get('/admin/manual-queue', protect, authorize('admin'), ctrl.getManualVerificationQueue);
 router.get('/admin/records', protect, authorize('admin'), ctrl.getAdminPaymentRecords);
 // V75 student-specific finance ledger endpoints
+router.get('/parent/school-settings', protect, authorize('parent'), ctrl.getParentSchoolPaymentSettings);
 router.get('/parent/students/:studentId/fee-accounts', protect, authorize('parent'), ctrl.getParentStudentFeeAccounts);
 router.get('/parent/students/:studentId/history', protect, authorize('parent'), ctrl.getParentStudentPaymentHistory);
 router.get('/admin/finance-summary', protect, authorize('admin'), ctrl.getAdminFinanceSummary);

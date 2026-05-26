@@ -1,5 +1,5 @@
 // src/controllers/studentController.js
-const { Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School } = require('../models');
+const { sequelize, Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School, Alert } = require('../models');
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
@@ -539,13 +539,16 @@ exports.getGroupMessages = async (req, res) => {
 exports.getStudentFullDetails = async (req, res) => {
     try {
         const { studentId } = req.params;
-        const student = await Student.findByPk(studentId, {
+        // V87: callers sometimes pass a Student.id and sometimes a linked User.id.
+        // Students do not have schoolCode; tenant ownership is checked through linked User.schoolCode.
+        const student = await Student.findOne({
+            where: { [Op.or]: [{ id: Number(studentId) || 0 }, { userId: Number(studentId) || 0 }] },
             include: [
-                { model: User, attributes: ['id', 'name', 'email', 'phone', 'profileImage', 'isActive'] }
+                { model: User, attributes: ['id', 'name', 'email', 'phone', 'profileImage', 'isActive', 'schoolCode'], required: true }
             ]
         });
 
-        if (!student) {
+        if (!student || (req.user.role !== 'super_admin' && student.User?.schoolCode !== req.user.schoolCode)) {
             return res.status(404).json({ success: false, message: 'Student not found' });
         }
 
@@ -562,7 +565,7 @@ exports.getStudentFullDetails = async (req, res) => {
                     cls.teacherId === teacher.id ||
                     (cls.subjectTeachers && cls.subjectTeachers.some(st => st.teacherId === teacher.id))
                 );
-                if (teachesClass && classes.some(cls => cls.name === student.grade)) {
+                if (teachesClass && classes.some(cls => Number(cls.id) === Number(student.classId) || cls.name === student.grade || cls.grade === student.grade)) {
                     authorized = true;
                 }
             }
@@ -722,4 +725,90 @@ exports.getStudentFullDetails = async (req, res) => {
         console.error('Get student full details error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
+};
+
+
+// ============ V87 CAREER PATH GUIDANCE ============
+const V87_CAREERS = [
+  'Accountant','Actor','Agronomist','Architect','Artist','Astronaut','Athlete','Banker','Biomedical Engineer','Business Owner','Carpenter','Chef','Civil Engineer','Clinical Officer','Computer Scientist','Data Analyst','Data Scientist','Dentist','Designer','Doctor','Economist','Electrician','Entrepreneur','Fashion Designer','Film Producer','Financial Analyst','Graphic Designer','Journalist','Judge','Lawyer','Lecturer','Mechanic','Medicine Researcher','Musician','Nurse','Nutritionist','Pharmacist','Photographer','Physiotherapist','Pilot','Police Officer','Project Manager','Psychologist','Radiographer','Software Engineer','Teacher','Veterinarian','Web Developer','Writer'
+];
+const V87_CAREER_SUBJECTS = {
+  Doctor:['Science','Biology','Chemistry','Mathematics','English'], Nurse:['Science','Biology','English'], Pharmacist:['Chemistry','Biology','Mathematics'],
+  'Software Engineer':['Mathematics','Computer Studies','Physics','English'], 'Data Scientist':['Mathematics','Computer Studies','Statistics','English'], Pilot:['Mathematics','Physics','Geography','English'],
+  Lawyer:['English','History','CRE/IRE','Social Studies'], Teacher:['English','Mathematics','Education','Social Studies'], Chef:['Agriculture and Nutrition','Home Science','Business Studies'],
+  Architect:['Mathematics','Physics','Art & Design'], Engineer:['Mathematics','Physics','Chemistry'], 'Civil Engineer':['Mathematics','Physics','Geography'],
+  Accountant:['Mathematics','Business Studies','Economics'], 'Business Owner':['Business Studies','Mathematics','English'], Journalist:['English','History','Social Studies'],
+  Artist:['Creative Arts','Art & Design','English'], Designer:['Creative Arts','Art & Design','Computer Studies'], Mechanic:['Physics','Pre-Technical and Pre-Career Education','Mathematics'],
+  Electrician:['Physics','Mathematics','Pre-Technical and Pre-Career Education'], Agronomist:['Agriculture','Biology','Chemistry'], Veterinarian:['Biology','Chemistry','Agriculture']
+};
+function v87CareerSubjects(name){ return V87_CAREER_SUBJECTS[name] || ['Mathematics','English','Science']; }
+function v87CareerCategories(name){
+  const n=String(name||'').toLowerCase();
+  if(/doctor|nurse|pharmac|dentist|clinical|health|veter/.test(n)) return ['Health & Medicine'];
+  if(/software|computer|data|web|engineer/.test(n)) return ['Technology & Engineering'];
+  if(/law|judge|police/.test(n)) return ['Law & Public Service'];
+  if(/artist|designer|music|actor|film|photo|writer/.test(n)) return ['Creative Arts & Media'];
+  if(/account|business|bank|econom|finance|entrepreneur/.test(n)) return ['Business & Finance'];
+  if(/teacher|lecturer/.test(n)) return ['Education'];
+  return ['General Career'];
+}
+async function v87StudentForReq(req){ return Student.findOne({ where:{ userId:req.user.id }, include:[{model:User, attributes:['id','name','schoolCode'], required:true, where:{schoolCode:req.user.schoolCode}}] }); }
+exports.getCareerOptions = async (req,res) => {
+  try{
+    const q=String(req.query.q||'').toLowerCase().trim();
+    const rows=V87_CAREERS.filter(c=>!q || c.toLowerCase().includes(q)).sort().map((name,idx)=>({ id:name.toLowerCase().replace(/[^a-z0-9]+/g,'-'), name, categories:v87CareerCategories(name), recommendedSubjects:v87CareerSubjects(name) }));
+    res.json({success:true,data:rows});
+  }catch(error){res.status(500).json({success:false,message:error.message});}
+};
+exports.getCareerInterests = async (req,res) => {
+  try{
+    const student=await v87StudentForReq(req); if(!student) return res.status(404).json({success:false,message:'Student profile not found'});
+    const [rows]=await sequelize.query('SELECT * FROM "StudentCareerInterests" WHERE "studentId"=:studentId AND "schoolCode"=:schoolCode AND "isActive"=true ORDER BY "selectedAt" DESC', { replacements:{studentId:student.id, schoolCode:req.user.schoolCode} });
+    res.json({success:true,data:{studentId:student.id, careers:rows}});
+  }catch(error){res.status(500).json({success:false,message:error.message});}
+};
+exports.saveCareerInterests = async (req,res) => {
+  try{
+    const student=await v87StudentForReq(req); if(!student) return res.status(404).json({success:false,message:'Student profile not found'});
+    const careers=Array.isArray(req.body.careers)?req.body.careers:[];
+    await sequelize.query('UPDATE "StudentCareerInterests" SET "isActive"=false, "updatedAt"=NOW() WHERE "studentId"=:studentId AND "schoolCode"=:schoolCode', { replacements:{studentId:student.id, schoolCode:req.user.schoolCode} });
+    for(const c of careers.slice(0,8)){
+      const name=String(c.name||c.careerName||c).trim(); if(!name) continue;
+      const careerId=String(c.id||name.toLowerCase().replace(/[^a-z0-9]+/g,'-'));
+      await sequelize.query(`INSERT INTO "StudentCareerInterests" ("schoolCode","studentId","careerId","careerName","interestLevel","isActive","selectedAt","createdAt","updatedAt") VALUES (:schoolCode,:studentId,:careerId,:careerName,:interestLevel,true,NOW(),NOW(),NOW()) ON CONFLICT ("schoolCode","studentId","careerId") DO UPDATE SET "careerName"=EXCLUDED."careerName", "interestLevel"=EXCLUDED."interestLevel", "isActive"=true, "selectedAt"=NOW(), "updatedAt"=NOW()`, { replacements:{schoolCode:req.user.schoolCode, studentId:student.id, careerId, careerName:name, interestLevel:c.interestLevel||'interested'} });
+    }
+    const [rows]=await sequelize.query('SELECT * FROM "StudentCareerInterests" WHERE "studentId"=:studentId AND "schoolCode"=:schoolCode AND "isActive"=true ORDER BY "selectedAt" DESC', { replacements:{studentId:student.id, schoolCode:req.user.schoolCode} });
+    res.json({success:true,message:'Career interests saved. Shule AI will start aligning insights to these careers.',data:{careers:rows}});
+  }catch(error){res.status(500).json({success:false,message:error.message});}
+};
+exports.generateCareerInsights = async (req,res) => {
+  try{
+    const student=await v87StudentForReq(req); if(!student) return res.status(404).json({success:false,message:'Student profile not found'});
+    const [careers]=await sequelize.query('SELECT * FROM "StudentCareerInterests" WHERE "studentId"=:studentId AND "schoolCode"=:schoolCode AND "isActive"=true ORDER BY "selectedAt" DESC', { replacements:{studentId:student.id, schoolCode:req.user.schoolCode} });
+    if(!careers.length) return res.json({success:true,message:'No career interests selected yet.',data:[]});
+    const records=await AcademicRecord.findAll({ where:{studentId:student.id, schoolCode:req.user.schoolCode}, order:[['createdAt','DESC']], limit:30 }).catch(()=>[]);
+    const avgBySubject={}; records.forEach(r=>{ const key=r.subject||'General'; if(!avgBySubject[key]) avgBySubject[key]=[]; avgBySubject[key].push(Number(r.score||0)); });
+    const alerts=[];
+    for(const c of careers.slice(0,4)){
+      const subjects=v87CareerSubjects(c.careerName); const strengths=[]; const focus=[];
+      subjects.forEach(sub=>{ const rows=avgBySubject[sub]||[]; const avg=rows.length?Math.round(rows.reduce((a,b)=>a+b,0)/rows.length):null; if(avg===null) focus.push(sub); else if(avg>=70) strengths.push(sub); else focus.push(sub); });
+      const message=`You selected ${c.careerName}. Focus on ${focus.slice(0,3).join(', ') || 'consistent study'} while building on ${strengths.slice(0,2).join(', ') || 'your current strengths'}.`;
+      const dedupeKey=`career:${student.id}:${c.careerId}:${new Date().toISOString().slice(0,10)}`;
+      const [alert]=await Alert.findOrCreate({ where:{ userId:req.user.id, dedupeKey }, defaults:{ userId:req.user.id, role:'student', type:'career', severity:'info', title:'Shule AI Career Insight', message, categoryLabel:'Career', sourceType:'analytics_engine', sourceLabel:'Shule AI Insight', targetRole:'student', targetUserId:req.user.id, studentId:student.id, priority:'normal', dedupeKey, actionLabel:'View Career Path', actionUrl:'#career-path', data:{career:c.careerName, subjects} } });
+      alerts.push(alert);
+      // Also notify linked parents with a parent-friendly version, without mixing siblings.
+      const [parents]=await sequelize.query('SELECT p."userId" FROM "StudentParents" sp JOIN "Parents" p ON p."id"=sp."parentId" WHERE sp."studentId"=:studentId', { replacements:{ studentId:student.id } });
+      for (const pr of parents || []) {
+        if (!pr.userId) continue;
+        const parentKey=`parent:${dedupeKey}:${pr.userId}`;
+        await Alert.findOrCreate({ where:{ userId:pr.userId, dedupeKey:parentKey }, defaults:{ userId:pr.userId, role:'parent', type:'career', severity:'info', title:'Shule AI Career Insight', message:`${student.User?.name || 'Your child'} is interested in ${c.careerName}. Encourage focus on ${subjects.slice(0,3).join(', ')}.`, categoryLabel:'Career', sourceType:'analytics_engine', sourceLabel:'Shule AI Insight', targetRole:'parent', targetUserId:pr.userId, studentId:student.id, priority:'normal', dedupeKey:parentKey, actionLabel:'View Child Progress', actionUrl:'#progress', data:{career:c.careerName, subjects, studentId:student.id} } });
+      }
+      const admins = await User.findAll({ where:{ schoolCode:req.user.schoolCode, role:'admin', isActive:true }, attributes:['id'] }).catch(()=>[]);
+      for (const admin of admins || []) {
+        const adminKey=`admin:${dedupeKey}:${admin.id}`;
+        await Alert.findOrCreate({ where:{ userId:admin.id, dedupeKey:adminKey }, defaults:{ userId:admin.id, role:'admin', type:'career', severity:'info', title:'Shule AI Career Pattern', message:`${student.User?.name || 'A student'} selected ${c.careerName}. This can help guide subject support and school career mentorship.`, categoryLabel:'Career', sourceType:'analytics_engine', sourceLabel:'Shule AI Insight', targetRole:'admin', targetUserId:admin.id, studentId:student.id, priority:'normal', dedupeKey:adminKey, actionLabel:'View Analytics', actionUrl:'#analytics', data:{career:c.careerName, subjects, studentId:student.id} } });
+      }
+    }
+    res.json({success:true,message:'Career insights generated.',data:alerts});
+  }catch(error){res.status(500).json({success:false,message:error.message});}
 };
