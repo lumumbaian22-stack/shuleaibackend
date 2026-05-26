@@ -54,11 +54,32 @@ module.exports = {
     `);
 
     // Backfill grouped class metadata for legacy fee structures.
+    // IMPORTANT: "term" is an enum in existing deployments, so it must be
+    // cast to text before COALESCE/CONCAT. Using COALESCE("term", '') makes
+    // Postgres try to cast the empty string into enum_FeeStructures_term and
+    // crashes migrations with: invalid input value for enum ... "".
     await qi.sequelize.query(`
       UPDATE "FeeStructures"
-      SET "classIds" = CASE WHEN "classId" IS NOT NULL THEN jsonb_build_array("classId") ELSE COALESCE("classIds", '[]'::jsonb) END,
-          "assignedClasses" = CASE WHEN COALESCE("className", '') <> '' THEN jsonb_build_array(jsonb_build_object('id', "classId", 'name', "className")) ELSE COALESCE("assignedClasses", '[]'::jsonb) END,
-          "groupKey" = COALESCE("groupKey", LOWER(CONCAT(COALESCE("schoolCode", ''), ':', COALESCE("name", ''), ':', COALESCE("term", ''), ':', COALESCE("year"::text, ''), ':', COALESCE("curriculum", ''))))
+      SET "classIds" = CASE
+            WHEN COALESCE(jsonb_array_length(COALESCE("classIds", '[]'::jsonb)), 0) > 0 THEN COALESCE("classIds", '[]'::jsonb)
+            WHEN "classId" IS NOT NULL THEN jsonb_build_array("classId")
+            ELSE '[]'::jsonb
+          END,
+          "assignedClasses" = CASE
+            WHEN COALESCE(jsonb_array_length(COALESCE("assignedClasses", '[]'::jsonb)), 0) > 0 THEN COALESCE("assignedClasses", '[]'::jsonb)
+            WHEN COALESCE("className"::text, '') <> '' THEN jsonb_build_array(jsonb_build_object('id', "classId", 'name', "className"))
+            ELSE '[]'::jsonb
+          END,
+          "groupKey" = COALESCE(
+            "groupKey",
+            LOWER(CONCAT(
+              COALESCE("schoolCode"::text, ''), ':',
+              COALESCE("name"::text, ''), ':',
+              COALESCE("term"::text, ''), ':',
+              COALESCE("year"::text, ''), ':',
+              COALESCE("curriculum"::text, '')
+            ))
+          )
     `);
 
     await index('Payments', ['schoolCode', 'studentId', 'feeId', 'status'], 'payments_school_student_fee_status_v75_idx');
