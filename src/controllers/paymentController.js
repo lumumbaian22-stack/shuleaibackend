@@ -60,7 +60,8 @@ async function getSchoolPaymentConfig(schoolCodeValue){
     offlineInstructions: modelRow?.metadata?.offlineInstructions || existingSettings.offlineInstructions || 'Cash/card payments should be made at the school office and receipt/reference submitted for records.',
     cashEnabled: modelRow?.metadata?.cashEnabled !== false && existingSettings.cashEnabled !== false,
     cardEnabled: modelRow?.metadata?.cardEnabled === true || existingSettings.cardEnabled === true,
-    schoolName: school?.name || existingSettings.accountName || 'School'
+    schoolName: school?.name || existingSettings.accountName || 'School',
+    isActive: modelRow?.isActive !== false && existingSettings.active !== false
   };
   merged.canUseDaraja = merged.isActive && (merged.paymentMode === 'daraja' || merged.paymentMode === 'mixed' || merged.darajaEnabled) && merged.darajaConsumerKey && merged.darajaConsumerSecret && merged.darajaPasskey && merged.darajaShortcode;
   merged.manualAccount = merged.mpesaType === 'till' ? merged.tillNumber : merged.paybillNumber;
@@ -865,7 +866,7 @@ exports.getParentSchoolPaymentSettings = async (req, res) => {
       branch: bankDetails?.branch || settings.bankBranch || settings.branch || '',
       manualInstructions: settings.manualInstructions || 'Use the displayed account details, then submit your payment reference for verification.',
       offlineInstructions: settings.offlineInstructions || '',
-      supports: { stk: !!settings.canUseDaraja, manualMpesa: ['manual','mixed'].includes(String(settings.paymentMode||'manual')), bank: !!(settings.bankAccountNumber || bankDetails?.accountNumber), cash: settings.cashEnabled !== false, card: settings.cardEnabled === true }
+      supports: { stk: !!settings.canUseDaraja, manualMpesa: ['manual','mixed'].includes(String(settings.paymentMode||'manual')), paybill: !!settings.paybillNumber, till: !!settings.tillNumber, bank: !!(settings.bankAccountNumber || bankDetails?.accountNumber), cash: settings.cashEnabled !== false, card: settings.cardEnabled === true }
     }});
   } catch (error) { res.status(500).json({ success:false, message:error.message }); }
 };

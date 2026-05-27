@@ -1,5 +1,5 @@
 // src/controllers/studentController.js
-const { sequelize, Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School, Alert } = require('../models');
+const { sequelize, Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School, Alert, TeacherSubjectAssignment } = require('../models');
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
@@ -804,10 +804,19 @@ exports.generateCareerInsights = async (req,res) => {
         const parentKey=`parent:${dedupeKey}:${pr.userId}`;
         await Alert.findOrCreate({ where:{ userId:pr.userId, dedupeKey:parentKey }, defaults:{ userId:pr.userId, role:'parent', type:'career', severity:'info', title:'Shule AI Career Insight', message:`${student.User?.name || 'Your child'} is interested in ${c.careerName}. Encourage focus on ${subjects.slice(0,3).join(', ')}.`, categoryLabel:'Career', sourceType:'analytics_engine', sourceLabel:'Shule AI Insight', targetRole:'parent', targetUserId:pr.userId, studentId:student.id, priority:'normal', dedupeKey:parentKey, actionLabel:'View Child Progress', actionUrl:'#progress', data:{career:c.careerName, subjects, studentId:student.id} } });
       }
-      const admins = await User.findAll({ where:{ schoolCode:req.user.schoolCode, role:'admin', isActive:true }, attributes:['id'] }).catch(()=>[]);
-      for (const admin of admins || []) {
-        const adminKey=`admin:${dedupeKey}:${admin.id}`;
-        await Alert.findOrCreate({ where:{ userId:admin.id, dedupeKey:adminKey }, defaults:{ userId:admin.id, role:'admin', type:'career', severity:'info', title:'Shule AI Career Pattern', message:`${student.User?.name || 'A student'} selected ${c.careerName}. This can help guide subject support and school career mentorship.`, categoryLabel:'Career', sourceType:'analytics_engine', sourceLabel:'Shule AI Insight', targetRole:'admin', targetUserId:admin.id, studentId:student.id, priority:'normal', dedupeKey:adminKey, actionLabel:'View Analytics', actionUrl:'#analytics', data:{career:c.careerName, subjects, studentId:student.id} } });
+      // Notify only relevant teachers: class teacher and teachers assigned to subjects linked to the selected career.
+      const teacherIds = new Set();
+      if (student.classId) {
+        const cls = await Class.findOne({ where:{ id:student.classId, schoolCode:req.user.schoolCode } }).catch(()=>null);
+        if (cls?.teacherId) teacherIds.add(Number(cls.teacherId));
+        const subjectRows = await TeacherSubjectAssignment.findAll({ where:{ classId:student.classId, subject:{ [Op.in]: subjects } } }).catch(()=>[]);
+        subjectRows.forEach(row => row.teacherId && teacherIds.add(Number(row.teacherId)));
+      }
+      const teacherRows = teacherIds.size ? await Teacher.findAll({ where:{ id:{ [Op.in]: [...teacherIds] } }, include:[{ model:User, where:{ schoolCode:req.user.schoolCode, role:'teacher', isActive:true }, attributes:['id','name'] }] }).catch(()=>[]) : [];
+      for (const t of teacherRows || []) {
+        if (!t.User?.id) continue;
+        const teacherKey=`teacher:${dedupeKey}:${t.User.id}`;
+        await Alert.findOrCreate({ where:{ userId:t.User.id, dedupeKey:teacherKey }, defaults:{ userId:t.User.id, role:'teacher', type:'career', severity:'info', title:'Shule AI Career Guidance Insight', message:`${student.User?.name || 'A student'} is interested in ${c.careerName}. Support alignment through ${subjects.slice(0,3).join(', ')}.`, categoryLabel:'Career', sourceType:'analytics_engine', sourceLabel:'Shule AI Insight', targetRole:'teacher', targetUserId:t.User.id, studentId:student.id, priority:'normal', dedupeKey:teacherKey, actionLabel:'View Student Progress', actionUrl:'#my-students', data:{career:c.careerName, subjects, studentId:student.id, classId:student.classId} } });
       }
     }
     res.json({success:true,message:'Career insights generated.',data:alerts});

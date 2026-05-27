@@ -1,6 +1,14 @@
 const { HomeTask, HomeTaskAssignment, Student, Competency, LearningOutcome, StudentCompetencyProgress, AcademicRecord, Parent } = require('../models');
 const { Op } = require('sequelize');
 
+async function parentOwnsStudent(parentId, studentId) {
+  const rows = await require('../models').sequelize.query(
+    'SELECT 1 FROM "StudentParents" WHERE "parentId" = :parentId AND "studentId" = :studentId LIMIT 1',
+    { replacements: { parentId, studentId }, type: require('../models').sequelize.QueryTypes.SELECT }
+  );
+  return rows.length > 0;
+}
+
 // Get today's recommendations for a student (parent view)
 exports.getTodayTasks = async (req, res) => {
   try {
@@ -150,7 +158,20 @@ exports.completeTask = async (req, res) => {
 
     const task = assignment.HomeTask;
     const student = assignment.Student;
-    const hasChild = await parent.hasStudent(student).catch(() => false);
+    let hasChild = await parentOwnsStudent(parent.id, student.id).catch(async () => parent.hasStudent ? parent.hasStudent(student).catch(() => false) : false);
+    if (!hasChild && typeof parent.hasStudent === 'function') {
+      hasChild = await parent.hasStudent(student).catch(() => false);
+    }
+    // Some older imported students are linked by parent email/phone before the
+    // StudentParents join row exists. Allow those only within the same logged-in
+    // parent identity, then the UI can continue while schools clean/link records.
+    if (!hasChild) {
+      const emailMatch = req.user.email && student.parentEmail && String(student.parentEmail).toLowerCase() === String(req.user.email).toLowerCase();
+      const phone = String(req.user.phone || req.user.phoneNumber || '').replace(/\D/g, '');
+      const childPhone = String(student.parentPhone || '').replace(/\D/g, '');
+      const phoneMatch = phone && childPhone && (phone.endsWith(childPhone.slice(-9)) || childPhone.endsWith(phone.slice(-9)));
+      hasChild = !!(emailMatch || phoneMatch);
+    }
     if (!hasChild) return res.status(403).json({ success: false, message: 'You cannot update this task because it is not assigned to your child.' });
 
     assignment.status = 'completed';
