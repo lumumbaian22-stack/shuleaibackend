@@ -1,4 +1,4 @@
-const { HomeTask, HomeTaskAssignment, Student, Competency, LearningOutcome, StudentCompetencyProgress, AcademicRecord } = require('../models');
+const { HomeTask, HomeTaskAssignment, Student, Competency, LearningOutcome, StudentCompetencyProgress, AcademicRecord, Parent } = require('../models');
 const { Op } = require('sequelize');
 
 // Get today's recommendations for a student (parent view)
@@ -125,16 +125,33 @@ exports.completeTask = async (req, res) => {
     const { id } = req.params;
     const { parentFeedback, studentFeedback } = req.body;
 
-    const assignment = await HomeTaskAssignment.findByPk(id, {
+    const parent = await Parent.findOne({ where: { userId: req.user.id } });
+    if (!parent) return res.status(404).json({ success: false, message: 'Parent not found' });
+
+    let assignment = await HomeTaskAssignment.findByPk(id, {
       include: [{ model: HomeTask }, { model: Student }]
     });
 
+    // Some older frontend cards passed HomeTask.id instead of HomeTaskAssignment.id.
+    // Resolve it safely only for this parent's linked children.
     if (!assignment) {
-      return res.status(404).json({ success: false, message: 'Assignment not found' });
+      const linkedChildren = await parent.getStudents().catch(() => []);
+      const linkedIds = linkedChildren.map(s => s.id);
+      assignment = await HomeTaskAssignment.findOne({
+        where: { taskId: id, studentId: { [Op.in]: linkedIds.length ? linkedIds : [-1] } },
+        include: [{ model: HomeTask }, { model: Student }],
+        order: [['assignedAt', 'DESC']]
+      });
+    }
+
+    if (!assignment) {
+      return res.status(404).json({ success: false, message: 'Task assignment not found for this child.' });
     }
 
     const task = assignment.HomeTask;
     const student = assignment.Student;
+    const hasChild = await parent.hasStudent(student).catch(() => false);
+    if (!hasChild) return res.status(403).json({ success: false, message: 'You cannot update this task because it is not assigned to your child.' });
 
     assignment.status = 'completed';
     assignment.completedAt = new Date();

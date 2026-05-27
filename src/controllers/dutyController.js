@@ -589,7 +589,9 @@ exports.updateDutyPreferences = async (req, res) => {
 
 exports.requestDutySwap = async (req, res) => {
   try {
-    const { dutyDate, reason, targetTeacherId } = req.body;
+    const rawDutyDate = req.body.dutyDate || req.body.date || req.body.swapDate || req.body.selectedDate;
+    const dutyDate = String(rawDutyDate || '').slice(0, 10);
+    const { reason, targetTeacherId } = req.body;
     if (!v87IsValidISODate(dutyDate)) return res.status(400).json({ success:false, message:'Please select a valid duty date.' });
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
@@ -617,7 +619,8 @@ exports.requestDutySwap = async (req, res) => {
 
     let swapRequests = [];
     const stored = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: 'swap_requests' } });
-    if (stored && stored.duties) swapRequests = stored.duties;
+    if (stored && Array.isArray(stored.duties)) swapRequests = stored.duties;
+    else if (stored && stored.duties && Array.isArray(stored.duties.requests)) swapRequests = stored.duties.requests;
     swapRequests.push(swapRequest);
     await DutyRoster.upsert({ schoolId: school.schoolId, date: 'swap_requests', duties: swapRequests, createdBy: req.user.id });
 

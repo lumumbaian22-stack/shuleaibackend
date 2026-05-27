@@ -1,4 +1,4 @@
-const { SchoolCalendar } = require('../models');
+const { SchoolCalendar, User, Alert, Student } = require('../models');
 
 function getSchoolId(req) {
   return req.user?.schoolCode || req.body?.schoolId || req.query?.schoolId || 'default';
@@ -23,6 +23,58 @@ function normalizeEvent(body, user) {
   };
 }
 
+
+async function createCalendarBroadcastAlerts({ event, schoolId, actor }) {
+  try {
+    const audience = String(event.audience || 'whole_school').toLowerCase();
+    const where = { schoolCode: schoolId, isActive: true };
+    if (audience === 'teachers') where.role = 'teacher';
+    else if (audience === 'parents') where.role = 'parent';
+    else if (audience === 'students') where.role = 'student';
+    else if (audience === 'admins') where.role = 'admin';
+    else if (audience === 'whole_school') where.role = ['admin', 'teacher', 'parent', 'student'];
+    else where.role = ['admin', 'teacher', 'parent', 'student'];
+
+    let recipients = await User.findAll({ where, limit: 3000 }).catch(() => []);
+    if (event.classId && ['students','parents','class','specific_class'].includes(audience)) {
+      const students = await Student.findAll({ where: { classId: event.classId }, include: [{ model: User, attributes: ['id','role','schoolCode'] }] }).catch(() => []);
+      const ids = new Set(students.map(s => s.User?.id).filter(Boolean));
+      recipients = recipients.filter(u => ids.has(u.id));
+    }
+    const title = `Academic Calendar: ${event.title || event.eventName || 'School Event'}`;
+    const message = [event.description, event.date || event.startDate, event.time, event.location].filter(Boolean).join(' • ') || 'A new school calendar event has been added.';
+    const created = [];
+    for (const user of recipients) {
+      const dedupeKey = [schoolId, user.id, 'calendar-event', event.id].join(':');
+      const payload = {
+        userId: user.id,
+        role: user.role === 'superadmin' ? 'super_admin' : user.role,
+        type: 'academic',
+        severity: 'info',
+        title,
+        message,
+        categoryLabel: 'Academic Calendar',
+        sourceType: 'calendar_broadcast',
+        sourceLabel: 'Academic Calendar',
+        targetRole: user.role,
+        targetUserId: user.id,
+        dedupeKey,
+        actionUrl: '#calendar',
+        actionLabel: 'View Calendar',
+        data: { eventId: event.id, eventDate: event.date || event.startDate, audience, createdBy: actor?.id || null }
+      };
+      const existing = await Alert.findOne({ where: { userId: user.id, dedupeKey } }).catch(() => null);
+      const alert = existing ? await existing.update({ ...payload, isRead: false, readAt: null }) : await Alert.create(payload);
+      created.push(alert);
+      if (global.io) global.io.to(`user-${user.id}`).emit('alert', alert);
+    }
+    return created.length;
+  } catch (e) {
+    console.warn('Calendar broadcast alert creation failed:', e.message);
+    return 0;
+  }
+}
+
 function frontendEvent(event) {
   const raw = event?.toJSON ? event.toJSON() : (event || {});
   return {
@@ -45,7 +97,8 @@ exports.getCalendarEvents = async (req, res) => {
       where,
       order: [['startDate', 'ASC'], ['createdAt', 'ASC']]
     });
-    res.json({ success: true, data: events.map(frontendEvent) });
+    const out = events.map(frontendEvent);
+    res.json({ success: true, data: out, events: out });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -59,11 +112,13 @@ exports.createEvent = async (req, res) => {
 
     const event = await SchoolCalendar.create(payload);
     const out = frontendEvent(event);
+    const alertCount = await createCalendarBroadcastAlerts({ event: out, schoolId: payload.schoolId, actor: req.user || {} });
     if (global.io && payload.schoolId) {
       global.io.to(`school-${payload.schoolId}`).emit('school-calendar:event-created', out);
       global.io.to(`school-${payload.schoolId}`).emit('school-calendar:changed', { action: 'created', event: out });
+      global.io.to(`school-${payload.schoolId}`).emit('alerts:updated', { type: 'calendar:event-created', schoolCode: payload.schoolId, event: out });
     }
-    res.status(201).json({ success: true, data: out, message: 'Academic calendar event saved and broadcasted to the whole school' });
+    res.status(201).json({ success: true, data: out, events: [out], alertCount, message: `Academic calendar event saved and broadcasted to ${alertCount || 'the selected audience'} user(s)` });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

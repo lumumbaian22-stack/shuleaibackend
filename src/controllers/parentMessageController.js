@@ -1,4 +1,4 @@
-const { Parent, Teacher, User, Message, Student, Admin } = require('../models');
+const { Parent, Teacher, User, Message, Student, Admin, Class } = require('../models');
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 
@@ -36,7 +36,6 @@ exports.sendMessage = async (req, res) => {
         
         if (recipientType === 'teacher') {
             // First try to find via class assignment (new way)
-            const Class = require('../models/Class');
             const classAssignment = await Class.findOne({
                 where: { 
                     grade: student.grade,
@@ -132,6 +131,7 @@ exports.sendMessage = async (req, res) => {
                 parentName: req.user.name,
                 parentEmail: req.user.email,
                 recipientType: recipientType,
+                actualRecipientType: recipientRole,
                 conversationType: 'parent-to-staff',
                 isRead: false
             }
@@ -153,7 +153,8 @@ exports.sendMessage = async (req, res) => {
                 parentName: req.user.name,
                 messageId: newMessage.id,
                 conversationType: 'parent-message',
-                recipientType: recipientType
+                recipientType: recipientType,
+                actualRecipientType: recipientRole
             }
         });
         
@@ -179,7 +180,8 @@ exports.sendMessage = async (req, res) => {
             data: {
                 id: newMessage.id,
                 recipient: recipientName,
-                recipientType: recipientType,
+                recipientType: recipientRole,
+                requestedRecipientType: recipientType,
                 recipientId: recipientId,
                 sentAt: newMessage.createdAt
             }

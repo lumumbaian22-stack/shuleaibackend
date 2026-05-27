@@ -420,6 +420,7 @@ exports.getAttendance = async (req, res) => {
   try {
     await ensureRuntimeSchema().catch(() => null);
     const student = await Student.findOne({ where: { userId: req.user.id } });
+    if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
     const attendance = await Attendance.findAll({ where: { studentId: student.id }, order: [['date', 'DESC']] });
     res.json({ success: true, data: attendance });
   } catch (error) {

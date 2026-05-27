@@ -52,12 +52,19 @@ async function getSchoolPaymentConfig(schoolCodeValue){
     darajaShortcode: modelRow?.darajaShortcode || existingSettings.shortcode || existingSettings.businessShortcode || existingSettings.businessShortCode || '',
     darajaEnvironment: modelRow?.darajaEnvironment || existingSettings.darajaEnvironment || existingSettings.environment || process.env.DARAJA_ENV || 'sandbox',
     callbackUrl: modelRow?.callbackUrl || existingSettings.callbackUrl || process.env.DARAJA_CALLBACK_URL || process.env.MPESA_CALLBACK_URL || '',
-    isActive: modelRow ? modelRow.isActive !== false : existingSettings.active !== false,
+    bankName: modelRow?.bankName || school?.bankDetails?.bankName || existingSettings.bankName || '',
+    bankAccountName: modelRow?.bankAccountName || school?.bankDetails?.accountName || existingSettings.accountName || school?.name || '',
+    bankAccountNumber: modelRow?.bankAccountNumber || school?.bankDetails?.accountNumber || existingSettings.accountNumber || '',
+    bankBranch: modelRow?.bankBranch || school?.bankDetails?.branch || existingSettings.branch || '',
+    manualInstructions: modelRow?.metadata?.manualInstructions || existingSettings.manualInstructions || 'Use the displayed account details, then submit your payment reference for verification.',
+    offlineInstructions: modelRow?.metadata?.offlineInstructions || existingSettings.offlineInstructions || 'Cash/card payments should be made at the school office and receipt/reference submitted for records.',
+    cashEnabled: modelRow?.metadata?.cashEnabled !== false && existingSettings.cashEnabled !== false,
+    cardEnabled: modelRow?.metadata?.cardEnabled === true || existingSettings.cardEnabled === true,
     schoolName: school?.name || existingSettings.accountName || 'School'
   };
-  merged.canUseDaraja = merged.isActive && (merged.paymentMode === 'daraja' || merged.darajaEnabled) && merged.darajaConsumerKey && merged.darajaConsumerSecret && merged.darajaPasskey && merged.darajaShortcode;
+  merged.canUseDaraja = merged.isActive && (merged.paymentMode === 'daraja' || merged.paymentMode === 'mixed' || merged.darajaEnabled) && merged.darajaConsumerKey && merged.darajaConsumerSecret && merged.darajaPasskey && merged.darajaShortcode;
   merged.manualAccount = merged.mpesaType === 'till' ? merged.tillNumber : merged.paybillNumber;
-  return { school, row:modelRow, settings:merged };
+  return { school, row:modelRow, settings:merged, bankDetails: school?.bankDetails || { bankName: merged.bankName, accountName: merged.bankAccountName, accountNumber: merged.bankAccountNumber, branch: merged.bankBranch } };
 }
 async function applyFeePayment(payment, receipt='manual'){
   if(!payment?.feeId) return null;
@@ -171,7 +178,11 @@ exports.getAdminPaymentSettings = async (req, res) => {
         accountName: settings.schoolName,
         manualAccount: settings.manualAccount,
         currency: 'KES',
-        acceptedMethods: ['mpesa']
+        acceptedMethods: ['manual_mpesa','daraja_stk','bank','cash','card'],
+        manualInstructions: settings.manualInstructions,
+        offlineInstructions: settings.offlineInstructions,
+        cashEnabled: settings.cashEnabled,
+        cardEnabled: settings.cardEnabled
       },
       bankDetails: school.bankDetails || {}
     }});
@@ -210,7 +221,16 @@ exports.updateAdminPaymentSettings = async (req, res) => {
       darajaEnvironment: incoming.environment || incoming.darajaEnvironment || process.env.DARAJA_ENV || 'sandbox',
       callbackUrl: incoming.callbackUrl || process.env.DARAJA_CALLBACK_URL || process.env.MPESA_CALLBACK_URL || '',
       isActive: incoming.active !== false,
-      metadata: { updatedBy:req.user.id, updatedAt:new Date().toISOString(), auditTrail: [auditEntry('school_payment_settings_saved', req.user, { paymentMode, mpesaType })] }
+      metadata: {
+        ...(incoming.metadata || {}),
+        manualInstructions: incoming.manualInstructions || incoming.instructions || '',
+        offlineInstructions: incoming.offlineInstructions || '',
+        cashEnabled: incoming.cashEnabled !== false,
+        cardEnabled: incoming.cardEnabled === true,
+        updatedBy:req.user.id,
+        updatedAt:new Date().toISOString(),
+        auditTrail: [auditEntry('school_payment_settings_saved', req.user, { paymentMode, mpesaType })]
+      }
     };
     const [paymentRow] = await SchoolPaymentSetting.findOrCreate({ where:{ schoolCode:school.schoolId }, defaults:rowPayload });
     await paymentRow.update(rowPayload);
@@ -222,6 +242,10 @@ exports.updateAdminPaymentSettings = async (req, res) => {
       darajaEnabled: rowPayload.darajaEnabled,
       shortcode: rowPayload.darajaShortcode,
       callbackUrl: rowPayload.callbackUrl,
+      manualInstructions: rowPayload.metadata.manualInstructions,
+      offlineInstructions: rowPayload.metadata.offlineInstructions,
+      cashEnabled: rowPayload.metadata.cashEnabled,
+      cardEnabled: rowPayload.metadata.cardEnabled,
       updatedAt:new Date().toISOString(), updatedBy:req.user.id
     };
     const bankDetails = {
@@ -836,11 +860,12 @@ exports.getParentSchoolPaymentSettings = async (req, res) => {
       shortcode: settings.darajaShortcode || settings.businessShortcode || settings.shortcode || '',
       referenceFormat: settings.accountReferenceFormat || 'elimuid',
       bankName: bankDetails?.bankName || settings.bankName || '',
-      accountName: bankDetails?.accountName || settings.accountName || '',
-      accountNumber: bankDetails?.accountNumber || settings.bankAccount || settings.accountNumber || '',
-      branch: bankDetails?.branch || settings.branch || '',
+      accountName: bankDetails?.accountName || settings.bankAccountName || settings.accountName || '',
+      accountNumber: bankDetails?.accountNumber || settings.bankAccountNumber || settings.bankAccount || settings.accountNumber || '',
+      branch: bankDetails?.branch || settings.bankBranch || settings.branch || '',
       manualInstructions: settings.manualInstructions || 'Use the displayed account details, then submit your payment reference for verification.',
-      supports: { stk: !!settings.canUseDaraja, manualMpesa: true, bank: true, cash: true, card: true }
+      offlineInstructions: settings.offlineInstructions || '',
+      supports: { stk: !!settings.canUseDaraja, manualMpesa: ['manual','mixed'].includes(String(settings.paymentMode||'manual')), bank: !!(settings.bankAccountNumber || bankDetails?.accountNumber), cash: settings.cashEnabled !== false, card: settings.cardEnabled === true }
     }});
   } catch (error) { res.status(500).json({ success:false, message:error.message }); }
 };
