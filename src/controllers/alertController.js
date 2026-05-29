@@ -69,6 +69,7 @@ async function filterAlertsForRequester(req, alerts, requestedStudentId) {
 
   const filtered = [];
   for (const alert of alerts) {
+    if (alert?.data?.hiddenByV97) continue;
     const sid = alertStudentId(alert);
     if (requested && sid && sid !== requested) continue;
     if (requested && !sid) { filtered.push(alert); continue; } // general parent/school alert for the same user
@@ -330,6 +331,11 @@ exports.createAlert = async (req, res) => {
     for (const recipient of recipients) {
       const scopedStudentId = studentId || data?.studentId || null;
       const scopedClassId = classId || data?.classId || null;
+      const requestedType = normalizeAlertDbType(type || category || categoryLabel || data?.category || 'system');
+      const recipientRole = String(recipient.role || '').toLowerCase();
+      // V97: student-scoped career path alerts must never be broadcast to admins/super admins.
+      // They belong only to the selected student, linked parent(s), and subject teachers for that class/career.
+      if (requestedType === 'career' && scopedStudentId && (recipientRole === 'admin' || recipientRole === 'super_admin' || recipientRole === 'superadmin')) continue;
       if (!(await recipientCanReceiveStudentAlert(req, recipient, scopedStudentId, scopedClassId))) continue;
       const finalCategory = categoryLabel || category || type || 'System';
       const finalData = {

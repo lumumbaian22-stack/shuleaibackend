@@ -53,15 +53,19 @@ async function getEnrollmentTrend({ schoolCode, allSchools }) {
   return asChart('line', 'Enrollment Trend', labels, [oneDataset('Students', labels.map(m => map[m] || 0))]);
 }
 
-async function getGradeDistribution({ schoolCode, allSchools }) {
+async function getGradeDistribution({ schoolCode, allSchools, classIds = null, studentId = null }) {
+  const repl = { schoolCode, classIds, studentId };
   const schoolClause = allSchools || !schoolCode ? '' : 'AND u."schoolCode" = :schoolCode';
+  const classClause = Array.isArray(classIds) && classIds.length ? 'AND s."classId" IN (:classIds)' : '';
+  const studentClause = studentId ? 'AND s."id" = :studentId' : '';
   const rows = await q(`
-    SELECT COALESCE(NULLIF(s.grade,''),'Unassigned') AS label, COUNT(*)::int AS count
+    SELECT COALESCE(NULLIF(s.grade,''), c."name", 'Unassigned') AS label, COUNT(*)::int AS count
     FROM "Students" s
     JOIN "Users" u ON u.id = s."userId"
-    WHERE s.status = 'active' ${schoolClause}
+    LEFT JOIN "Classes" c ON c."id" = s."classId"
+    WHERE COALESCE(s.status, 'active') = 'active' ${schoolClause} ${classClause} ${studentClause}
     GROUP BY 1 ORDER BY 1 ASC
-  `, { schoolCode }).catch(() => []);
+  `, repl).catch(() => []);
   return asChart('doughnut', 'Grade / Class Distribution', rows.map(r => r.label), [oneDataset('Students', rows.map(r => r.count))], { cutout: '70%' });
 }
 
@@ -106,9 +110,13 @@ async function getSubjectPerformance({ schoolCode, allSchools, classIds = null, 
   };
 }
 
-async function getFeeStatus({ schoolCode, allSchools }) {
-  const where = allSchools || !schoolCode ? '' : 'WHERE "schoolCode" = :schoolCode';
-  const rows = await q(`SELECT COALESCE(NULLIF(status,''),'unpaid') AS status, COUNT(*)::int AS count FROM "Fees" ${where} GROUP BY 1`, { schoolCode }).catch(() => []);
+async function getFeeStatus({ schoolCode, allSchools, classIds = null, studentId = null }) {
+  const repl = { schoolCode, classIds, studentId };
+  let where = 'WHERE 1=1';
+  if (!allSchools && schoolCode) where += ' AND f."schoolCode" = :schoolCode';
+  if (studentId) where += ' AND f."studentId" = :studentId';
+  if (Array.isArray(classIds) && classIds.length) where += ' AND (f."classId" IN (:classIds) OR f."studentId" IN (SELECT id FROM "Students" WHERE "classId" IN (:classIds)))';
+  const rows = await q(`SELECT COALESCE(NULLIF(f.status,''),'unpaid') AS status, COUNT(*)::int AS count FROM "Fees" f ${where} GROUP BY 1`, repl).catch(() => []);
   const map = { paid: 0, partial: 0, unpaid: 0, pending: 0 };
   rows.forEach(r => { map[String(r.status).toLowerCase()] = Number(r.count || 0); });
   return asChart('doughnut', 'Fee Status Distribution', Object.keys(map), [oneDataset('Accounts', Object.values(map))], { cutout: '70%' });
@@ -166,8 +174,16 @@ async function getOverview({ schoolCode, allSchools, classIds = null, studentId 
   const classClause = Array.isArray(classIds) && classIds.length ? 'AND s."classId" IN (:classIds)' : '';
   const studentClause = studentId ? 'AND s.id = :studentId' : '';
   const totalStudents = await scalar(`SELECT COUNT(*)::int AS value FROM "Students" s JOIN "Users" u ON u.id=s."userId" WHERE s.status='active' ${userSchoolJoin} ${classClause} ${studentClause}`, repl);
-  const totalTeachers = await scalar(`SELECT COUNT(*)::int AS value FROM "Teachers" t JOIN "Users" u ON u.id=t."userId" WHERE u.role='teacher' ${allSchools || !schoolCode ? '' : 'AND u."schoolCode"=:schoolCode'}`, repl);
-  const totalClasses = await scalar(`SELECT COUNT(*)::int AS value FROM "Classes" c WHERE COALESCE(c."isActive", true)=true ${allSchools || !schoolCode ? '' : 'AND c."schoolCode"=:schoolCode'}`, repl);
+  const totalTeachers = studentId
+    ? await scalar(`SELECT COUNT(DISTINCT t.id)::int AS value FROM "Teachers" t JOIN "Users" u ON u.id=t."userId" JOIN "Students" s ON s."id"=:studentId LEFT JOIN "TeacherSubjectAssignments" tsa ON tsa."teacherId"=t.id AND tsa."classId"=s."classId" WHERE u.role='teacher' ${allSchools || !schoolCode ? '' : 'AND u."schoolCode"=:schoolCode'} AND (t."classId"=s."classId" OR tsa."classId"=s."classId")`, repl)
+    : Array.isArray(classIds) && classIds.length
+      ? await scalar(`SELECT COUNT(DISTINCT t.id)::int AS value FROM "Teachers" t JOIN "Users" u ON u.id=t."userId" LEFT JOIN "TeacherSubjectAssignments" tsa ON tsa."teacherId"=t.id WHERE u.role='teacher' ${allSchools || !schoolCode ? '' : 'AND u."schoolCode"=:schoolCode'} AND (t."classId" IN (:classIds) OR tsa."classId" IN (:classIds))`, repl)
+      : await scalar(`SELECT COUNT(*)::int AS value FROM "Teachers" t JOIN "Users" u ON u.id=t."userId" WHERE u.role='teacher' ${allSchools || !schoolCode ? '' : 'AND u."schoolCode"=:schoolCode'}`, repl);
+  const totalClasses = studentId
+    ? await scalar(`SELECT COUNT(DISTINCT s."classId")::int AS value FROM "Students" s JOIN "Users" u ON u.id=s."userId" WHERE s.id=:studentId ${allSchools || !schoolCode ? '' : 'AND u."schoolCode"=:schoolCode'}`, repl)
+    : Array.isArray(classIds) && classIds.length
+      ? classIds.length
+      : await scalar(`SELECT COUNT(*)::int AS value FROM "Classes" c WHERE COALESCE(c."isActive", true)=true ${allSchools || !schoolCode ? '' : 'AND c."schoolCode"=:schoolCode'}`, repl);
   const totalFees = await scalar(`SELECT COALESCE(SUM("totalAmount"),0)::numeric AS value FROM "Fees" WHERE 1=1 ${allSchools || !schoolCode ? '' : 'AND "schoolCode"=:schoolCode'} ${studentId ? 'AND "studentId"=:studentId' : ''}`, repl);
   const paidFees = await scalar(`SELECT COALESCE(SUM("paidAmount"),0)::numeric AS value FROM "Fees" WHERE 1=1 ${allSchools || !schoolCode ? '' : 'AND "schoolCode"=:schoolCode'} ${studentId ? 'AND "studentId"=:studentId' : ''}`, repl);
   const attendanceRows = await q(`SELECT status, COUNT(*)::int AS count FROM "Attendances" WHERE date >= CURRENT_DATE - INTERVAL '30 days' ${allSchools || !schoolCode ? '' : 'AND "schoolCode"=:schoolCode'} ${studentId ? 'AND "studentId"=:studentId' : ''} GROUP BY status`, repl).catch(() => []);
