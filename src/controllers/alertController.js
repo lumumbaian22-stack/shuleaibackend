@@ -1,17 +1,99 @@
-const { Alert, User, School, sequelize } = require('../models');
+const { Alert, User, School, Student, Parent, Teacher, TeacherSubjectAssignment, sequelize } = require('../models');
 const { generateParentAlertSuggestion } = require('../services/aiProviderService');
+
+async function userCanViewStudentAlert(req, studentId) {
+  if (!studentId) return true;
+  const role = String(req.user?.role || '').toLowerCase();
+  const sid = Number(studentId);
+  if (!Number.isInteger(sid) || sid <= 0) return false;
+
+  if (role === 'student') {
+    const rows = await sequelize.query(
+      'SELECT 1 FROM "Students" s JOIN "Users" u ON u."id" = s."userId" WHERE s."id" = :sid AND s."userId" = :uid AND u."schoolCode" = :schoolCode LIMIT 1',
+      { replacements: { sid, uid: req.user.id, schoolCode: req.user.schoolCode }, type: sequelize.QueryTypes.SELECT }
+    ).catch(() => []);
+    return rows.length > 0;
+  }
+
+  if (role === 'parent') {
+    const rows = await sequelize.query(
+      'SELECT 1 FROM "StudentParents" sp JOIN "Parents" p ON p."id" = sp."parentId" JOIN "Students" s ON s."id" = sp."studentId" JOIN "Users" su ON su."id" = s."userId" WHERE sp."studentId" = :sid AND p."userId" = :uid AND su."schoolCode" = :schoolCode LIMIT 1',
+      { replacements: { sid, uid: req.user.id, schoolCode: req.user.schoolCode }, type: sequelize.QueryTypes.SELECT }
+    ).catch(() => []);
+    return rows.length > 0;
+  }
+
+  if (role === 'teacher') {
+    const rows = await sequelize.query(
+      `SELECT 1
+         FROM "Students" s
+         JOIN "Users" su ON su."id" = s."userId"
+         JOIN "Teachers" t ON t."userId" = :uid
+        WHERE s."id" = :sid
+          AND su."schoolCode" = :schoolCode
+          AND (t."classId" = s."classId"
+            OR EXISTS (SELECT 1 FROM "TeacherSubjectAssignments" tsa WHERE tsa."teacherId" = t."id" AND tsa."classId" = s."classId")
+            OR EXISTS (SELECT 1 FROM "Classes" c WHERE c."id" = s."classId" AND c."teacherId" = t."id"))
+        LIMIT 1`,
+      { replacements: { sid, uid: req.user.id, schoolCode: req.user.schoolCode }, type: sequelize.QueryTypes.SELECT }
+    ).catch(() => []);
+    return rows.length > 0;
+  }
+
+  if (role === 'admin' || role === 'super_admin' || role === 'superadmin') {
+    const rows = await sequelize.query(
+      'SELECT 1 FROM "Students" s JOIN "Users" u ON u."id" = s."userId" WHERE s."id" = :sid AND (:isSuper = true OR u."schoolCode" = :schoolCode) LIMIT 1',
+      { replacements: { sid, schoolCode: req.user.schoolCode, isSuper: role === 'super_admin' || role === 'superadmin' }, type: sequelize.QueryTypes.SELECT }
+    ).catch(() => []);
+    return rows.length > 0;
+  }
+  return false;
+}
+
+function alertStudentId(alert) {
+  return Number(alert?.studentId || alert?.data?.studentId || alert?.data?.student_id || 0) || null;
+}
+
+async function filterAlertsForRequester(req, alerts, requestedStudentId) {
+  const role = String(req.user?.role || '').toLowerCase();
+  const requested = Number(requestedStudentId || 0) || null;
+
+  if (requested) {
+    const allowed = await userCanViewStudentAlert(req, requested);
+    if (!allowed) {
+      const err = new Error('You are not allowed to view alerts for this student.');
+      err.status = 403;
+      throw err;
+    }
+  }
+
+  const filtered = [];
+  for (const alert of alerts) {
+    const sid = alertStudentId(alert);
+    if (requested && sid && sid !== requested) continue;
+    if (requested && !sid) { filtered.push(alert); continue; } // general parent/school alert for the same user
+    if (!requested && (role === 'parent' || role === 'student' || role === 'teacher') && sid) {
+      const allowed = await userCanViewStudentAlert(req, sid);
+      if (!allowed) continue;
+    }
+    filtered.push(alert);
+  }
+  return filtered;
+}
 
 exports.getMyAlerts = async (req, res) => {
   try {
+    const requestedStudentId = req.query.studentId || req.query.childId || null;
     const alerts = await Alert.findAll({
       where: { userId: req.user.id },
       order: [['createdAt', 'DESC']],
       limit: Number(req.query.limit || 120)
     });
-    res.json({ success: true, data: alerts });
+    const safeAlerts = await filterAlertsForRequester(req, alerts, requestedStudentId);
+    res.json({ success: true, data: safeAlerts, scope: { role: req.user.role, studentId: requestedStudentId || null } });
   } catch (error) {
     console.error('Get alerts error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -127,6 +209,7 @@ exports.suggestParentAlert = async (req, res) => {
 
 function normalizeAlertDbType(value) {
   const raw = String(value || '').toLowerCase();
+  if (/career|profession|path/.test(raw)) return 'career';
   if (/academic|grade|mark|homework|study/.test(raw)) return 'academic';
   if (/attendance|physical|safety|absent|late/.test(raw)) return 'attendance';
   if (/fee|payment|finance|bursary|subscription|cash|bank|mpesa|balance/.test(raw)) return 'fee';
@@ -139,6 +222,42 @@ function normalizeAlertDbType(value) {
 function buildDedupeKey({ req, recipient, type, category, title, data }) {
   const eventId = data?.eventId || data?.paymentId || data?.studentId || data?.announcementId || '';
   return [req.user.schoolCode || '', recipient.id, data?.studentId || '', category || type || 'system', title || '', eventId].join(':').slice(0, 480);
+}
+
+async function recipientCanReceiveStudentAlert(req, recipient, studentId, classId) {
+  const sid = Number(studentId || 0) || null;
+  const role = String(recipient?.role || '').toLowerCase();
+  if (!sid) return true;
+
+  if (role === 'student') {
+    const rows = await sequelize.query(
+      'SELECT 1 FROM "Students" s JOIN "Users" u ON u."id"=s."userId" WHERE s."id"=:sid AND s."userId"=:uid AND u."schoolCode"=:schoolCode LIMIT 1',
+      { replacements:{ sid, uid:recipient.id, schoolCode:req.user.schoolCode }, type: sequelize.QueryTypes.SELECT }
+    ).catch(()=>[]);
+    return rows.length > 0;
+  }
+  if (role === 'parent') {
+    const rows = await sequelize.query(
+      'SELECT 1 FROM "StudentParents" sp JOIN "Parents" p ON p."id"=sp."parentId" JOIN "Students" s ON s."id"=sp."studentId" JOIN "Users" su ON su."id"=s."userId" WHERE sp."studentId"=:sid AND p."userId"=:uid AND su."schoolCode"=:schoolCode LIMIT 1',
+      { replacements:{ sid, uid:recipient.id, schoolCode:req.user.schoolCode }, type: sequelize.QueryTypes.SELECT }
+    ).catch(()=>[]);
+    return rows.length > 0;
+  }
+  if (role === 'teacher') {
+    const rows = await sequelize.query(
+      `SELECT 1 FROM "Students" s
+        JOIN "Users" su ON su."id"=s."userId"
+        JOIN "Teachers" t ON t."userId"=:uid
+       WHERE s."id"=:sid AND su."schoolCode"=:schoolCode
+         AND (t."classId"=s."classId"
+           OR EXISTS (SELECT 1 FROM "TeacherSubjectAssignments" tsa WHERE tsa."teacherId"=t."id" AND tsa."classId"=s."classId")
+           OR EXISTS (SELECT 1 FROM "Classes" c WHERE c."id"=s."classId" AND c."teacherId"=t."id"))
+       LIMIT 1`,
+      { replacements:{ sid, uid:recipient.id, schoolCode:req.user.schoolCode }, type: sequelize.QueryTypes.SELECT }
+    ).catch(()=>[]);
+    return rows.length > 0;
+  }
+  return true;
 }
 
 // Create alerts with severity and audience support
@@ -209,6 +328,9 @@ exports.createAlert = async (req, res) => {
 
     const created = [];
     for (const recipient of recipients) {
+      const scopedStudentId = studentId || data?.studentId || null;
+      const scopedClassId = classId || data?.classId || null;
+      if (!(await recipientCanReceiveStudentAlert(req, recipient, scopedStudentId, scopedClassId))) continue;
       const finalCategory = categoryLabel || category || type || 'System';
       const finalData = {
         ...(data || {}),
@@ -251,6 +373,9 @@ exports.createAlert = async (req, res) => {
       if (global.io) global.io.to(`user-${recipient.id}`).emit('alert', alert);
     }
 
+    if (!created.length) {
+      return res.status(400).json({ success: false, message: 'No permitted recipients found for this alert scope.' });
+    }
     res.status(201).json({ success: true, data: created, count: created.length });
   } catch (error) {
     console.error('Create alert error:', error);

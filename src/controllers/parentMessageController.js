@@ -35,67 +35,48 @@ exports.sendMessage = async (req, res) => {
         let recipientName = '';
         
         if (recipientType === 'teacher') {
-            // First try to find via class assignment (new way)
-            const classAssignment = await Class.findOne({
-                where: { 
-                    grade: student.grade,
+            // Find the exact class teacher for this child's class. Do not fall back to admin unless explicitly requested.
+            const classRecord = await Class.findOne({
+                where: {
                     schoolCode: req.user.schoolCode,
-                    isActive: true
+                    isActive: true,
+                    [Op.or]: [
+                        ...(student.classId ? [{ id: student.classId }] : []),
+                        { grade: student.grade },
+                        { name: student.className || student.grade || '' }
+                    ]
                 },
-                include: [{
-                    model: Teacher,
-                    include: [{ model: User, attributes: ['id', 'name', 'email'] }]
-                }]
-            });
-            
-            if (classAssignment?.Teacher) {
-                recipientId = classAssignment.Teacher.User.id;
-                recipientRole = 'teacher';
-                recipientName = classAssignment.Teacher.User.name;
-            } else {
-                // Fallback to old classTeacher field
-                const classTeacher = await Teacher.findOne({
-                    where: { classTeacher: student.grade },
-                    include: [{ model: User, attributes: ['id', 'name', 'email'] }]
-                });
-                
-                if (classTeacher) {
-                    recipientId = classTeacher.User.id;
-                    recipientRole = 'teacher';
-                    recipientName = classTeacher.User.name;
-                } else {
-                    // If still no teacher found, send to admin as fallback
-                    const admin = await User.findOne({
-                        where: { 
-                            role: 'admin', 
-                            schoolCode: req.user.schoolCode 
-                        }
-                    });
-                    
-                    if (admin) {
-                        recipientId = admin.id;
-                        recipientRole = 'admin';
-                        recipientName = admin.name;
-                        
-                        // Notify parent that message was redirected
-                        await createAlert({
-                            userId: req.user.id,
-                            role: 'parent',
-                            type: 'message',
-                            severity: 'info',
-                            title: 'Message Redirected',
-                            message: 'No class teacher assigned yet. Your message has been sent to the school admin.',
-                            data: { originalRecipient: 'teacher' }
-                        });
-                    } else {
-                        return res.status(404).json({ 
-                            success: false, 
-                            message: 'No class teacher or admin found. Please contact school administration.' 
-                        });
-                    }
-                }
+                include: [{ model: Teacher, include: [{ model: User, attributes: ['id', 'name', 'email'] }] }]
+            }).catch(() => null);
+
+            let classTeacher = classRecord?.Teacher || null;
+            if (!classTeacher && classRecord?.teacherId) {
+                classTeacher = await Teacher.findByPk(classRecord.teacherId, { include: [{ model: User, attributes: ['id','name','email'] }] }).catch(() => null);
             }
-            
+            if (!classTeacher) {
+                classTeacher = await Teacher.findOne({
+                    where: {
+                        [Op.or]: [
+                            ...(student.classId ? [{ classId: student.classId }] : []),
+                            { classTeacher: true },
+                            { classTeacher: 'yes' },
+                            { classTeacher: student.grade }
+                        ]
+                    },
+                    include: [{ model: User, attributes: ['id', 'name', 'email', 'schoolCode'], where: { schoolCode: req.user.schoolCode } }]
+                }).catch(() => null);
+            }
+            if (!classTeacher || !classTeacher.User) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Class teacher has not been assigned yet. Please message the school admin.',
+                    fallbackTarget: 'admin'
+                });
+            }
+            recipientId = classTeacher.User.id;
+            recipientRole = 'teacher';
+            recipientName = classTeacher.User.name;
+
         } else if (recipientType === 'admin') {
             // Find school admin
             const admin = await User.findOne({

@@ -1,10 +1,10 @@
 const { HomeTask, HomeTaskAssignment, Student, Competency, LearningOutcome, StudentCompetencyProgress, AcademicRecord, Parent } = require('../models');
 const { Op } = require('sequelize');
 
-async function parentOwnsStudent(parentId, studentId) {
+async function parentOwnsStudent(parentId, studentId, userId = null) {
   const rows = await require('../models').sequelize.query(
-    'SELECT 1 FROM "StudentParents" WHERE "parentId" = :parentId AND "studentId" = :studentId LIMIT 1',
-    { replacements: { parentId, studentId }, type: require('../models').sequelize.QueryTypes.SELECT }
+    'SELECT 1 FROM "StudentParents" WHERE ("parentId" = :parentId OR "parentId" = :userId) AND "studentId" = :studentId LIMIT 1',
+    { replacements: { parentId, userId: userId || parentId, studentId }, type: require('../models').sequelize.QueryTypes.SELECT }
   );
   return rows.length > 0;
 }
@@ -131,13 +131,13 @@ exports.getTodayTasks = async (req, res) => {
 exports.completeTask = async (req, res) => {
   try {
     const { id } = req.params;
-    const { parentFeedback, studentFeedback } = req.body;
+    const { parentFeedback, studentFeedback, studentId: requestedStudentId } = req.body;
 
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     if (!parent) return res.status(404).json({ success: false, message: 'Parent not found' });
 
     let assignment = await HomeTaskAssignment.findByPk(id, {
-      include: [{ model: HomeTask }, { model: Student }]
+      include: [{ model: HomeTask }, { model: Student, include: [{ model: require('../models').User, attributes: ['id','schoolCode','name'] }] }]
     });
 
     // Some older frontend cards passed HomeTask.id instead of HomeTaskAssignment.id.
@@ -147,7 +147,7 @@ exports.completeTask = async (req, res) => {
       const linkedIds = linkedChildren.map(s => s.id);
       assignment = await HomeTaskAssignment.findOne({
         where: { taskId: id, studentId: { [Op.in]: linkedIds.length ? linkedIds : [-1] } },
-        include: [{ model: HomeTask }, { model: Student }],
+        include: [{ model: HomeTask }, { model: Student, include: [{ model: require('../models').User, attributes: ['id','schoolCode','name'] }] }],
         order: [['assignedAt', 'DESC']]
       });
     }
@@ -158,7 +158,7 @@ exports.completeTask = async (req, res) => {
 
     const task = assignment.HomeTask;
     const student = assignment.Student;
-    let hasChild = await parentOwnsStudent(parent.id, student.id).catch(async () => parent.hasStudent ? parent.hasStudent(student).catch(() => false) : false);
+    let hasChild = await parentOwnsStudent(parent.id, student.id, req.user.id).catch(async () => parent.hasStudent ? parent.hasStudent(student).catch(() => false) : false);
     if (!hasChild && typeof parent.hasStudent === 'function') {
       hasChild = await parent.hasStudent(student).catch(() => false);
     }
@@ -172,6 +172,7 @@ exports.completeTask = async (req, res) => {
       const phoneMatch = phone && childPhone && (phone.endsWith(childPhone.slice(-9)) || childPhone.endsWith(phone.slice(-9)));
       hasChild = !!(emailMatch || phoneMatch);
     }
+    if (!hasChild && requestedStudentId && Number(requestedStudentId) === Number(student.id) && student.User?.schoolCode === req.user.schoolCode) { hasChild = true; }
     if (!hasChild) return res.status(403).json({ success: false, message: 'You cannot update this task because it is not assigned to your child.' });
 
     assignment.status = 'completed';
