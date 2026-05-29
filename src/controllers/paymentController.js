@@ -119,6 +119,11 @@ function billingCycleFromBody(body){
 }
 
 async function createPendingPayment(req, payload){
+  const idempotencyKey = payload.idempotencyKey || payload.checkoutRequestId || payload.reference;
+  if (idempotencyKey) {
+    const existing = await Payment.findOne({ where: { idempotencyKey } }).catch(() => null);
+    if (existing) return existing;
+  }
   const row = await Payment.create({
     studentId: payload.studentId || null,
     parentId: payload.parentId || null,
@@ -129,6 +134,8 @@ async function createPendingPayment(req, payload){
     transactionType: payload.transactionType || 'payment',
     source: payload.source || 'parent',
     reference: payload.reference,
+    idempotencyKey,
+    reconciliationStatus: 'pending',
     plan: payload.plan || payload.planCode || null,
     status: 'pending',
     transactionId: payload.checkoutRequestId,

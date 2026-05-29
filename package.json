@@ -8,7 +8,9 @@
     "dev": "nodemon server.js",
     "seed": "node src/utils/seed.js",
     "migrate": "node runMigrations.js",
-    "worker": "node src/workers/jobWorker.js"
+    "worker": "node src/workers/jobWorker.js",
+    "seed:demo": "node scripts/seedDemoSchool.js",
+    "load:test": "node scripts/loadTest.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

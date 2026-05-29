@@ -12,8 +12,27 @@ const PORT = process.env.PORT || 5000;
 
 const server = http.createServer(app);
 
+const socketAllowedOrigins = Array.from(new Set([
+    'https://shuleai.live',
+    'https://www.shuleai.live',
+    'https://lumumbaian22-stack.github.io',
+    'https://shuleaiinfo-cmd.github.io',
+    ...(process.env.CORS_ORIGINS || '').split(','),
+    ...(process.env.FRONTEND_URL || '').split(',')
+].map((origin) => String(origin || '').trim()).filter(Boolean)));
+
 const io = socketio(server, {
-    cors: { origin: process.env.FRONTEND_URL || '*', credentials: true }
+    cors: {
+        origin: (origin, callback) => {
+            if (!origin || socketAllowedOrigins.includes(origin) || /^https:\/\/[a-z0-9-]+\.github\.io$/i.test(origin)) {
+                return callback(null, true);
+            }
+            console.warn(`[Socket.IO CORS] Blocked origin: ${origin}`);
+            return callback(null, false);
+        },
+        credentials: true,
+        methods: ['GET', 'POST']
+    }
 });
 global.io = io;
 

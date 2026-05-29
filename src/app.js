@@ -45,6 +45,7 @@ const tutorRoutes = require('./routes/tutorRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const compatibilityRoutes = require('./routes/compatibilityRoutes');
 const feeStructureRoutes = require('./routes/feeStructureRoutes');
+const ownerHardeningRoutes = require('./routes/ownerHardeningRoutes');
 const { routeAwareApiLimiter } = require('./middleware/productionRateLimits');
 const { requestContext, productionErrorHandler } = require('./middleware/requestContext');
 const { ensureRuntimeSchema } = require('./utils/schemaSafety');
@@ -55,20 +56,47 @@ const app = express();
 app.use(requestContext);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
-const allowedOrigins = (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || '')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
-app.use(cors({
+// CORS must run before all /api routes and before rate limits.
+// Do not rely only on FRONTEND_URL because production may use shuleai.live, www,
+// GitHub Pages preview domains, or local dev during emergency testing.
+const builtInAllowedOrigins = [
+  'https://shuleai.live',
+  'https://www.shuleai.live',
+  'https://lumumbaian22-stack.github.io',
+  'https://shuleaiinfo-cmd.github.io',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5500'
+];
+
+const allowedOrigins = Array.from(new Set([
+  ...builtInAllowedOrigins,
+  ...(process.env.CORS_ORIGINS || '').split(','),
+  ...(process.env.FRONTEND_URL || '').split(',')
+].map((origin) => String(origin || '').trim()).filter(Boolean)));
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  // Allow GitHub Pages preview/user pages without opening CORS to all origins.
+  if (/^https:\/\/[a-z0-9-]+\.github\.io$/i.test(origin)) return true;
+  return false;
+}
+
+const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (!allowedOrigins.length || allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error('Origin not allowed by CORS'));
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    console.warn(`[CORS] Blocked origin: ${origin}`);
+    return callback(null, false);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Route-aware limits: strict for auth/uploads/writes, generous for dashboard reads.
 app.use('/api', routeAwareApiLimiter);
@@ -253,6 +281,7 @@ app.use('/api/tutor', tutorRoutes);
 app.use('/api/payments', paymentRoutes);
 // National rollout completion routes fill missing school-operations APIs and disable old live-money endpoints.
 app.use('/api', nationalRolloutRoutes);
+app.use('/api/owner', ownerHardeningRoutes);
 app.use('/api/fee-structures', feeStructureRoutes);
 app.use('/api/fees/structures', feeStructureRoutes);
 

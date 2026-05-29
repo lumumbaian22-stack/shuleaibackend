@@ -37,6 +37,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       defaultValue: true
     },
+    mustChangePassword: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    },
+    passwordIssuedAt: DataTypes.DATE,
     preferences: {
       type: DataTypes.JSONB,
       defaultValue: {
@@ -78,7 +83,8 @@ module.exports = (sequelize, DataTypes) => {
       profileImage: this.profileImage,
       schoolCode: this.schoolCode,
       isActive: this.isActive,
-      firstLogin: this.firstLogin
+      firstLogin: this.firstLogin,
+      mustChangePassword: this.mustChangePassword
     };
   };
 

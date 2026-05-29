@@ -1,7 +1,7 @@
 const fs = require('fs');
 const csv = require('csv-parser');
-const { Student, User, Parent, Class, Teacher, AcademicRecord, Attendance } = require('../../models');
 const { generateTemporaryPassword } = require('../../utils/passwords');
+const { Student, User, Parent, Class, Teacher, AcademicRecord, Attendance } = require('../../models');
 class CSVProcessor {
   constructor(schoolCode, userId) {
     this.schoolCode = schoolCode;
@@ -93,11 +93,14 @@ class CSVProcessor {
                   parentUser = await User.create({
                     name: `Parent of ${name}`,
                     email: parentEmail,
-                    password: 'Parent123!',
+                    password: generateTemporaryPassword(),
                     role: 'parent',
                     phone: parentPhone,
                     schoolCode: this.schoolCode,
-                    isActive: true
+                    isActive: true,
+                    firstLogin: true,
+                    mustChangePassword: true,
+                    passwordIssuedAt: new Date()
                   });
                   parent = await Parent.create({
                     userId: parentUser.id,
