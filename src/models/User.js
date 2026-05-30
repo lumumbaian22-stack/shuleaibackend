@@ -80,7 +80,7 @@ module.exports = (sequelize, DataTypes) => {
       email: this.email,
       role: this.role,
       phone: this.phone,
-      profileImage: this.profileImage,
+      profileImage: this.preferences?.profileImageDataUrl || this.profileImage,
       schoolCode: this.schoolCode,
       isActive: this.isActive,
       firstLogin: this.firstLogin,

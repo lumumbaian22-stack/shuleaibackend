@@ -1,6 +1,88 @@
 const { sequelize, School, User, Student, Teacher, Parent, Class, Alert } = require('../models');
+const path = require('path');
 const { getRoleAnalytics } = require('../services/ownerAnalyticsEngine');
 const { generateTemporaryPassword } = require('../utils/passwords');
+
+
+const BRAND_COLOR_PRESETS = {
+  'Shule Blue': { primaryColor: '#083A85', accentColor: '#11B5B1' },
+  'Royal Blue': { primaryColor: '#0B2F6B', accentColor: '#3B82F6' },
+  'Emerald Green': { primaryColor: '#047857', accentColor: '#10B981' },
+  'Purple': { primaryColor: '#6D28D9', accentColor: '#A78BFA' },
+  'Orange': { primaryColor: '#C2410C', accentColor: '#FB923C' },
+  'Red': { primaryColor: '#B91C1C', accentColor: '#F87171' },
+  'Gold': { primaryColor: '#92400E', accentColor: '#FBBF24' },
+  'Slate': { primaryColor: '#334155', accentColor: '#64748B' }
+};
+
+function normalizeColorName(name) {
+  const value = String(name || '').trim();
+  return BRAND_COLOR_PRESETS[value] ? value : 'Shule Blue';
+}
+
+function resolveColors(colorName, primaryColor, accentColor) {
+  const safeName = normalizeColorName(colorName);
+  const preset = BRAND_COLOR_PRESETS[safeName] || BRAND_COLOR_PRESETS['Shule Blue'];
+  return {
+    colorName: safeName,
+    primaryColor: /^#[0-9a-f]{6}$/i.test(String(primaryColor || '')) ? primaryColor : preset.primaryColor,
+    accentColor: /^#[0-9a-f]{6}$/i.test(String(accentColor || '')) ? accentColor : preset.accentColor
+  };
+}
+
+function publicBrandingPayload(school) {
+  const branding = school?.settings?.branding || {};
+  const colors = resolveColors(branding.colorName, branding.primaryColor, branding.accentColor);
+  const logo = branding.logoDataUrl || branding.logoUrl || branding.logo || null;
+  return {
+    schoolId: school.schoolId,
+    name: school.name,
+    schoolName: branding.schoolName || school.name,
+    displayName: branding.schoolName || school.name,
+    logo,
+    logoUrl: branding.logoUrl || null,
+    logoDataUrl: branding.logoDataUrl || null,
+    logoSource: branding.logoDataUrl ? 'upload' : (branding.logoUrl ? 'url' : 'fallback'),
+    colorName: colors.colorName,
+    primaryColor: colors.primaryColor,
+    accentColor: colors.accentColor,
+    reportFooter: branding.reportFooter || '',
+    paymentInstructions: branding.paymentInstructions || '',
+    updatedAt: branding.updatedAt || school.updatedAt
+  };
+}
+
+function extractUploadedFile(req) {
+  return req.files?.logo || req.files?.file || req.files?.image || null;
+}
+
+async function fileToDataUrl(file) {
+  const mime = file.mimetype || file.type || 'image/png';
+  const originalName = file.name || file.originalname || 'logo.png';
+  const ext = path.extname(originalName).toLowerCase();
+  if (!/^image\/(png|jpe?g|webp|gif|svg\+xml)$/.test(mime) && !['.png','.jpg','.jpeg','.webp','.gif','.svg'].includes(ext)) {
+    const err = new Error('Only image files are allowed for school logos');
+    err.statusCode = 400;
+    throw err;
+  }
+  const size = Number(file.size || 0);
+  if (size > 1024 * 1024) {
+    const err = new Error('Logo is too large. Please upload an image under 1MB.');
+    err.statusCode = 400;
+    throw err;
+  }
+  let buffer;
+  if (file.data) buffer = Buffer.from(file.data);
+  else if (file.tempFilePath) buffer = await require('fs').promises.readFile(file.tempFilePath);
+  else if (file.path) buffer = await require('fs').promises.readFile(file.path);
+  else if (file.buffer) buffer = Buffer.from(file.buffer);
+  else {
+    const err = new Error('Unsupported logo upload object');
+    err.statusCode = 400;
+    throw err;
+  }
+  return `data:${mime};base64,${buffer.toString('base64')}`;
+}
 
 exports.getOwnerAnalytics = async (req, res) => {
   try {
@@ -19,8 +101,7 @@ exports.getSchoolBranding = async (req, res) => {
     if (req.user.role !== 'super_admin' && schoolCode !== req.user.schoolCode) return res.status(403).json({ success: false, message: 'Cross-school branding access blocked' });
     const school = await School.findOne({ where: { schoolId: schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
-    const branding = school.settings?.branding || {};
-    return res.json({ success: true, data: { schoolId: school.schoolId, name: school.name, logo: branding.logo || null, primaryColor: branding.primaryColor || '#083A85', accentColor: branding.accentColor || '#11B5B1', reportFooter: branding.reportFooter || '', paymentInstructions: branding.paymentInstructions || '' } });
+    return res.json({ success: true, data: publicBrandingPayload(school) });
   } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
 };
 
@@ -33,12 +114,50 @@ exports.updateSchoolBranding = async (req, res) => {
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
     const current = school.settings || {};
     const branding = { ...(current.branding || {}) };
-    ['logo','primaryColor','accentColor','reportFooter','paymentInstructions'].forEach(k => {
+    const requestedName = String(req.body.schoolName || req.body.name || req.body.displayName || '').trim();
+    if (requestedName) {
+      branding.schoolName = requestedName;
+      await school.update({ name: requestedName });
+    }
+    const colors = resolveColors(req.body.colorName || branding.colorName, req.body.primaryColor || branding.primaryColor, req.body.accentColor || branding.accentColor);
+    branding.colorName = colors.colorName;
+    branding.primaryColor = colors.primaryColor;
+    branding.accentColor = colors.accentColor;
+    if (req.body.logoUrl !== undefined || req.body.logo !== undefined) {
+      const logoUrl = String(req.body.logoUrl || req.body.logo || '').trim();
+      branding.logoUrl = logoUrl;
+      if (logoUrl) delete branding.logoDataUrl;
+    }
+    ['reportFooter','paymentInstructions'].forEach(k => {
       if (req.body[k] !== undefined) branding[k] = String(req.body[k] || '').trim();
     });
+    branding.updatedBy = req.user.id;
+    branding.updatedAt = new Date().toISOString();
     await school.update({ settings: { ...current, branding } });
-    return res.json({ success: true, data: branding, message: 'School branding updated' });
+    return res.json({ success: true, data: publicBrandingPayload(school), message: 'School branding updated' });
   } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
+};
+
+exports.uploadSchoolLogo = async (req, res) => {
+  try {
+    if (!['admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only school admins can upload branding logos' });
+    const schoolCode = req.body.schoolCode || req.query.schoolCode || req.user.schoolCode;
+    if (req.user.role !== 'super_admin' && schoolCode !== req.user.schoolCode) return res.status(403).json({ success: false, message: 'Cross-school logo upload blocked' });
+    const school = await School.findOne({ where: { schoolId: schoolCode } });
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    const file = extractUploadedFile(req);
+    if (!file) return res.status(400).json({ success: false, message: 'No logo file uploaded. Use form field: logo' });
+    const dataUrl = await fileToDataUrl(file);
+    const current = school.settings || {};
+    const branding = { ...(current.branding || {}) };
+    branding.logoDataUrl = dataUrl;
+    branding.logoUrl = '';
+    branding.logoSource = 'upload';
+    branding.updatedBy = req.user.id;
+    branding.updatedAt = new Date().toISOString();
+    await school.update({ settings: { ...current, branding } });
+    return res.json({ success: true, data: publicBrandingPayload(school), message: 'School logo uploaded and saved' });
+  } catch (error) { return res.status(error.statusCode || 500).json({ success: false, message: error.message }); }
 };
 
 exports.getAgentToolkit = async (req, res) => {
