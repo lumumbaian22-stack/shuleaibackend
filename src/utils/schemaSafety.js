@@ -248,15 +248,115 @@ async function ensureSchoolCalendarTable() {
   await addIndexIfMissing('idx_school_calendar_school_date', 'CREATE INDEX idx_school_calendar_school_date ON "SchoolCalendars" ("schoolId", "startDate")', { table: 'SchoolCalendars', columns: ['schoolId', 'startDate'] });
 }
 
+async function ensureV102AccessCurriculumSchema() {
+  // Strict V102/V103 schema bootstrap: this does not fall back to old logic.
+  // It only guarantees the new access/curriculum columns exist before auth/model queries run.
+  await addColumnIfMissing('Schools', 'pilotFullAccessEnabled', 'BOOLEAN DEFAULT false');
+  await addColumnIfMissing('Schools', 'pilotStartedAt', 'TIMESTAMPTZ');
+  await addColumnIfMissing('Schools', 'pilotEndsAt', 'TIMESTAMPTZ');
+  await addColumnIfMissing('Schools', 'pilotEnabledBy', 'INTEGER');
+  await addColumnIfMissing('Schools', 'trialAccessEnabled', 'BOOLEAN DEFAULT false');
+  await addColumnIfMissing('Schools', 'trialStartedAt', 'TIMESTAMPTZ');
+  await addColumnIfMissing('Schools', 'trialEndsAt', 'TIMESTAMPTZ');
+  await addColumnIfMissing('Schools', 'manualPaymentConfirmed', 'BOOLEAN DEFAULT false');
+  await addColumnIfMissing('Schools', 'manualPaymentAmount', 'INTEGER');
+  await addColumnIfMissing('Schools', 'manualPaymentReference', 'VARCHAR(255)');
+  await addColumnIfMissing('Schools', 'manualPaymentConfirmedBy', 'INTEGER');
+  await addColumnIfMissing('Schools', 'manualPaymentConfirmedAt', 'TIMESTAMPTZ');
+  await addColumnIfMissing('Schools', 'subscriptionPlan', "VARCHAR(255) DEFAULT 'free'");
+  await addColumnIfMissing('Schools', 'subscriptionStatus', "VARCHAR(255) DEFAULT 'inactive'");
+  await addColumnIfMissing('Schools', 'subscriptionStartedAt', 'TIMESTAMPTZ');
+  await addColumnIfMissing('Schools', 'subscriptionEndsAt', 'TIMESTAMPTZ');
+  await addColumnIfMissing('Schools', 'accessMode', "VARCHAR(255) DEFAULT 'default'");
+  await addColumnIfMissing('Schools', 'accessStatus', "VARCHAR(255) DEFAULT 'limited'");
+  await addColumnIfMissing('Schools', 'schoolStructure', "VARCHAR(255) DEFAULT 'mixed'");
+  await addColumnIfMissing('Schools', 'enabledLevels', "JSONB DEFAULT '[]'::jsonb");
+  await addColumnIfMissing('Schools', 'curriculumVersion', 'VARCHAR(255)');
+
+  await addColumnIfMissing('Classes', 'curriculum', 'VARCHAR(255)');
+  await addColumnIfMissing('Classes', 'levelCode', 'VARCHAR(255)');
+  await addColumnIfMissing('Classes', 'levelLabel', 'VARCHAR(255)');
+  await addColumnIfMissing('Classes', 'curriculumLevel', 'VARCHAR(255)');
+
+  await addColumnIfMissing('TeacherSubjectAssignments', 'schoolSubjectId', 'VARCHAR(255)');
+  await addColumnIfMissing('TeacherSubjectAssignments', 'curriculum', 'VARCHAR(255)');
+  await addColumnIfMissing('TeacherSubjectAssignments', 'levelCode', 'VARCHAR(255)');
+
+  await createTableIfMissing('SchoolPaymentRequests', `
+    CREATE TABLE IF NOT EXISTS "SchoolPaymentRequests" (
+      "id" SERIAL PRIMARY KEY,
+      "schoolCode" VARCHAR(255) NOT NULL,
+      "submittedBy" INTEGER,
+      "amount" INTEGER NOT NULL DEFAULT 0,
+      "currency" VARCHAR(255) DEFAULT 'KES',
+      "method" VARCHAR(255) DEFAULT 'mpesa',
+      "reference" VARCHAR(255),
+      "paidAt" TIMESTAMPTZ,
+      "notes" TEXT,
+      "proofUrl" TEXT,
+      "requestedPlan" VARCHAR(255) DEFAULT 'growth',
+      "status" VARCHAR(255) DEFAULT 'pending',
+      "reviewedBy" INTEGER,
+      "reviewedAt" TIMESTAMPTZ,
+      "reviewNotes" TEXT,
+      "metadata" JSONB DEFAULT '{}'::jsonb,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+
+  await createTableIfMissing('StudentSubjectSelections', `
+    CREATE TABLE IF NOT EXISTS "StudentSubjectSelections" (
+      "id" SERIAL PRIMARY KEY,
+      "schoolCode" VARCHAR(255) NOT NULL,
+      "studentId" INTEGER NOT NULL,
+      "classId" INTEGER,
+      "subjectId" VARCHAR(255),
+      "subjectName" VARCHAR(255) NOT NULL,
+      "status" VARCHAR(255) DEFAULT 'taking',
+      "pathway" VARCHAR(255),
+      "track" VARCHAR(255),
+      "isCompulsory" BOOLEAN DEFAULT false,
+      "isElective" BOOLEAN DEFAULT true,
+      "requestedBy" INTEGER,
+      "approvedBy" INTEGER,
+      "approvedAt" TIMESTAMPTZ,
+      "metadata" JSONB DEFAULT '{}'::jsonb,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+
+  await createTableIfMissing('PlatformAuditEvents', `
+    CREATE TABLE IF NOT EXISTS "PlatformAuditEvents" (
+      "id" SERIAL PRIMARY KEY,
+      "schoolCode" VARCHAR(255),
+      "actorUserId" INTEGER,
+      "actorRole" VARCHAR(255),
+      "module" VARCHAR(255),
+      "action" VARCHAR(255),
+      "entityType" VARCHAR(255),
+      "entityId" VARCHAR(255),
+      "before" JSONB DEFAULT '{}'::jsonb,
+      "after" JSONB DEFAULT '{}'::jsonb,
+      "metadata" JSONB DEFAULT '{}'::jsonb,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+
+  await addIndexIfMissing('school_payment_requests_school_status_idx', 'CREATE INDEX school_payment_requests_school_status_idx ON "SchoolPaymentRequests" ("schoolCode", "status")', { table: 'SchoolPaymentRequests', columns: ['schoolCode', 'status'] });
+  await addIndexIfMissing('student_subject_selections_scope_idx', 'CREATE INDEX student_subject_selections_scope_idx ON "StudentSubjectSelections" ("schoolCode", "studentId", "classId")', { table: 'StudentSubjectSelections', columns: ['schoolCode', 'studentId', 'classId'] });
+}
+
 async function ensureRuntimeSchema() {
-  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') {
-    console.log('[schemaSafety] Production runtime schema mutation disabled; run migrations instead.');
-    return;
-  }
   if (process.env.DISABLE_SCHEMA_SAFETY === 'true') {
     console.log('[schemaSafety] Disabled by DISABLE_SCHEMA_SAFETY=true');
     return;
   }
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') {
+    console.log('[schemaSafety] Production full runtime schema mutation disabled; applying strict V102 auth/access bootstrap only.');
+    await ensureV102AccessCurriculumSchema();
+    return;
+  }
+  await ensureV102AccessCurriculumSchema();
 
   // V30: hard runtime repair for live Render/Postgres DBs that missed the v29 migration.
   // Sequelize queries "Student" columns with exact quoted camelCase names, so the DB must contain "classId" exactly.
