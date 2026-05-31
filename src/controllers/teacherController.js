@@ -835,16 +835,10 @@ exports.getMyClass = async (req, res) => {
     });
 
     if (!classItem) {
-      if (teacher.classTeacher) {
-        const legacyClass = await Class.findOne({
-          where: { name: teacher.classTeacher, schoolCode: req.user.schoolCode, isActive: true }
-        });
-        if (legacyClass) return res.json({ success: true, data: legacyClass });
-      }
       return res.json({ success: true, data: null });
     }
 
-    const studentCount = await Student.count({ where: { grade: classItem.name } });
+    const studentCount = await Student.unscoped().count({ where: { [Op.or]: [{ classId: classItem.id }, { grade: classItem.name }] }, include: [{ model: User, where: { schoolCode: req.user.schoolCode }, attributes: [] }] });
     const classData = classItem.toJSON();
     classData.studentCount = studentCount;
 
@@ -886,7 +880,7 @@ exports.getMySubjects = async (req, res) => {
       });
     }
 
-    // Also include legacy class teacher class if assigned directly on Teacher/Class.
+    // Include the exact class-teacher assignment from the live class table.
     const classTeacherClasses = await Class.findAll({
       where: { schoolCode: req.user.schoolCode, isActive: true, [Op.or]: [{ teacherId: teacher.id }, { id: teacher.classId || 0 }] }
     });
@@ -1993,4 +1987,157 @@ exports.listClassReportSnapshots = async (req, res) => {
     const rows = await ReportSnapshot.findAll({ where, order:[['year','DESC'],['term','DESC'],['updatedAt','DESC']], limit:300 });
     res.json({ success:true, data: rows.map(r => ({ id:r.id, studentId:r.studentId, term:r.term, year:r.year, curriculum:r.curriculum, publishedAt:r.publishedAt, classId:r.classId || r.metadata?.classId, className:r.metadata?.className, overallAverage:r.snapshot?.overallAverage, overallGrade:r.snapshot?.overallGrade, studentName:r.snapshot?.student?.name })) });
   } catch(error) { console.error('V66K list class reports error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+// ============ V102 LOCKED CURRICULUM-AWARE GRADING + REPORT-CARD ROWS ============
+const v102CurriculumEngine = require('../services/curriculumStructureEngine');
+const v102StudentSubjectSelectionService = require('../services/studentSubjectSelectionService');
+
+async function v102School(schoolCode) {
+  return School.findOne({ where: { schoolId: schoolCode } });
+}
+
+async function v102SelectionsForStudents({ schoolCode, studentIds, classId }) {
+  if (!studentIds.length) return [];
+  const [rows] = await sequelize.query(`
+    SELECT * FROM "StudentSubjectSelections"
+     WHERE "schoolCode" = :schoolCode
+       AND "studentId" IN (:studentIds)
+       AND (:classId::int IS NULL OR "classId" = :classId)
+  `, { replacements:{ schoolCode, studentIds, classId: classId || null } }).catch(() => [[]]);
+  return rows || [];
+}
+
+function v102ShouldShowStudentForSubject({ subject, subjectMeta, selections }) {
+  if (!subject) return true;
+  const match = (selections || []).find(s => String(s.subjectName || '').toLowerCase() === String(subject).toLowerCase());
+  if (match) return !['not_taken','exempted','not_offered','pending_rejected'].includes(String(match.status || '').toLowerCase());
+  // Strict V103 rule: core/compulsory subjects apply to all students by default; electives/pathway subjects require explicit student selection.
+  return !!subjectMeta?.isCore;
+}
+
+exports.getClassStudentsForSubject = async (req, res) => {
+  try {
+    await ensureRuntimeSchema().catch(() => null);
+    const { classId, subject } = req.query;
+    const teacher = await v3Teacher(req.user.id);
+    if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const classItem = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } });
+    if (!classItem) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = await v66CanEnterMarks(teacher, classItem, subject);
+    if (!access.allowed) return res.status(403).json({ success:false, message:'You are not assigned to teach this subject in this class' });
+    const school = await v102School(req.user.schoolCode);
+    const eligibleSubjects = school ? v102CurriculumEngine.getEligibleSubjectsForClass(school, classItem) : [];
+    const subjectMeta = eligibleSubjects.find(s => String(s.name).toLowerCase() === String(subject || '').toLowerCase()) || null;
+    const students = await Student.unscoped().findAll({ where:v66StudentClassWhere(classItem), include:[{ model:User, attributes:['id','name','email'] }], order:[[User,'name','ASC']] });
+    const selections = await v102SelectionsForStudents({ schoolCode:req.user.schoolCode, studentIds:students.map(s => s.id), classId:classItem.id });
+    const anySelectionsForClass = selections.length > 0;
+    const byStudent = new Map();
+    for (const sel of selections) { const key=String(sel.studentId); if (!byStudent.has(key)) byStudent.set(key, []); byStudent.get(key).push(sel); }
+    const formattedStudents = students
+      .filter(s => v102ShouldShowStudentForSubject({ subject, subjectMeta, selections:byStudent.get(String(s.id)) || [] }))
+      .map(s => ({ id:s.id, userId:s.userId, name:s.User?.name || 'Unknown', elimuid:s.elimuid, grade:s.grade, classId:s.classId, subjectStatus:(byStudent.get(String(s.id)) || []).find(x => String(x.subjectName).toLowerCase() === String(subject || '').toLowerCase())?.status || (subjectMeta?.isCore ? 'taking_core' : 'not_selected') }));
+    res.json({ success:true, data:{ classId:classItem.id, className:classItem.name, grade:classItem.grade, subject, subjectMeta, students:formattedStudents, studentCount:formattedStudents.length, selectionMode:'curriculum_strict' } });
+  } catch(error) { console.error('V102 class students for subject error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getClassGradebook = async (req, res) => {
+  try {
+    const { classId, term='Term 1', year=new Date().getFullYear(), assessmentType, assessmentName } = req.query;
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = classId ? await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }) : null;
+    if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = await v66CanEnterMarks(teacher, cls, null);
+    if (!access.isClassTeacher) return res.status(403).json({ success:false, message:'Only the class teacher can review the full class report' });
+    const meta = await v66SchoolMeta(req.user.schoolCode);
+    const school = await v102School(req.user.schoolCode);
+    const students = await Student.unscoped().findAll({ where:v66StudentClassWhere(cls), include:[{ model:User, attributes:['id','name','profileImage'] }], order:[['createdAt','ASC']] });
+    const ids = students.map(s => s.id);
+    const where = { schoolCode:req.user.schoolCode, studentId:{ [Op.in]:ids }, term, year:Number(year) };
+    if (assessmentType) where.assessmentType = assessmentType;
+    if (assessmentName) where.assessmentName = assessmentName;
+    const records = await AcademicRecord.findAll({ where, order:[['subject','ASC'],['assessmentName','ASC'],['createdAt','DESC']] });
+    const eligibleSubjects = school ? v102CurriculumEngine.getEligibleSubjectsForClass(school, cls) : [];
+    const subjects = eligibleSubjects.sort((a,b) => (a.order||99)-(b.order||99) || a.name.localeCompare(b.name));
+    const selections = await v102SelectionsForStudents({ schoolCode:req.user.schoolCode, studentIds:ids, classId:cls.id });
+    const byStudentSel = new Map();
+    for (const sel of selections) { const key=String(sel.studentId); if (!byStudentSel.has(key)) byStudentSel.set(key, []); byStudentSel.get(key).push(sel); }
+    const data = students.map(st => {
+      const recs = records.filter(r => Number(r.studentId) === Number(st.id));
+      const reportRows = v102CurriculumEngine.buildSubjectRowsForReport({ school, classItem:cls, student:st, records:recs, studentSubjectSelections:byStudentSel.get(String(st.id)) || [] });
+      const rowByName = new Map(reportRows.map(r => [String(r.subject).toLowerCase(), r]));
+      const scores = {}; const recordIds = {}; const grades = {}; const statuses = {}; const counted = {};
+      subjects.forEach(sub => {
+        const rows = recs.filter(r => v66JSame(r.subject, sub.name));
+        const rr = rowByName.get(String(sub.name).toLowerCase());
+        scores[sub.name] = rr ? rr.score : (rows.length ? Math.round(rows.reduce((a,b)=>a+Number(b.score||0),0)/rows.length) : null);
+        recordIds[sub.name] = rows[0]?.id || null;
+        grades[sub.name] = scores[sub.name] == null ? null : getGradeFromScore(scores[sub.name], meta.system, meta.level, meta.gradingScale);
+        statuses[sub.name] = rr?.status || (rows.length ? (rows[0].status || 'submitted') : 'Pending');
+        counted[sub.name] = !!rr?.counted;
+      });
+      const summary = v102CurriculumEngine.summarizeReportRows(reportRows);
+      const finalGrade = summary.average == null ? null : getGradeFromScore(summary.average, meta.system, meta.level, meta.gradingScale);
+      return { id:st.id, name:st.User?.name || 'Student', elimuid:st.elimuid, admissionNumber:st.admissionNumber, scores, recordIds, grades, statuses, counted, overallAverage:summary.average, finalGrade, reportRows, missingSubjects:reportRows.filter(r => r.status === 'Pending').map(r => r.subject), notTakenSubjects:reportRows.filter(r => r.status === 'Not Taken').map(r => r.subject) };
+    });
+    res.json({ success:true, data:{ classId:cls.id, className:cls.name, subjects:subjects.map(s => s.name), subjectMeta:subjects, students:data, canPublish:true, curriculum:meta.system, schoolLevel:meta.level, gradingProfile:v102CurriculumEngine.getGradingProfile(meta.system, cls.levelCode || v102CurriculumEngine.levelCodeFromGrade(meta.system, cls.grade || cls.name)), term, year:Number(year) } });
+  } catch(error) { console.error('V102 gradebook error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+async function v102BuildStudentTermReportSnapshot({ student, records, meta, cls, term, year }) {
+  const school = await v102School(cls.schoolCode || meta.school?.schoolId);
+  const selections = await v102StudentSubjectSelectionService.listStudentSubjectSelections({ schoolCode: cls.schoolCode || meta.school?.schoolId, studentId: student.id, classId: cls.id }).catch(() => []);
+  const reportRows = v102CurriculumEngine.buildSubjectRowsForReport({ school, classItem: cls, student, records, studentSubjectSelections: selections });
+  const subjects = reportRows.map(row => {
+    const avg = row.score;
+    return {
+      subject: row.subject,
+      average: avg,
+      grade: avg == null ? null : getGradeFromScore(avg, meta.system, meta.level, meta.gradingScale),
+      status: row.status,
+      counted: row.counted,
+      category: row.category,
+      pathway: row.pathway,
+      track: row.track,
+      assessments: (row.assessments || []).map(r => ({ id:r.id, assessmentType:r.assessmentType, assessmentName:r.assessmentName, score:Number(r.score || 0), grade:r.grade || getGradeFromScore(Number(r.score || 0), meta.system, meta.level, meta.gradingScale), remarks:r.remarks || '', teacherId:r.teacherId, date:r.date, status:r.status || (r.isPublished ? 'published' : 'draft') }))
+    };
+  });
+  const summary = v102CurriculumEngine.summarizeReportRows(reportRows);
+  return {
+    student: { id:student.id, name:student.User?.name || student.name || 'Student', elimuid:student.elimuid || null, admissionNumber:student.admissionNumber || null, grade:student.grade || cls?.name || null, classId:cls?.id || student.classId || null, className:cls?.name || student.grade || null },
+    class: cls ? { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream, curriculum:cls.curriculum, levelCode:cls.levelCode, curriculumLevel:cls.curriculumLevel } : null,
+    term, year:Number(year), curriculum:meta.system, schoolLevel:meta.level, gradingProfile:v102CurriculumEngine.getGradingProfile(meta.system, cls.levelCode || v102CurriculumEngine.levelCodeFromGrade(meta.system, cls.grade || cls.name)), subjects, reportRows, totalMarks:summary.totalMarks, countedSubjects:summary.countedSubjects, pendingSubjects:summary.pendingSubjects, notTakenSubjects:summary.notTakenSubjects, overallAverage:summary.average, overallGrade:summary.average == null ? null : getGradeFromScore(summary.average, meta.system, meta.level, meta.gradingScale), generatedAt:new Date().toISOString(), analyticsReady:true, calculationRule:'Only valid completed subjects the student is taking are counted. Pending/null, Not Taken, Not Offered, and Exempted subjects are not counted.'
+  };
+}
+
+exports.publishMarks = async (req,res) => {
+  try {
+    const { classId, term='Term 1', year=new Date().getFullYear(), assessmentType, assessmentName } = req.body;
+    const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const access = await v66CanEnterMarks(teacher, cls, null);
+    if (!access.isClassTeacher) return res.status(403).json({ success:false, message:'Only the class teacher can publish final marks for this class' });
+    const students = await Student.unscoped().findAll({ where:v66StudentClassWhere(cls), include:[{ model:User, attributes:['id','name','profileImage'] }], order:[['createdAt','ASC']] });
+    const ids = students.map(s=>s.id);
+    const where = { schoolCode:req.user.schoolCode, studentId:{ [Op.in]:ids }, term, year:Number(year), status:{ [Op.ne]:'locked' } };
+    if (assessmentType) where.assessmentType = assessmentType;
+    if (assessmentName) where.assessmentName = assessmentName;
+    const now = new Date();
+    const [count] = await AcademicRecord.update({ isPublished:true, status:'published', publishedAt:now, publishedBy:req.user.id }, { where });
+    const meta = await v66SchoolMeta(req.user.schoolCode);
+    let snapshots = 0;
+    for (const st of students) {
+      const studentRecords = await AcademicRecord.findAll({ where:{ ...where, studentId:st.id }, order:[['subject','ASC'],['assessmentName','ASC']] });
+      const snapshot = await v102BuildStudentTermReportSnapshot({ student:st, records:studentRecords, meta, cls, term, year:Number(year) });
+      const sourceRecordIds = studentRecords.map(r => r.id);
+      const checksum = v66KChecksum(snapshot);
+      const [row, created] = await ReportSnapshot.findOrCreate({
+        where:{ schoolCode:req.user.schoolCode, studentId:st.id, term, year:Number(year), reportType:'academic' },
+        defaults:{ schoolCode:req.user.schoolCode, studentId:st.id, classId:cls.id, term, year:Number(year), curriculum:meta.system, reportType:'academic', status:'published', generatedBy:req.user.id, publishedBy:req.user.id, publishedAt:now, snapshot, sourceRecordIds, checksum, metadata:{ classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v102_curriculum_report_card' } }
+      });
+      if (!created) await row.update({ classId:cls.id, curriculum:meta.system, status:'published', generatedBy:req.user.id, publishedBy:req.user.id, publishedAt:now, snapshot, sourceRecordIds, checksum, metadata:{ ...(row.metadata || {}), classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v102_curriculum_report_card' } });
+      snapshots++;
+    }
+    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. ${snapshots} curriculum-aware report card(s) saved.`, data:{ count, snapshots, classId:cls.id, term, year:Number(year), engine:'v102_curriculum_report_card' } });
+  } catch(error) { console.error('V102 publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
 };

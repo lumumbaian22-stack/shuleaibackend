@@ -176,8 +176,14 @@ exports.getDashboard = async (req, res) => {
         paymentStatus: student.paymentStatus,
         classId: classItem?.id || null,
         school: {
+            name: school?.name || null,
+            schoolName: school?.name || null,
+            schoolCode: req.user.schoolCode,
             curriculum,
-            schoolLevel
+            system: curriculum,
+            schoolLevel,
+            logo: school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null,
+            branding: school?.settings?.branding || {}
         }
       }
     });
@@ -572,8 +578,17 @@ exports.getStudentFullDetails = async (req, res) => {
             }
         } else if (user.role === 'parent') {
             const parent = await Parent.findOne({ where: { userId: user.id } });
-            if (parent && await parent.hasStudent(student)) {
-                authorized = true;
+            if (parent) {
+                try {
+                    if (typeof parent.hasStudent === 'function' && await parent.hasStudent(student)) authorized = true;
+                } catch (_) {}
+                if (!authorized) {
+                    const linked = await sequelize.query(
+                        'SELECT 1 FROM "StudentParents" WHERE "parentId" = :parentId AND "studentId" = :studentId LIMIT 1',
+                        { replacements: { parentId: parent.id, studentId: student.id }, type: sequelize.QueryTypes.SELECT }
+                    ).catch(() => []);
+                    authorized = linked.length > 0;
+                }
             }
         } else if (user.role === 'student') {
             if (student.userId === user.id) {
@@ -618,7 +633,7 @@ exports.getStudentFullDetails = async (req, res) => {
 
         // Academic records (only published)
         const records = await AcademicRecord.findAll({
-            where: { studentId, schoolCode: student.User?.schoolCode || user.schoolCode, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
+            where: { studentId: student.id, schoolCode: student.User?.schoolCode || user.schoolCode, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
             order: [['year', 'DESC'], ['term', 'DESC'], ['date', 'DESC']]
         });
         const overallAverage = records.length
@@ -653,7 +668,7 @@ exports.getStudentFullDetails = async (req, res) => {
         }
 
         // Attendance summary
-        const attendance = await Attendance.findAll({ where: { studentId } });
+        const attendance = await Attendance.findAll({ where: { studentId: student.id, schoolCode: student.User?.schoolCode || user.schoolCode } });
         const present = attendance.filter(a => a.status === 'present').length;
         const absent = attendance.filter(a => a.status === 'absent').length;
         const late = attendance.filter(a => a.status === 'late').length;
@@ -716,9 +731,12 @@ exports.getStudentFullDetails = async (req, res) => {
                 school: {
                     name: school?.name || null,
                     schoolName: school?.name || null,
+                    schoolCode: student.User?.schoolCode || user.schoolCode,
                     curriculum,
                     system: curriculum,
-                    schoolLevel
+                    schoolLevel,
+                    logo: school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null,
+                    branding: school?.settings?.branding || {}
                 }
             }
         });
@@ -754,6 +772,46 @@ function v87CareerCategories(name){
   return ['General Career'];
 }
 async function v87StudentForReq(req){ return Student.findOne({ where:{ userId:req.user.id }, include:[{model:User, attributes:['id','name','schoolCode'], required:true, where:{schoolCode:req.user.schoolCode}}] }); }
+
+function v101CareerJoin(items, fallback='career subjects'){
+  const clean=[...new Set((items||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!clean.length) return fallback;
+  if(clean.length===1) return clean[0];
+  if(clean.length===2) return `${clean[0]} and ${clean[1]}`;
+  return `${clean.slice(0,-1).join(', ')} and ${clean[clean.length-1]}`;
+}
+function v101CareerAlertCopy({ role='student', studentName='the learner', careerName='this career path', subjects=[], strengths=[], focus=[] }){
+  const subjectBridge=v101CareerJoin(subjects.slice(0,3), 'the subjects connected to this dream');
+  const focusBridge=v101CareerJoin(focus.slice(0,3), subjectBridge);
+  const strengthBridge=v101CareerJoin(strengths.slice(0,2), 'the progress already visible');
+  const career=String(careerName || 'this career path').trim() || 'this career path';
+  const learner=String(studentName || 'the learner').trim() || 'the learner';
+  if(role === 'parent'){
+    return {
+      title:'AI Career Compass',
+      message:`${learner} is exploring ${career}. Shule AI recommends a light support plan: encourage curiosity, celebrate effort, and support steady practice in ${subjectBridge}. The goal is guidance, not pressure.`,
+      categoryLabel:'AI Career Guide',
+      sourceLabel:'Shule AI Career Coach',
+      actionLabel:'View Child Progress'
+    };
+  }
+  if(role === 'teacher'){
+    return {
+      title:'AI Career Coaching Nudge',
+      message:`${learner} is exploring ${career}. A short class example, project idea, or encouraging word around ${subjectBridge} can help this path feel real and reachable.`,
+      categoryLabel:'AI Career Guide',
+      sourceLabel:'Shule AI Career Coach',
+      actionLabel:'View Student Progress'
+    };
+  }
+  return {
+    title:'AI Career Compass',
+    message:`You are exploring ${career}. Shule AI is turning that dream into simple next steps: grow ${focusBridge} and keep building ${strengthBridge}. This is not a final decision — it is a path you can keep shaping.`,
+    categoryLabel:'AI Career Guide',
+    sourceLabel:'Shule AI Career Coach',
+    actionLabel:'Open Career Compass'
+  };
+}
 exports.getCareerOptions = async (req,res) => {
   try{
     const q=String(req.query.q||'').toLowerCase().trim();
@@ -793,16 +851,17 @@ exports.generateCareerInsights = async (req,res) => {
     for(const c of careers.slice(0,4)){
       const subjects=v87CareerSubjects(c.careerName); const strengths=[]; const focus=[];
       subjects.forEach(sub=>{ const rows=avgBySubject[sub]||[]; const avg=rows.length?Math.round(rows.reduce((a,b)=>a+b,0)/rows.length):null; if(avg===null) focus.push(sub); else if(avg>=70) strengths.push(sub); else focus.push(sub); });
-      const message=`You selected ${c.careerName}. Focus on ${focus.slice(0,3).join(', ') || 'consistent study'} while building on ${strengths.slice(0,2).join(', ') || 'your current strengths'}.`;
+      const studentCopy=v101CareerAlertCopy({ role:'student', studentName:student.User?.name || 'You', careerName:c.careerName, subjects, strengths, focus });
       const dedupeKey=`career:${student.id}:${c.careerId}:${new Date().toISOString().slice(0,10)}`;
-      const [alert]=await Alert.findOrCreate({ where:{ userId:req.user.id, dedupeKey }, defaults:{ userId:req.user.id, role:'student', type:'career', severity:'info', title:'Shule AI Career Insight', message, categoryLabel:'Career', sourceType:'analytics_engine', sourceLabel:'Shule AI Insight', targetRole:'student', targetUserId:req.user.id, studentId:student.id, priority:'normal', dedupeKey, actionLabel:'View Career Path', actionUrl:'#career-path', data:{career:c.careerName, subjects} } });
+      const [alert]=await Alert.findOrCreate({ where:{ userId:req.user.id, dedupeKey }, defaults:{ userId:req.user.id, role:'student', type:'career', severity:'info', title:studentCopy.title, message:studentCopy.message, categoryLabel:studentCopy.categoryLabel, sourceType:'ai_career_compass', sourceLabel:studentCopy.sourceLabel, targetRole:'student', targetUserId:req.user.id, studentId:student.id, priority:'normal', dedupeKey, actionLabel:studentCopy.actionLabel, actionUrl:'#career-path', data:{career:c.careerName, subjects, focusSubjects:focus, strengthSubjects:strengths, aiTone:'career_compass_v101'} } });
       alerts.push(alert);
       // Also notify linked parents with a parent-friendly version, without mixing siblings.
       const [parents]=await sequelize.query('SELECT p."userId" FROM "StudentParents" sp JOIN "Parents" p ON p."id"=sp."parentId" WHERE sp."studentId"=:studentId', { replacements:{ studentId:student.id } });
       for (const pr of parents || []) {
         if (!pr.userId) continue;
         const parentKey=`parent:${dedupeKey}:${pr.userId}`;
-        await Alert.findOrCreate({ where:{ userId:pr.userId, dedupeKey:parentKey }, defaults:{ userId:pr.userId, role:'parent', type:'career', severity:'info', title:'Shule AI Career Insight', message:`${student.User?.name || 'Your child'} is interested in ${c.careerName}. Encourage focus on ${subjects.slice(0,3).join(', ')}.`, categoryLabel:'Career', sourceType:'analytics_engine', sourceLabel:'Shule AI Insight', targetRole:'parent', targetUserId:pr.userId, studentId:student.id, priority:'normal', dedupeKey:parentKey, actionLabel:'View Child Progress', actionUrl:'#progress', data:{career:c.careerName, subjects, studentId:student.id} } });
+        const parentCopy=v101CareerAlertCopy({ role:'parent', studentName:student.User?.name || 'Your child', careerName:c.careerName, subjects, strengths, focus });
+        await Alert.findOrCreate({ where:{ userId:pr.userId, dedupeKey:parentKey }, defaults:{ userId:pr.userId, role:'parent', type:'career', severity:'info', title:parentCopy.title, message:parentCopy.message, categoryLabel:parentCopy.categoryLabel, sourceType:'ai_career_compass', sourceLabel:parentCopy.sourceLabel, targetRole:'parent', targetUserId:pr.userId, studentId:student.id, priority:'normal', dedupeKey:parentKey, actionLabel:parentCopy.actionLabel, actionUrl:'#progress', data:{career:c.careerName, subjects, focusSubjects:focus, strengthSubjects:strengths, studentId:student.id, aiTone:'career_compass_v101'} } });
       }
       // V97: Notify ONLY teachers who teach one of the career-required subjects in this student's class.
       // Do NOT notify admins, unrelated teachers, or general class viewers for child-specific career choices.
@@ -829,7 +888,8 @@ exports.generateCareerInsights = async (req,res) => {
       for (const t of teacherRows || []) {
         if (!t.userId) continue;
         const teacherKey=`teacher:${dedupeKey}:${t.userId}`;
-        await Alert.findOrCreate({ where:{ userId:t.userId, dedupeKey:teacherKey }, defaults:{ userId:t.userId, role:'teacher', type:'career', severity:'info', title:'Shule AI Career Guidance Insight', message:`${student.User?.name || 'A student'} is interested in ${c.careerName}. Support alignment through ${subjects.slice(0,3).join(', ')}.`, categoryLabel:'Career', sourceType:'analytics_engine', sourceLabel:'Shule AI Insight', targetRole:'teacher', targetUserId:t.userId, studentId:student.id, priority:'normal', dedupeKey:teacherKey, actionLabel:'View Student Progress', actionUrl:'#my-students', data:{career:c.careerName, subjects, studentId:student.id, classId:student.classId, teacherScope:'career_subject_teacher_only'} } });
+        const teacherCopy=v101CareerAlertCopy({ role:'teacher', studentName:student.User?.name || 'A student', careerName:c.careerName, subjects, strengths, focus });
+        await Alert.findOrCreate({ where:{ userId:t.userId, dedupeKey:teacherKey }, defaults:{ userId:t.userId, role:'teacher', type:'career', severity:'info', title:teacherCopy.title, message:teacherCopy.message, categoryLabel:teacherCopy.categoryLabel, sourceType:'ai_career_compass', sourceLabel:teacherCopy.sourceLabel, targetRole:'teacher', targetUserId:t.userId, studentId:student.id, priority:'normal', dedupeKey:teacherKey, actionLabel:teacherCopy.actionLabel, actionUrl:'#my-students', data:{career:c.careerName, subjects, focusSubjects:focus, strengthSubjects:strengths, studentId:student.id, classId:student.classId, teacherScope:'career_subject_teacher_only', aiTone:'career_compass_v101'} } });
       }
     }
     res.json({success:true,message:'Career insights generated.',data:alerts});

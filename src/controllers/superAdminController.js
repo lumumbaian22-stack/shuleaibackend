@@ -1375,3 +1375,167 @@ exports.updateSubscriptionPlan = async (req, res) => {
   await plan.update({ price_kes: price, features });
   res.json({ success: true, data: plan });
 };
+
+// ============ V102 PILOT/TRIAL/PAID ACCESS + PRIVATE SCHOOL DETAIL ============
+const { computeSchoolAccess } = require('../services/schoolAccessEngine');
+const curriculumStructureEngine = require('../services/curriculumStructureEngine');
+
+async function v102Audit({ schoolCode=null, actorUserId=null, actorRole='super_admin', module, action, entityType, entityId, before={}, after={}, metadata={} }) {
+  await sequelize.query(`
+    INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","actorRole","module","action","entityType","entityId","before","after","metadata","createdAt","updatedAt")
+    VALUES (:schoolCode,:actorUserId,:actorRole,:module,:action,:entityType,:entityId,:before,:after,:metadata,NOW(),NOW())
+  `, { replacements:{ schoolCode, actorUserId, actorRole, module, action, entityType, entityId:String(entityId || ''), before:JSON.stringify(before || {}), after:JSON.stringify(after || {}), metadata:JSON.stringify(metadata || {}) } }).catch(() => null);
+}
+
+async function v102RecalculateSchoolAccess(school) {
+  const access = computeSchoolAccess(school);
+  school.accessMode = access.accessMode;
+  school.accessStatus = access.accessStatus;
+  await school.save();
+  return access;
+}
+
+exports.getSchoolPrivateDetail = async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const school = await School.findByPk(schoolId, {
+      include: [{ model: User, as: 'admins', attributes:['id','name','email','phone','isActive'], required:false }]
+    });
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const schoolCode = school.schoolId;
+    const [studentCount, teacherCount, parentCount, classCount, subjectRows, paymentRequests] = await Promise.all([
+      Student.count({ include:[{ model:User, where:{ schoolCode, role:'student' } }] }),
+      Teacher.count({ include:[{ model:User, where:{ schoolCode, role:'teacher' } }] }),
+      Parent.count({ include:[{ model:User, where:{ schoolCode, role:'parent' } }] }),
+      sequelize.models.Class ? sequelize.models.Class.count({ where:{ schoolCode, isActive:true } }).catch(() => 0) : Promise.resolve(0),
+      sequelize.query(`SELECT COUNT(*)::int AS count FROM "TeacherSubjectAssignments" tsa JOIN "Classes" c ON c.id = tsa."classId" WHERE c."schoolCode" = :schoolCode`, { replacements:{ schoolCode } }).then(([r]) => Number(r?.[0]?.count || 0)).catch(() => 0),
+      sequelize.query(`SELECT * FROM "SchoolPaymentRequests" WHERE "schoolCode" = :schoolCode ORDER BY "createdAt" DESC LIMIT 20`, { replacements:{ schoolCode } }).then(([r]) => r).catch(() => [])
+    ]);
+    const access = await v102RecalculateSchoolAccess(school);
+    const cfg = curriculumStructureEngine.getCurriculumConfig(school);
+    const levelCount = curriculumStructureEngine.getAllowedLevelsForSchool(school).length;
+    const setupSteps = [
+      !!school.status && school.status !== 'pending',
+      !!cfg.curriculum,
+      levelCount > 0,
+      (cfg.schoolSubjects || []).length > 0,
+      classCount > 0,
+      teacherCount > 0,
+      studentCount > 0,
+      !!school.settings?.branding?.logoUrl || !!school.settings?.logoUrl || !!school.settings?.schoolLogo
+    ];
+    const setupProgress = Math.round((setupSteps.filter(Boolean).length / setupSteps.length) * 100);
+    res.json({ success:true, data:{
+      school: { ...school.toJSON(), access },
+      privateStats: { students:studentCount, teachers:teacherCount, parents:parentCount, classes:classCount, subjects:subjectRows, setupProgress },
+      curriculum: { config:cfg, levels:curriculumStructureEngine.getAllowedLevelsForSchool(school), schoolSubjects:cfg.schoolSubjects || [] },
+      paymentRequests
+    }});
+  } catch(error) { console.error('V102 school private detail error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.updateSchoolAccessControls = async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const school = await School.findByPk(schoolId);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const before = school.toJSON();
+    const body = req.body || {};
+    const boolFields = ['pilotFullAccessEnabled','trialAccessEnabled','manualPaymentConfirmed'];
+    for (const field of boolFields) if (body[field] !== undefined) school[field] = !!body[field];
+    if (body.pilotFullAccessEnabled === true && !school.pilotStartedAt) school.pilotStartedAt = new Date();
+    if (body.pilotEndsAt !== undefined) school.pilotEndsAt = body.pilotEndsAt || null;
+    if (body.pilotFullAccessEnabled !== undefined) school.pilotEnabledBy = req.user.id;
+    if (body.trialAccessEnabled === true && !school.trialStartedAt) school.trialStartedAt = new Date();
+    if (body.trialEndsAt !== undefined) school.trialEndsAt = body.trialEndsAt || null;
+    if (body.manualPaymentConfirmed === true) {
+      school.manualPaymentConfirmedBy = req.user.id;
+      school.manualPaymentConfirmedAt = new Date();
+    }
+    if (body.manualPaymentAmount !== undefined) school.manualPaymentAmount = Number(body.manualPaymentAmount || 0);
+    if (body.manualPaymentReference !== undefined) school.manualPaymentReference = body.manualPaymentReference || null;
+    if (body.subscriptionPlan !== undefined) school.subscriptionPlan = body.subscriptionPlan || 'free';
+    if (body.subscriptionStatus !== undefined) school.subscriptionStatus = body.subscriptionStatus || 'inactive';
+    if (body.subscriptionStartedAt !== undefined) school.subscriptionStartedAt = body.subscriptionStartedAt || null;
+    if (body.subscriptionEndsAt !== undefined) school.subscriptionEndsAt = body.subscriptionEndsAt || null;
+    if (body.suspended !== undefined) {
+      school.status = body.suspended ? 'suspended' : 'active';
+      school.isActive = !body.suspended;
+      if (body.suspended) { school.suspendedAt = new Date(); school.suspendedBy = req.user.id; school.suspensionReason = body.suspensionReason || school.suspensionReason || 'Suspended by super admin'; }
+      else { school.reactivatedAt = new Date(); school.reactivatedBy = req.user.id; school.reactivationReason = body.reactivationReason || 'Reactivated by super admin access controls'; }
+    }
+    const access = await v102RecalculateSchoolAccess(school);
+    await v102Audit({ schoolCode:school.schoolId, actorUserId:req.user.id, actorRole:req.user.role, module:'access', action:'school_access_controls_updated', entityType:'School', entityId:school.id, before, after:{ ...school.toJSON(), access } });
+    res.json({ success:true, message:'School access controls updated and recalculated', data:{ school, access } });
+  } catch(error) { console.error('V102 update school access error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getSchoolPaymentRequests = async (req, res) => {
+  try {
+    const status = req.query.status || null;
+    const schoolCode = req.query.schoolCode || null;
+    const where = [];
+    const replacements = {};
+    if (status) { where.push('spr."status" = :status'); replacements.status = status; }
+    if (schoolCode) { where.push('spr."schoolCode" = :schoolCode'); replacements.schoolCode = schoolCode; }
+    const [rows] = await sequelize.query(`
+      SELECT spr.*, s."name" AS "schoolName", s."shortCode" AS "schoolShortCode"
+        FROM "SchoolPaymentRequests" spr
+        LEFT JOIN "Schools" s ON s."schoolId" = spr."schoolCode"
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY spr."createdAt" DESC
+       LIMIT 200
+    `, { replacements });
+    res.json({ success:true, data:rows || [] });
+  } catch(error) { console.error('V102 get payment requests error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.reviewSchoolPaymentRequest = async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const action = String(req.body.action || '').toLowerCase();
+    if (!['approve','reject','more_details'].includes(action)) return res.status(400).json({ success:false, message:'action must be approve, reject, or more_details' });
+    const [rows] = await sequelize.query('SELECT * FROM "SchoolPaymentRequests" WHERE id = :id LIMIT 1', { replacements:{ id:requestId } });
+    const request = rows?.[0];
+    if (!request) return res.status(404).json({ success:false, message:'Payment request not found' });
+    const school = await School.findOne({ where:{ schoolId:request.schoolCode } });
+    if (!school) return res.status(404).json({ success:false, message:'School not found for request' });
+    const status = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'needs_more_details';
+    await sequelize.query(`UPDATE "SchoolPaymentRequests" SET "status"=:status,"reviewedBy"=:reviewedBy,"reviewedAt"=NOW(),"reviewNotes"=:reviewNotes,"updatedAt"=NOW() WHERE id=:id`, { replacements:{ status, reviewedBy:req.user.id, reviewNotes:req.body.reviewNotes || null, id:requestId } });
+    if (action === 'approve') {
+      school.manualPaymentConfirmed = true;
+      school.manualPaymentAmount = Number(req.body.amount || request.amount || 0);
+      school.manualPaymentReference = req.body.reference || request.reference || `manual-${request.id}`;
+      school.manualPaymentConfirmedBy = req.user.id;
+      school.manualPaymentConfirmedAt = new Date();
+      school.subscriptionPlan = req.body.subscriptionPlan || request.requestedPlan || school.subscriptionPlan || 'growth';
+      school.subscriptionStatus = 'active';
+      school.subscriptionStartedAt = school.subscriptionStartedAt || new Date();
+      if (req.body.subscriptionEndsAt) school.subscriptionEndsAt = req.body.subscriptionEndsAt;
+    }
+    const access = await v102RecalculateSchoolAccess(school);
+    await v102Audit({ schoolCode:school.schoolId, actorUserId:req.user.id, actorRole:req.user.role, module:'billing', action:`payment_request_${status}`, entityType:'SchoolPaymentRequest', entityId:requestId, before:request, after:{ status, access } });
+    res.json({ success:true, message:`Payment request ${status}`, data:{ status, school, access } });
+  } catch(error) { console.error('V102 review payment request error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+// Override school listing with computed access summaries but keep same response shape.
+const v102OriginalGetSchools = exports.getSchools;
+exports.getSchools = async (req, res) => {
+  try {
+    const schools = await School.findAll({
+      order: [['createdAt', 'DESC']],
+      include: [{ model: User, as: 'admins', attributes: ['id','name','email','phone','isActive'], required:false }]
+    });
+    const data = await Promise.all(schools.map(async s => {
+      const access = await v102RecalculateSchoolAccess(s).catch(() => computeSchoolAccess(s));
+      const json = s.toJSON();
+      return { ...json, access };
+    }));
+    res.json({ success:true, data });
+  } catch(error) {
+    console.error('V102 get schools error:', error);
+    if (v102OriginalGetSchools) return v102OriginalGetSchools(req, res);
+    res.status(500).json({ success:false, message:error.message });
+  }
+};

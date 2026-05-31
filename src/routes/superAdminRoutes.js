@@ -21,6 +21,12 @@ router.post('/schools/:id/reactivate', superAdminController.reactivateSchool);
 router.put('/schools/:id', superAdminController.updateSchool);
 router.delete('/schools/:id', superAdminController.deleteSchool);
 
+// V102 pilot/trial/manual paid/private school detail controls
+router.get('/schools/:schoolId/detail', superAdminController.getSchoolPrivateDetail);
+router.put('/schools/:schoolId/access-controls', superAdminController.updateSchoolAccessControls);
+router.get('/payment-requests', superAdminController.getSchoolPaymentRequests);
+router.post('/payment-requests/:requestId/review', superAdminController.reviewSchoolPaymentRequest);
+
 // Name change requests
 router.get('/requests', superAdminController.getPendingRequests);
 router.post('/requests/:id/approve', superAdminController.approveRequest);

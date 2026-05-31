@@ -26,6 +26,18 @@ module.exports = (sequelize) => {
     academicYear: {
       type: DataTypes.STRING,
       defaultValue: () => new Date().getFullYear().toString()
+    },
+    schoolSubjectId: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    curriculum: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    levelCode: {
+      type: DataTypes.STRING,
+      allowNull: true
     }
   }, {
     timestamps: true,

@@ -42,6 +42,22 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       defaultValue: new Date().getFullYear().toString()
     },
+    curriculum: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    levelCode: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    levelLabel: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    curriculumLevel: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true

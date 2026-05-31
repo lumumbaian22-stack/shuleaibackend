@@ -69,6 +69,18 @@ router.post('/duty/adjust', dutyController.manualAdjustDuty);
 // School Settings (write – admin only)
 router.put('/settings', adminController.updateSchoolSettings);
 
+// V102 locked curriculum + structure engine
+router.get('/curriculum/setup', adminController.getCurriculumSetup);
+router.put('/curriculum/setup', adminController.updateCurriculumSetup);
+router.get('/curriculum/levels', adminController.getCurriculumLevels);
+router.get('/curriculum/subject-bank', adminController.getCurriculumSubjectBank);
+router.get('/curriculum/school-subjects', adminController.getSchoolSubjects);
+router.put('/curriculum/school-subjects', adminController.saveSchoolSubjects);
+router.get('/curriculum/classes/:classId/subjects', adminController.getEligibleSubjectsForClass);
+router.get('/students/:studentId/subject-selection', adminController.getStudentSubjectSelection);
+router.put('/students/:studentId/subject-selection', adminController.saveStudentSubjectSelection);
+router.post('/billing/payment-confirmation', adminController.submitSchoolPaymentConfirmation);
+
 // Analytics (NEW)
 router.get('/analytics', analyticsController.getAdminAnalytics);
 

@@ -787,3 +787,385 @@ exports.updateStudent = async (req, res) => {
     res.json({ success:true, message:'Student updated successfully', data:student });
   } catch(error) { console.error('V3 update student error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
+
+// ============ V102 LOCKED ACCESS + CURRICULUM STRUCTURE ENGINE ============
+const curriculumEngine = require('../services/curriculumStructureEngine');
+const { listStudentSubjectSelections, replaceStudentSubjectSelections } = require('../services/studentSubjectSelectionService');
+const { sequelize } = require('../models');
+const TeacherSubjectAssignmentModel = require('../models').TeacherSubjectAssignment;
+
+async function v102GetSchool(schoolCode) {
+  return School.findOne({ where: { schoolId: schoolCode } });
+}
+
+function v102BuildCurriculumSettings(school, patch = {}) {
+  const currentSettings = school.settings || {};
+  const currentEngine = currentSettings.curriculumEngine || {};
+  const curriculum = curriculumEngine.normalizeCurriculum(patch.curriculum || currentEngine.curriculum || school.system || 'cbc');
+  const structureType = patch.structureType || patch.schoolStructure || currentEngine.structureType || school.schoolStructure || currentSettings.schoolLevel || 'mixed';
+  const enabledLevels = Array.isArray(patch.enabledLevels) ? patch.enabledLevels : (Array.isArray(currentEngine.enabledLevels) ? currentEngine.enabledLevels : []);
+  const schoolSubjects = Array.isArray(patch.schoolSubjects) ? patch.schoolSubjects : (Array.isArray(currentEngine.schoolSubjects) ? currentEngine.schoolSubjects : []);
+  return {
+    ...currentSettings,
+    schoolStructure: structureType,
+    curriculum,
+    curriculumEngine: {
+      ...currentEngine,
+      curriculum,
+      structureType,
+      enabledLevels,
+      schoolSubjects,
+      seniorSettings: patch.seniorSettings || currentEngine.seniorSettings || {},
+      gradingSettings: patch.gradingSettings || currentEngine.gradingSettings || currentSettings.gradingScale || null,
+      updatedAt: new Date().toISOString()
+    }
+  };
+}
+
+function v102ClassMeta(school, gradeOrName) {
+  const config = curriculumEngine.getCurriculumConfig(school);
+  const validation = curriculumEngine.validateClassLevel(school, gradeOrName);
+  const level = validation.level || (validation.levelCode ? curriculumEngine.getLevelByCode(config.curriculum, validation.levelCode) : null);
+  return { config, validation, level };
+}
+
+async function v102ClassWithScope(classId, schoolCode) {
+  return Class.findOne({ where: { id: parseInt(classId, 10), schoolCode, isActive: true } });
+}
+
+async function v102TeacherWithScope(teacherId, schoolCode) {
+  return Teacher.findOne({ where: { id: parseInt(teacherId, 10) }, include: [{ model: User, where: { schoolCode }, attributes: ['id','name','email','phone'] }] });
+}
+
+function v102SubjectAllowed(school, classItem, subjectName) {
+  const eligible = curriculumEngine.getEligibleSubjectsForClass(school, classItem);
+  const found = eligible.find(s => String(s.name).toLowerCase() === String(subjectName || '').trim().toLowerCase());
+  if (found) return { ok: true, subject: found, eligible };
+  const cfg = curriculumEngine.getCurriculumConfig(school);
+  const needsSetup = !cfg.schoolSubjects.length;
+  return {
+    ok: false,
+    eligible,
+    message: needsSetup
+      ? 'No live school subjects have been saved yet. Open Add Subjects, tick the subjects this school offers under the selected curriculum/structure, then assign subject teachers.'
+      : `${subjectName} is not enabled for ${classItem.name} under this school's curriculum/structure.`
+  };
+}
+
+exports.getSchoolSettings = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    const schoolData = school.toJSON();
+    schoolData.curriculum = curriculumEngine.normalizeCurriculum(school.system || schoolData.curriculum || 'cbc');
+    schoolData.curriculumSetup = {
+      config: curriculumEngine.getCurriculumConfig(school),
+      enabledLevels: curriculumEngine.getAllowedLevelsForSchool(school),
+      subjectCount: curriculumEngine.getSubjectBankForSchool(school).length
+    };
+    res.json({ success: true, data: schoolData });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateSchoolSettings = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    const before = school.toJSON();
+    const patch = req.body || {};
+    const newSettings = v102BuildCurriculumSettings(school, patch);
+    const nextCurriculum = curriculumEngine.normalizeCurriculum(patch.curriculum || school.system);
+    if (patch.curriculum && nextCurriculum !== school.system) {
+      newSettings.curriculumHistory = [
+        ...(Array.isArray((school.settings || {}).curriculumHistory) ? school.settings.curriculumHistory : []),
+        { from: school.system, to: nextCurriculum, changedBy: req.user.id, changedAt: new Date().toISOString(), note: patch.changeReason || 'Curriculum changed by school admin' }
+      ];
+      school.system = nextCurriculum;
+    }
+    if (patch.schoolName) school.name = patch.schoolName;
+    if (patch.schoolStructure || patch.structureType) school.schoolStructure = patch.schoolStructure || patch.structureType;
+    if (Array.isArray(newSettings.curriculumEngine.enabledLevels) && newSettings.curriculumEngine.enabledLevels.length) school.enabledLevels = newSettings.curriculumEngine.enabledLevels;
+    school.settings = { ...newSettings, customSubjects: patch.customSubjects || newSettings.customSubjects || [] };
+    await school.save();
+    await sequelize.query(`INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","actorRole","module","action","entityType","entityId","before","after","createdAt","updatedAt") VALUES (:schoolCode,:actorUserId,:actorRole,'curriculum','school_settings_updated','School',:entityId,:before,:after,NOW(),NOW())`, {
+      replacements: { schoolCode: school.schoolId, actorUserId: req.user.id, actorRole: req.user.role, entityId: String(school.id), before: JSON.stringify({ system: before.system, settings: before.settings }), after: JSON.stringify({ system: school.system, settings: school.settings }) }
+    }).catch(() => null);
+    if (global.io) global.io.to(`school-${school.schoolId}`).emit('curriculum-updated', { curriculum: school.system, curriculumName: getCurriculumName(school.system), timestamp: new Date() });
+    res.json({ success: true, data: { ...school.toJSON(), curriculum: school.system, curriculumSetup: curriculumEngine.getCurriculumConfig(school) } });
+  } catch (error) {
+    console.error('V102 update school settings error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getCurriculumSetup = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    res.json({ success:true, data:{
+      school: { id: school.id, name: school.name, schoolId: school.schoolId, curriculum: school.system, structure: school.schoolStructure },
+      config: curriculumEngine.getCurriculumConfig(school),
+      levels: curriculumEngine.getAllowedLevelsForSchool(school),
+      subjectBank: curriculumEngine.getSubjectBankForSchool(school),
+      gradingProfile: curriculumEngine.getGradingProfile(school.system, null)
+    }});
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.updateCurriculumSetup = async (req, res) => {
+  try {
+    req.body = req.body || {};
+    return exports.updateSchoolSettings(req, res);
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getCurriculumLevels = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const cfg = curriculumEngine.getCurriculumConfig(school);
+    const allLevels = curriculumEngine.getBank(cfg.curriculum).levels;
+    res.json({ success:true, data:{ curriculum:cfg.curriculum, structureType:cfg.structureType, enabledLevels:cfg.enabledLevels, levels:allLevels, allowedLevels:curriculumEngine.getAllowedLevelsForSchool(school) } });
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getCurriculumSubjectBank = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    res.json({ success:true, data:{ config:curriculumEngine.getCurriculumConfig(school), subjects:curriculumEngine.getSubjectBankForSchool(school) } });
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.saveSchoolSubjects = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const selected = Array.isArray(req.body.subjects) ? req.body.subjects : [];
+    const bank = curriculumEngine.getSubjectBankForSchool(school);
+    const byId = new Map(bank.map(s => [s.id, s]));
+    const schoolSubjects = selected.map(item => {
+      const subject = byId.get(item.subjectId || item.id) || item;
+      return {
+        subjectId: subject.id || item.subjectId || null,
+        name: subject.name || item.name || item.subjectName,
+        category: subject.category || item.category || 'custom',
+        levelCodes: subject.levelCodes || item.levelCodes || [],
+        pathway: subject.pathway || item.pathway || null,
+        track: subject.track || item.track || null,
+        isCore: !!(subject.isCore || item.isCore),
+        isOptional: !!(subject.isOptional || item.isOptional),
+        countsInFinalByDefault: item.countsInFinalByDefault !== undefined ? !!item.countsInFinalByDefault : subject.countsInFinalByDefault !== false,
+        isOffered: item.isOffered !== false,
+        savedAt: new Date().toISOString(),
+        savedBy: req.user.id
+      };
+    }).filter(s => s.name);
+    const settings = v102BuildCurriculumSettings(school, { schoolSubjects });
+    school.settings = settings;
+    await school.save();
+    res.json({ success:true, message:`${schoolSubjects.length} school subject(s) saved`, data:{ schoolSubjects } });
+  } catch(error) { console.error('V102 save school subjects error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getSchoolSubjects = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const cfg = curriculumEngine.getCurriculumConfig(school);
+    res.json({ success:true, data:{ subjects:cfg.schoolSubjects, config:cfg } });
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getEligibleSubjectsForClass = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    const classItem = await v102ClassWithScope(req.params.classId, req.user.schoolCode);
+    if (!school || !classItem) return res.status(404).json({ success:false, message:'School or class not found' });
+    const subjects = curriculumEngine.getEligibleSubjectsForClass(school, classItem);
+    res.json({ success:true, data:{ classId:classItem.id, className:classItem.name, grade:classItem.grade, curriculum:school.system, levelCode:curriculumEngine.levelCodeFromGrade(school.system, classItem.grade || classItem.name), subjects } });
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.createClass = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const { name, grade, stream, teacherId } = req.body;
+    const gradeLabel = grade || name;
+    const { config, validation, level } = v102ClassMeta(school, gradeLabel);
+    if (!validation.ok) return res.status(400).json({ success:false, message:validation.message, data:{ allowedLevels:curriculumEngine.getAllowedLevelsForSchool(school) } });
+    const eligibleSubjects = curriculumEngine.getEligibleSubjectsForClass(school, { grade: gradeLabel, name: name || gradeLabel, subjectTeachers: [] });
+    const newClass = await Class.create({
+      name: name || [level?.label || gradeLabel, stream].filter(Boolean).join(' '),
+      grade: gradeLabel,
+      stream: stream || null,
+      schoolCode: req.user.schoolCode,
+      teacherId: teacherId || null,
+      curriculum: config.curriculum,
+      levelCode: validation.levelCode,
+      levelLabel: level?.label || gradeLabel,
+      curriculumLevel: level?.group || null,
+      settings: { ...(req.body.settings || {}), curriculumMeta:{ curriculum:config.curriculum, structureType:config.structureType, levelCode:validation.levelCode, levelLabel:level?.label || gradeLabel, curriculumLevel:level?.group || null }, subjects: eligibleSubjects.map(s => ({ id:s.id, name:s.name, category:s.category, isCore:s.isCore, countsInFinalByDefault:s.countsInFinalByDefault })) }
+    });
+    res.status(201).json({ success:true, data:newClass });
+  } catch(error) { console.error('V102 create class error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.updateClass = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    const classItem = await v102ClassWithScope(req.params.id, req.user.schoolCode);
+    if (!school || !classItem) return res.status(404).json({ success:false, message:'School or class not found' });
+    const { name, grade, stream, teacherId } = req.body;
+    const gradeLabel = grade || classItem.grade || name || classItem.name;
+    const { config, validation, level } = v102ClassMeta(school, gradeLabel);
+    if (!validation.ok) return res.status(400).json({ success:false, message:validation.message, data:{ allowedLevels:curriculumEngine.getAllowedLevelsForSchool(school) } });
+    const fakeClass = { ...classItem.toJSON(), grade:gradeLabel, name:name || classItem.name };
+    const eligibleSubjects = curriculumEngine.getEligibleSubjectsForClass(school, fakeClass);
+    await classItem.update({
+      name: name !== undefined ? name : classItem.name,
+      grade: gradeLabel,
+      stream: stream !== undefined ? stream : classItem.stream,
+      teacherId: teacherId !== undefined ? (teacherId || null) : classItem.teacherId,
+      curriculum: config.curriculum,
+      levelCode: validation.levelCode,
+      levelLabel: level?.label || gradeLabel,
+      curriculumLevel: level?.group || null,
+      settings: { ...(classItem.settings || {}), ...(req.body.settings || {}), curriculumMeta:{ curriculum:config.curriculum, structureType:config.structureType, levelCode:validation.levelCode, levelLabel:level?.label || gradeLabel, curriculumLevel:level?.group || null }, subjects: eligibleSubjects.map(s => ({ id:s.id, name:s.name, category:s.category, isCore:s.isCore, countsInFinalByDefault:s.countsInFinalByDefault })) }
+    });
+    res.json({ success:true, data:classItem });
+  } catch(error) { console.error('V102 update class error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.assignTeacherToClass = async (req, res) => {
+  try {
+    const classItem = await v102ClassWithScope(req.params.id, req.user.schoolCode);
+    if (!classItem) return res.status(404).json({ success:false, message:'Class not found' });
+    const teacher = await v102TeacherWithScope(req.body.teacherId, req.user.schoolCode);
+    if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found in this school' });
+    if (classItem.teacherId && Number(classItem.teacherId) !== Number(teacher.id)) {
+      const old = await Teacher.findByPk(classItem.teacherId);
+      if (old) await old.update({ classId:null, classTeacher:null });
+    }
+    const previous = await Class.findOne({ where: { teacherId: teacher.id, schoolCode: req.user.schoolCode, isActive: true } });
+    if (previous && previous.id !== classItem.id) await previous.update({ teacherId: null });
+    await classItem.update({ teacherId: teacher.id });
+    await teacher.update({ classId: classItem.id, classTeacher: classItem.name });
+    res.json({ success:true, message:`${teacher.User.name} is now class teacher for ${classItem.name}`, data:{ classTeacherLabel:{ teacherId:teacher.id, teacherName:teacher.User.name, assignedClass:classItem.name, classId:classItem.id, curriculum:classItem.curriculum || null, level:classItem.curriculumLevel || classItem.levelLabel || classItem.grade }, class:classItem, teacher } });
+  } catch(error) { console.error('V102 assign class teacher error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+async function v102SaveSubjectAssignment({ school, classItem, teacher, subject, isClassTeacher, adminId }) {
+  const allowed = v102SubjectAllowed(school, classItem, subject);
+  if (!allowed.ok) throw new Error(allowed.message);
+  let list = Array.isArray(classItem.subjectTeachers) ? classItem.subjectTeachers : [];
+  list = list.filter(a => String(a.subject).toLowerCase() !== String(subject).toLowerCase());
+  const row = {
+    id: `${classItem.id}-${teacher.id}-${String(subject).toLowerCase().replace(/\s+/g,'-')}`,
+    teacherId: teacher.id,
+    teacherName: teacher.User?.name || 'Unknown',
+    subject,
+    schoolSubjectId: allowed.subject.id || null,
+    curriculum: school.system,
+    levelCode: classItem.levelCode || curriculumEngine.levelCodeFromGrade(school.system, classItem.grade || classItem.name),
+    isClassTeacher: !!isClassTeacher,
+    assignedAt: new Date().toISOString(),
+    assignedBy: adminId
+  };
+  list.push(row);
+  await classItem.update({ subjectTeachers: list });
+  await TeacherSubjectAssignmentModel.destroy({ where: { classId: classItem.id, subject } }).catch(() => null);
+  await TeacherSubjectAssignmentModel.create({ teacherId: teacher.id, classId: classItem.id, subject, isClassTeacher: !!isClassTeacher, academicYear: classItem.academicYear || String(new Date().getFullYear()), schoolSubjectId: row.schoolSubjectId, curriculum: row.curriculum, levelCode: row.levelCode }).catch(() => null);
+  await teacher.update({ subjects: Array.from(new Set([...(teacher.subjects || []), subject])) });
+  return row;
+}
+
+exports.assignTeacherToSubject = async (req, res) => {
+  try {
+    const { classId, teacherId, subject, isClassTeacher=false } = req.body;
+    if (!classId || !teacherId || !subject) return res.status(400).json({ success:false, message:'classId, teacherId and subject are required' });
+    const school = await v102GetSchool(req.user.schoolCode);
+    const classItem = await v102ClassWithScope(classId, req.user.schoolCode);
+    const teacher = await v102TeacherWithScope(teacherId, req.user.schoolCode);
+    if (!school || !classItem) return res.status(404).json({ success:false, message:'School or class not found' });
+    if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found in this school' });
+    const row = await v102SaveSubjectAssignment({ school, classItem, teacher, subject, isClassTeacher, adminId:req.user.id });
+    if (isClassTeacher) { await classItem.update({ teacherId: teacher.id }); await teacher.update({ classId: classItem.id, classTeacher: classItem.name }); }
+    res.json({ success:true, message:`${teacher.User.name} assigned to ${subject} in ${classItem.name}`, data:row });
+  } catch(error) { console.error('V102 assign subject error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.batchAssignSubjects = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    const classItem = await v102ClassWithScope(req.body.classId, req.user.schoolCode);
+    if (!school || !classItem) return res.status(404).json({ success:false, message:'School or class not found' });
+    const saved=[], errors=[];
+    for (const item of (req.body.assignments || [])) {
+      try {
+        if (!item.teacherId || !item.subject) continue;
+        const teacher = await v102TeacherWithScope(item.teacherId, req.user.schoolCode);
+        if (!teacher) throw new Error('Teacher not found in this school');
+        const row = await v102SaveSubjectAssignment({ school, classItem, teacher, subject:item.subject, isClassTeacher:item.isClassTeacher, adminId:req.user.id });
+        saved.push(row);
+        if (item.isClassTeacher) { await classItem.update({ teacherId: teacher.id }); await teacher.update({ classId: classItem.id, classTeacher: classItem.name }); }
+      } catch(err) { errors.push({ item, error:err.message }); }
+    }
+    res.json({ success: errors.length === 0, message:`${saved.length} assignment(s) saved${errors.length ? `, ${errors.length} failed` : ''}`, data:saved, meta:{ errors } });
+  } catch(error) { console.error('V102 batch subject error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getClassSubjectAssignments = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    const classItem = await v102ClassWithScope(req.params.classId, req.user.schoolCode);
+    if (!school || !classItem) return res.status(404).json({ success:false, message:'School or class not found' });
+    res.json({ success:true, data: classItem.subjectTeachers || [], meta:{ eligibleSubjects: curriculumEngine.getEligibleSubjectsForClass(school, classItem), classTeacherLabel: classItem.teacherId ? { teacherId: classItem.teacherId, assignedClass: classItem.name, curriculum: classItem.curriculum, level: classItem.curriculumLevel || classItem.levelLabel } : null } });
+  } catch(error) { console.error('V102 get subject assignments error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.getStudentSubjectSelection = async (req, res) => {
+  try {
+    const student = await Student.findByPk(req.params.studentId, { include:[{ model: User, attributes:['id','name','schoolCode'] }] });
+    if (!student || student.User?.schoolCode !== req.user.schoolCode) return res.status(404).json({ success:false, message:'Student not found in this school' });
+    const classItem = student.classId ? await v102ClassWithScope(student.classId, req.user.schoolCode) : await Class.findOne({ where:{ schoolCode:req.user.schoolCode, isActive:true, [Op.or]:[{ name:student.grade }, { grade:student.grade }] } });
+    const school = await v102GetSchool(req.user.schoolCode);
+    const eligibleSubjects = classItem ? curriculumEngine.getEligibleSubjectsForClass(school, classItem) : [];
+    const selections = await listStudentSubjectSelections({ schoolCode:req.user.schoolCode, studentId:student.id, classId:classItem?.id || null });
+    res.json({ success:true, data:{ student, class:classItem, eligibleSubjects, selections } });
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.saveStudentSubjectSelection = async (req, res) => {
+  try {
+    const student = await Student.findByPk(req.params.studentId, { include:[{ model: User, attributes:['id','name','schoolCode'] }] });
+    if (!student || student.User?.schoolCode !== req.user.schoolCode) return res.status(404).json({ success:false, message:'Student not found in this school' });
+    const classId = req.body.classId || student.classId || null;
+    const school = await v102GetSchool(req.user.schoolCode);
+    const classItem = classId ? await v102ClassWithScope(classId, req.user.schoolCode) : null;
+    const eligible = classItem ? curriculumEngine.getEligibleSubjectsForClass(school, classItem) : [];
+    const eligibleNames = new Set(eligible.map(s => s.name.toLowerCase()));
+    const subjects = (req.body.subjects || []).filter(s => eligibleNames.has(String(s.subjectName || s.name || s.subject).toLowerCase()));
+    const invalid = (req.body.subjects || []).filter(s => !eligibleNames.has(String(s.subjectName || s.name || s.subject).toLowerCase()));
+    if (invalid.length) return res.status(400).json({ success:false, message:'Some selected subjects are not valid for this student class/curriculum', data:{ invalid, eligibleSubjects:eligible } });
+    const rows = await replaceStudentSubjectSelections({ schoolCode:req.user.schoolCode, studentId:student.id, classId, pathway:req.body.pathway, track:req.body.track, subjects, actorUserId:req.user.id });
+    res.json({ success:true, message:'Student subject selection saved', data:{ selections:rows } });
+  } catch(error) { console.error('V102 save student subject selection error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.submitSchoolPaymentConfirmation = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const { amount, method='mpesa', reference, paidAt, notes, proofUrl, requestedPlan='growth' } = req.body;
+    const [rows] = await sequelize.query(`
+      INSERT INTO "SchoolPaymentRequests" ("schoolCode","submittedBy","amount","method","reference","paidAt","notes","proofUrl","requestedPlan","status","createdAt","updatedAt")
+      VALUES (:schoolCode,:submittedBy,:amount,:method,:reference,:paidAt,:notes,:proofUrl,:requestedPlan,'pending',NOW(),NOW())
+      RETURNING *
+    `, { replacements:{ schoolCode:req.user.schoolCode, submittedBy:req.user.id, amount:Number(amount || 0), method, reference:reference || null, paidAt:paidAt || new Date(), notes:notes || null, proofUrl:proofUrl || null, requestedPlan } });
+    res.status(201).json({ success:true, message:'Payment confirmation submitted for super admin review', data:rows[0] });
+  } catch(error) { console.error('V102 payment confirmation error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
