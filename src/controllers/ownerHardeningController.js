@@ -66,8 +66,8 @@ async function fileToDataUrl(file) {
     throw err;
   }
   const size = Number(file.size || 0);
-  if (size > 1024 * 1024) {
-    const err = new Error('Logo is too large. Please upload an image under 1MB.');
+  if (size > 2 * 1024 * 1024) {
+    const err = new Error('Logo is too large. Please upload an image under 2MB.');
     err.statusCode = 400;
     throw err;
   }
@@ -123,6 +123,14 @@ exports.updateSchoolBranding = async (req, res) => {
     branding.colorName = colors.colorName;
     branding.primaryColor = colors.primaryColor;
     branding.accentColor = colors.accentColor;
+    if (req.body.logoDataUrl !== undefined) {
+      const logoDataUrl = String(req.body.logoDataUrl || '').trim();
+      if (logoDataUrl && /^data:image\/(png|jpe?g|webp|gif|svg\+xml);base64,/i.test(logoDataUrl) && Buffer.byteLength(logoDataUrl, 'utf8') <= 2.8 * 1024 * 1024) {
+        branding.logoDataUrl = logoDataUrl;
+        branding.logoUrl = '';
+        branding.logoSource = 'upload';
+      }
+    }
     if (req.body.logoUrl !== undefined || req.body.logo !== undefined) {
       const logoUrl = String(req.body.logoUrl || req.body.logo || '').trim();
       branding.logoUrl = logoUrl;
