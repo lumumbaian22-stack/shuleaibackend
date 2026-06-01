@@ -22,6 +22,7 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.STRING,
             defaultValue: 'School Administrator'
         },
+        signature: DataTypes.TEXT,
         permissions: {
             type: DataTypes.ARRAY(DataTypes.STRING),
             defaultValue: ['manage_teachers', 'manage_students', 'manage_duty', 'view_reports']

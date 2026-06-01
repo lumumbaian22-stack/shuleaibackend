@@ -348,6 +348,22 @@ async function ensureV102AccessCurriculumSchema() {
       "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
 
+
+  // V108 production bootstrap final stabilization schema alignment: privacy-scoped calendar, platform billing, signatures.
+  await sequelize.query('ALTER TABLE IF EXISTS "Users" ADD COLUMN IF NOT EXISTS "signature" TEXT').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Teachers" ADD COLUMN IF NOT EXISTS "signature" TEXT').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Admins" ADD COLUMN IF NOT EXISTS "signature" TEXT').catch(() => null);
+  await sequelize.query("ALTER TABLE IF EXISTS \"SchoolCalendars\" ADD COLUMN IF NOT EXISTS \"visibility\" VARCHAR(255) DEFAULT 'personal'").catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "createdByUserId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "targetRole" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "targetUserId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query("ALTER TABLE IF EXISTS \"SchoolCalendars\" ADD COLUMN IF NOT EXISTS \"metadata\" JSONB DEFAULT '{}'::jsonb").catch(() => null);
+  await sequelize.query("UPDATE \"SchoolCalendars\" SET \"visibility\" = COALESCE(NULLIF(\"visibility\", ''), NULLIF(\"audience\", ''), CASE WHEN COALESCE(\"isPublic\", false) = true THEN 'whole_school' ELSE 'personal' END) WHERE \"visibility\" IS NULL").catch(() => null);
+  await sequelize.query("ALTER TABLE IF EXISTS \"SchoolPaymentRequests\" ADD COLUMN IF NOT EXISTS \"billingCycle\" VARCHAR(255) DEFAULT 'monthly'").catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolPaymentRequests" ADD COLUMN IF NOT EXISTS "subscriptionStartDate" TIMESTAMPTZ').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolPaymentRequests" ADD COLUMN IF NOT EXISTS "subscriptionEndDate" TIMESTAMPTZ').catch(() => null);
+
   await addIndexIfMissing('school_payment_requests_school_status_idx', 'CREATE INDEX school_payment_requests_school_status_idx ON "SchoolPaymentRequests" ("schoolCode", "status")', { table: 'SchoolPaymentRequests', columns: ['schoolCode', 'status'] });
   await addIndexIfMissing('student_subject_selections_scope_idx', 'CREATE INDEX student_subject_selections_scope_idx ON "StudentSubjectSelections" ("schoolCode", "studentId", "classId")', { table: 'StudentSubjectSelections', columns: ['schoolCode', 'studentId', 'classId'] });
 }
@@ -483,6 +499,22 @@ async function ensureRuntimeSchema() {
   await sequelize.query("ALTER TABLE IF EXISTS \"HomeTasks\" ADD COLUMN IF NOT EXISTS \"studyDiscussionSettings\" JSONB DEFAULT '{}'::jsonb").catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTaskAssignments" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
   await sequelize.query('ALTER TABLE IF EXISTS "HomeTaskAssignments" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+
+
+  // V108 final stabilization schema alignment: privacy-scoped calendar, platform billing, signatures.
+  await sequelize.query('ALTER TABLE IF EXISTS "Users" ADD COLUMN IF NOT EXISTS "signature" TEXT').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Teachers" ADD COLUMN IF NOT EXISTS "signature" TEXT').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Admins" ADD COLUMN IF NOT EXISTS "signature" TEXT').catch(() => null);
+  await sequelize.query("ALTER TABLE IF EXISTS \"SchoolCalendars\" ADD COLUMN IF NOT EXISTS \"visibility\" VARCHAR(255) DEFAULT 'personal'").catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "createdByUserId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "targetRole" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "targetUserId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query("ALTER TABLE IF EXISTS \"SchoolCalendars\" ADD COLUMN IF NOT EXISTS \"metadata\" JSONB DEFAULT '{}'::jsonb").catch(() => null);
+  await sequelize.query("UPDATE \"SchoolCalendars\" SET \"visibility\" = COALESCE(NULLIF(\"visibility\", ''), NULLIF(\"audience\", ''), CASE WHEN COALESCE(\"isPublic\", false) = true THEN 'whole_school' ELSE 'personal' END) WHERE \"visibility\" IS NULL").catch(() => null);
+  await sequelize.query("ALTER TABLE IF EXISTS \"SchoolPaymentRequests\" ADD COLUMN IF NOT EXISTS \"billingCycle\" VARCHAR(255) DEFAULT 'monthly'").catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolPaymentRequests" ADD COLUMN IF NOT EXISTS "subscriptionStartDate" TIMESTAMPTZ').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolPaymentRequests" ADD COLUMN IF NOT EXISTS "subscriptionEndDate" TIMESTAMPTZ').catch(() => null);
 
   console.log('[schemaSafety] Runtime schema check complete');
 }

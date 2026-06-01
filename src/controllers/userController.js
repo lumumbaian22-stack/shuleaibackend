@@ -263,17 +263,16 @@ exports.uploadSignature = async (req, res) => {
         await file.mv(uploadPath);
         
         const signatureUrl = `/uploads/signatures/${fileName}`;
-        
-        // For teachers, store signature in Teacher model
+        await req.user.update({ signature: signatureUrl }).catch(() => null);
         if (req.user.role === 'teacher') {
             const Teacher = require('../models').Teacher;
-            await Teacher.update(
-                { signature: signatureUrl },
-                { where: { userId: req.user.id } }
-            );
+            await Teacher.update({ signature: signatureUrl }, { where: { userId: req.user.id } }).catch(() => null);
         }
-        
-        res.json({ success: true, data: { signatureUrl } });
+        if (req.user.role === 'admin') {
+            const Admin = require('../models').Admin;
+            await Admin.update({ signature: signatureUrl }, { where: { userId: req.user.id } }).catch(() => null);
+        }
+        res.json({ success: true, data: { signatureUrl, signature: signatureUrl } });
     } catch (error) {
         console.error('Signature upload error:', error);
         res.status(500).json({ success: false, message: error.message });

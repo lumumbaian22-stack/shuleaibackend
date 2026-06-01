@@ -28,6 +28,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     profileImage: DataTypes.TEXT,
+    signature: DataTypes.TEXT,
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true
@@ -81,6 +82,7 @@ module.exports = (sequelize, DataTypes) => {
       role: this.role,
       phone: this.phone,
       profileImage: this.preferences?.profileImageDataUrl || this.profileImage,
+      signature: this.signature || null,
       schoolCode: this.schoolCode,
       isActive: this.isActive,
       firstLogin: this.firstLogin,

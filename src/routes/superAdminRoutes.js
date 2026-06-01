@@ -6,6 +6,16 @@ const analyticsController = require('../controllers/analyticsController'); // Ad
 
 router.use(protect, authorize('super_admin'));
 
+
+// V108 platform-only super admin endpoints
+router.get('/platform-branding', superAdminController.getPlatformBranding);
+router.get('/platform-analytics', superAdminController.getPlatformAnalytics);
+router.get('/platform-health', superAdminController.getPlatformHealthReal);
+router.get('/platform-events', superAdminController.getPlatformEventsReal);
+router.get('/platform-alerts', superAdminController.getPlatformAlertsReal);
+router.get('/platform-plans', superAdminController.getPlatformPlans);
+router.put('/platform-plans', superAdminController.savePlatformPlans);
+
 // Dashboard and overview
 router.get('/overview', superAdminController.getOverview);
 
@@ -41,9 +51,9 @@ router.get('/schools/:schoolId/students', superAdminController.getSchoolStudents
 router.get('/schools/:schoolId/parents', superAdminController.getSchoolParents);
 
 // System health
-router.get('/system/status', superAdminController.getSystemStatus);
+router.get('/system/status', superAdminController.getPlatformHealthReal);
 router.get('/system/metrics', superAdminController.getSystemMetrics);
-router.get('/system/events', superAdminController.getRecentEvents);
+router.get('/system/events', superAdminController.getPlatformEventsReal);
 
 // Platform settings
 router.get('/platform-settings', superAdminController.getPlatformSettings);
@@ -60,6 +70,6 @@ router.get('/growth-data', superAdminController.getGrowthData);
 router.get('/school-distribution', superAdminController.getSchoolDistribution);
 
 // Analytics (NEW)
-router.get('/analytics', analyticsController.getSuperAdminAnalytics);
+router.get('/analytics', superAdminController.getPlatformAnalytics);
 
 module.exports = router;
