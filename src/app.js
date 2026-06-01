@@ -49,6 +49,7 @@ const ownerHardeningRoutes = require('./routes/ownerHardeningRoutes');
 const { routeAwareApiLimiter } = require('./middleware/productionRateLimits');
 const { requestContext, productionErrorHandler } = require('./middleware/requestContext');
 const { ensureRuntimeSchema } = require('./utils/schemaSafety');
+const { accessSchemaMiddleware, ensureSchoolAccessSchema } = require('./utils/accessSchemaGuard');
 
 const app = express();
 
@@ -190,30 +191,40 @@ app.get('/api/health/detailed', async (req, res) => {
 });
 
 
-// V105: run the schema guard once before API routes, including production.
-// Login uses school access columns, so schema readiness must happen before auth.
+// V105: required school access/curriculum schema guard.
+// This is not optional in production because the School model reads these columns during login.
+// It runs once, before auth and dashboard routes, and only uses safe additive SQL.
+app.use('/api', accessSchemaMiddleware);
+
+// Fire the same guard at boot as well; middleware still protects the first request if boot DB is slow.
+ensureSchoolAccessSchema().catch((err) => {
+  console.error('[access-schema-guard] boot repair failed; first API request will retry:', err.message);
+});
+
+
+// V42: run the schema guard once on first API request too. This protects Render deployments
+// where startup migrations are skipped, delayed, or the old process remains warm.
 let __v42SchemaGuardPromise = null;
 app.use('/api', async (req, res, next) => {
+  const allowRuntimeSchemaRepair = process.env.ALLOW_RUNTIME_SCHEMA_REPAIR === 'true' || process.env.NODE_ENV !== 'production';
+  if (!allowRuntimeSchemaRepair) return next();
   try {
     if (!__v42SchemaGuardPromise) {
       __v42SchemaGuardPromise = ensureRuntimeSchema().catch((err) => {
-        console.error('[v105-schema-guard] Runtime schema repair failed:', err.message);
+        console.error('[v42-schema-guard] Runtime schema repair failed:', err.message);
         __v42SchemaGuardPromise = null;
       });
     }
     await __v42SchemaGuardPromise;
   } catch (err) {
-    console.error('[v105-schema-guard] Continuing after schema guard error:', err.message);
+    console.error('[v42-schema-guard] Continuing after schema guard error:', err.message);
   }
   next();
 });
 
 
 async function ensureCriticalDashboardColumns(req, res, next) {
-  // V105: This guard is no longer optional in production.
-  // The access/curriculum engine adds live columns used during login, so the schema
-  // must be aligned before any auth query runs. This is not fallback business logic;
-  // it is idempotent schema readiness for Render databases that missed migrations.
+  if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true' && process.env.NODE_ENV === 'production') return next();
   try {
     const { sequelize } = require('./models');
     await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
@@ -245,10 +256,6 @@ async function ensureCriticalDashboardColumns(req, res, next) {
     await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "accessStatus" VARCHAR(255) DEFAULT 'limited'`).catch(() => null);
     await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "schoolStructure" VARCHAR(255) DEFAULT 'mixed'`).catch(() => null);
     await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "enabledLevels" JSONB DEFAULT '[]'::jsonb`).catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "curriculumVersion" VARCHAR(255)').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "TeacherSubjectAssignments" ADD COLUMN IF NOT EXISTS "schoolSubjectId" VARCHAR(255)').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "TeacherSubjectAssignments" ADD COLUMN IF NOT EXISTS "curriculum" VARCHAR(255)').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "TeacherSubjectAssignments" ADD COLUMN IF NOT EXISTS "levelCode" VARCHAR(255)').catch(() => null);
     await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "curriculum" VARCHAR(255)').catch(() => null);
     await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "levelCode" VARCHAR(255)').catch(() => null);
     await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "levelLabel" VARCHAR(255)').catch(() => null);
