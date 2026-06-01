@@ -762,8 +762,7 @@ exports.getTodayDuty = async (userId) => {
     });
 
     if (roster && roster.duties) {
-      const raw = Array.isArray(roster.duties) ? roster.duties : (typeof roster.duties === 'string' ? (() => { try { return JSON.parse(roster.duties); } catch (_) { return []; } })() : Object.values(roster.duties || {}));
-      const duty = raw.find(d => Number(d.teacherId) === Number(teacher.id));
+      const duty = roster.duties.find(d => d.teacherId === teacher.id);
       return duty || null;
     }
     return null;

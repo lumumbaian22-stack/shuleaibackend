@@ -8,12 +8,10 @@
     "dev": "nodemon server.js",
     "seed": "node src/utils/seed.js",
     "migrate": "node runMigrations.js",
+    "repair:schema": "node scripts/repairSchema.js",
     "worker": "node src/workers/jobWorker.js",
     "seed:demo": "node scripts/seedDemoSchool.js",
-    "load:test": "node scripts/loadTest.js",
-    "repair:schema": "node scripts/repairV106Schema.js",
-    "repair:v105-schema": "node scripts/repairV105Schema.js",
-    "repair:v106-schema": "node scripts/repairV106Schema.js"
+    "load:test": "node scripts/loadTest.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

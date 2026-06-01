@@ -2,28 +2,6 @@ const { Sequelize } = require('sequelize');
 const { Umzug, SequelizeStorage } = require('umzug');
 const { sequelize } = require('./src/models');
 
-class SafeSequelizeStorage extends SequelizeStorage {
-  async logMigration(params) {
-    try {
-      return await super.logMigration(params);
-    } catch (err) {
-      const code = err?.parent?.code || err?.original?.code;
-      const msg = String(err?.message || err?.parent?.message || err?.original?.message || '');
-      if (code === '23505' || /unique|duplicate key|already exists/i.test(msg)) {
-        const name = params?.name || params;
-        console.warn(`[migration-safe] ${name} was already recorded in SequelizeMeta; continuing`);
-        return;
-      }
-      throw err;
-    }
-  }
-}
-
-async function ensureSequelizeMetaReady() {
-  await sequelize.query('CREATE TABLE IF NOT EXISTS "SequelizeMeta" ("name" VARCHAR(255) NOT NULL PRIMARY KEY)');
-  await sequelize.query('DELETE FROM "SequelizeMeta" a USING "SequelizeMeta" b WHERE a.ctid < b.ctid AND a."name" = b."name"').catch(() => null);
-}
-
 function createSafeQueryInterface(queryInterface) {
   const safe = Object.create(queryInterface);
   safe.sequelize = queryInterface.sequelize;
@@ -121,8 +99,6 @@ async function runMigrations() {
     await sequelize.authenticate();
     console.log('✅ Database connection test SUCCESSFUL');
 
-    await ensureSequelizeMetaReady();
-
     const queryInterface = sequelize.getQueryInterface();
     const safeQueryInterface = createSafeQueryInterface(queryInterface);
 
@@ -143,7 +119,24 @@ async function runMigrations() {
         }
       },
       context: safeQueryInterface,
-      storage: new SafeSequelizeStorage({ sequelize }),
+      storage: (() => {
+        const storage = new SequelizeStorage({ sequelize });
+        const originalLogMigration = storage.logMigration.bind(storage);
+        storage.logMigration = async (params) => {
+          try {
+            return await originalLogMigration(params);
+          } catch (err) {
+            const code = err?.parent?.code || err?.original?.code;
+            const msg = String(err?.parent?.message || err?.original?.message || err?.message || '');
+            if (code === '23505' || msg.includes('duplicate key value') || msg.includes('must be unique')) {
+              console.log(`[migration-safe] ${params?.name || 'migration'} is already logged in SequelizeMeta; continuing`);
+              return;
+            }
+            throw err;
+          }
+        };
+        return storage;
+      })(),
       logger: console,
     });
 

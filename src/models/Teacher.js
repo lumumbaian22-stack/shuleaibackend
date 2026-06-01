@@ -29,7 +29,6 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: 'general'
     },
     classTeacher: DataTypes.STRING,
-    signature: DataTypes.TEXT,
     qualification: DataTypes.STRING,
     specialization: DataTypes.STRING,
     dateJoined: { 

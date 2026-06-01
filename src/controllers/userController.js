@@ -186,12 +186,8 @@ exports.uploadProfilePicture = async (req, res) => {
     }
 
     const originalName = file.name || file.originalname || 'profile.jpg';
-    const mime = file.mimetype || file.type || 'image/jpeg';
-    const extFromMime = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : mime.includes('gif') ? '.gif' : '.jpg';
-    const rawExt = path.extname(String(originalName || '')).toLowerCase();
-    const ext = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(rawExt) ? rawExt : extFromMime;
-    // Keep filename/path safely below VARCHAR(255) for live DBs that have not altered profileImage to TEXT.
-    const fileName = `u${req.user.id}_${Date.now()}${ext}`;
+    const ext = path.extname(originalName) || '.jpg';
+    const fileName = `profile_${req.user.id}_${Date.now()}${ext}`;
     const uploadDir = path.join(__dirname, '../../uploads/profiles');
 
     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -205,27 +201,12 @@ exports.uploadProfilePicture = async (req, res) => {
     else return res.status(400).json({ success: false, message: 'Unsupported upload object from server middleware' });
 
     const relativeUrl = `/uploads/profiles/${fileName}`;
-    const absoluteUrl = `${req.protocol}://${req.get('host')}${relativeUrl}`;
-    let durableProfileImageDataUrl = null;
-    try {
-      const imageBuffer = await fs.promises.readFile(uploadPath);
-      if (imageBuffer.length <= 512 * 1024) durableProfileImageDataUrl = `data:${mime};base64,${imageBuffer.toString('base64')}`;
-    } catch (_) {}
     const preferences = { ...(req.user.preferences || {}) };
-    if (durableProfileImageDataUrl) preferences.profileImageDataUrl = durableProfileImageDataUrl;
+    delete preferences.profileImageDataUrl;
 
-    // profileImage is VARCHAR(255) in many live DBs. Never store a base64 data URL there.
-    // Store the short durable URL/path in profileImage and keep optional base64 only inside JSONB preferences.
-    try {
-      await req.user.update({ profileImage: relativeUrl, preferences });
-    } catch (updateError) {
-      // If the live DB still has a short VARCHAR column or JSON issue, never fail the upload.
-      // Save the short URL only, then return it to the frontend.
-      console.warn('Profile image metadata update retrying with short URL only:', updateError.message);
-      await req.user.update({ profileImage: relativeUrl });
-    }
+    await req.user.update({ profileImage: relativeUrl, preferences });
 
-    res.json({ success: true, data: { profileImage: relativeUrl, profileImageUrl: absoluteUrl, profileImagePath: relativeUrl, durable: true } });
+    res.json({ success: true, data: { profileImage: relativeUrl, profileImagePath: relativeUrl, durable: true } });
   } catch (error) {
     console.error('Profile upload error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -263,16 +244,17 @@ exports.uploadSignature = async (req, res) => {
         await file.mv(uploadPath);
         
         const signatureUrl = `/uploads/signatures/${fileName}`;
-        await req.user.update({ signature: signatureUrl }).catch(() => null);
+        
+        // For teachers, store signature in Teacher model
         if (req.user.role === 'teacher') {
             const Teacher = require('../models').Teacher;
-            await Teacher.update({ signature: signatureUrl }, { where: { userId: req.user.id } }).catch(() => null);
+            await Teacher.update(
+                { signature: signatureUrl },
+                { where: { userId: req.user.id } }
+            );
         }
-        if (req.user.role === 'admin') {
-            const Admin = require('../models').Admin;
-            await Admin.update({ signature: signatureUrl }, { where: { userId: req.user.id } }).catch(() => null);
-        }
-        res.json({ success: true, data: { signatureUrl, signature: signatureUrl } });
+        
+        res.json({ success: true, data: { signatureUrl } });
     } catch (error) {
         console.error('Signature upload error:', error);
         res.status(500).json({ success: false, message: error.message });

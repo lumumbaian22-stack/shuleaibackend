@@ -9,16 +9,6 @@ function v87IsValidISODate(value) {
 
 const { User, Teacher, School, DutyRoster, Alert } = require('../models');
 const moment = require('moment');
-
-function dutyArray(value) {
-  if (Array.isArray(value)) return value;
-  if (!value) return [];
-  if (typeof value === 'string') {
-    try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch (_) { return []; }
-  }
-  if (typeof value === 'object') return Object.values(value).filter(Boolean);
-  return [];
-}
 const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
 const { createAlert } = require('../services/notificationService');
 const dutyFairness = require('../utils/dutyFairness');
@@ -33,7 +23,7 @@ async function checkUnderstaffedDays(schoolId, startDate, endDate) {
   const understaffedDays = [];
   rosters.forEach(roster => {
     const areaCount = {};
-    dutyArray(roster.duties).forEach(d => { areaCount[d.type] = (areaCount[d.type] || 0) + 1; });
+    roster.duties.forEach(d => { areaCount[d.type] = (areaCount[d.type] || 0) + 1; });
     const missing = [];
     Object.entries(requiredPerArea).forEach(([area, required]) => {
       if ((areaCount[area] || 0) < required) missing.push(area);
@@ -172,11 +162,11 @@ exports.getDutyStats = async (req, res) => {
     });
 
     const stats = {
-      totalDuties: rosters.reduce((acc, r) => acc + dutyArray(r.duties).length, 0),
-      completedDuties: rosters.reduce((acc, r) => acc + dutyArray(r.duties).filter(d => d.status === 'completed').length, 0),
-      missedDuties: rosters.reduce((acc, r) => acc + dutyArray(r.duties).filter(d => d.status === 'missed').length, 0),
+      totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0),
+      completedDuties: rosters.reduce((acc, r) => acc + r.duties.filter(d => d.status === 'completed').length, 0),
+      missedDuties: rosters.reduce((acc, r) => acc + r.duties.filter(d => d.status === 'missed').length, 0),
       teacherPerformance: teachers.map(t => {
-        const teacherDuties = rosters.flatMap(r => dutyArray(r.duties).filter(d => Number(d.teacherId) === Number(t.id)));
+        const teacherDuties = rosters.flatMap(r => r.duties.filter(d => d.teacherId === t.id));
         const completed = teacherDuties.filter(d => d.status === 'completed').length;
         return {
           teacherName: t.User?.name || 'Unknown',
@@ -290,7 +280,7 @@ exports.generateDutyRoster = async (req, res) => {
       });
     }
 
-    res.json({ success: true, message: `Generated ${rosters.length} rosters`, data: { rosters, understaffed: understaffedAlerts, stats: { totalDuties: rosters.reduce((acc, r) => acc + dutyArray(r.duties).length, 0), totalAlerts: alerts.length, understaffedCount: understaffedAlerts.length } } });
+    res.json({ success: true, message: `Generated ${rosters.length} rosters`, data: { rosters, understaffed: understaffedAlerts, stats: { totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0), totalAlerts: alerts.length, understaffedCount: understaffedAlerts.length } } });
   } catch (error) {
     console.error('Duty generation error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -355,7 +345,7 @@ exports.getFairnessReport = async (req, res) => {
         period: { month: moment().format('MMMM YYYY'), start: startOfMonth, end: endOfMonth },
         summary: {
           totalTeachers: teachers.length,
-          totalDuties: rosters.reduce((acc, r) => acc + dutyArray(r.duties).length, 0),
+          totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0),
           fairnessScore: fairnessScore.toFixed(1),
           understaffedDays: await checkUnderstaffedDays(school.schoolId, startOfMonth, endOfMonth)
         },
@@ -379,18 +369,15 @@ exports.manualAdjustDuty = async (req, res) => {
     const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date } });
     if (!roster) return res.status(404).json({ success: false, message: 'Roster not found' });
 
-    const rosterDuties = dutyArray(roster.duties);
-    const dutyIndex = rosterDuties.findIndex(d => Number(d.teacherId) === Number(teacherId) && d.type === dutyType);
+    const dutyIndex = roster.duties.findIndex(d => d.teacherId === parseInt(teacherId) && d.type === dutyType);
     if (dutyIndex === -1) return res.status(404).json({ success: false, message: 'Duty not found' });
 
-    const oldTeacherId = rosterDuties[dutyIndex].teacherId;
-    rosterDuties[dutyIndex].teacherId = parseInt(newTeacherId, 10);
-    rosterDuties[dutyIndex].teacherName = req.body.newTeacherName;
-    rosterDuties[dutyIndex].adjustedBy = req.user.id;
-    rosterDuties[dutyIndex].adjustedAt = new Date();
-    rosterDuties[dutyIndex].adjustmentReason = reason;
-    roster.duties = rosterDuties;
-    roster.changed && roster.changed('duties', true);
+    const oldTeacherId = roster.duties[dutyIndex].teacherId;
+    roster.duties[dutyIndex].teacherId = parseInt(newTeacherId);
+    roster.duties[dutyIndex].teacherName = req.body.newTeacherName;
+    roster.duties[dutyIndex].adjustedBy = req.user.id;
+    roster.duties[dutyIndex].adjustedAt = new Date();
+    roster.duties[dutyIndex].adjustmentReason = reason;
     await roster.save();
 
     await dutyFairness.updateTeacherDutyStats(oldTeacherId, 'unassign');
@@ -401,7 +388,7 @@ exports.manualAdjustDuty = async (req, res) => {
       { userId: newTeacherId, role: 'teacher', type: 'duty', severity: 'info', title: 'New Duty Assignment', message: `You have been assigned to ${dutyType} duty on ${moment(date).format('MMM Do')}.` }
     ]);
 
-    res.json({ success: true, message: 'Duty adjusted successfully', data: dutyArray(roster.duties)[dutyIndex] });
+    res.json({ success: true, message: 'Duty adjusted successfully', data: roster.duties[dutyIndex] });
   } catch (error) {
     console.error('Manual adjust error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -522,35 +509,28 @@ exports.checkInDuty = async (req, res) => {
     const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
     if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
 
-    const rosterDuties = dutyArray(roster.duties);
-    const dutyIndex = rosterDuties.findIndex(d => Number(d.teacherId) === Number(teacher.id) || Number(d.teacherId) === Number(req.user.id));
+    const dutyIndex = roster.duties.findIndex(d => Number(d.teacherId) === Number(teacher.id) || Number(d.teacherId) === Number(req.user.id));
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
 
     const currentTime = moment();
-    const slot = rosterDuties[dutyIndex].timeSlot || { start: moment().format('HH:mm') };
-    const start = moment(slot.start || moment().format('HH:mm'), 'HH:mm');
+    const slot = roster.duties[dutyIndex].timeSlot;
+    const start = moment(slot.start, 'HH:mm');
     const window = school.settings?.dutyManagement?.checkInWindow || 15;
     const enforceWindow = school.settings?.dutyManagement?.enforceCheckInWindow === true;
     if (enforceWindow && !currentTime.isBetween(start.clone().subtract(window, 'minutes'), start.clone().add(window, 'minutes'))) {
       return res.status(400).json({ success: false, message: `Check-in only allowed within ${window} minutes of duty time`, data: { allowed:false, enforceWindow, dutyStart: start.format('HH:mm'), windowMinutes: window } });
     }
 
-    rosterDuties[dutyIndex].checkedIn = { at: new Date(), by: req.user.id, location: location || 'School' };
-    rosterDuties[dutyIndex].status = 'completed';
-    rosterDuties[dutyIndex].notes = notes || '';
-    roster.duties = rosterDuties;
-    roster.changed && roster.changed('duties', true);
+    roster.duties[dutyIndex].checkedIn = { at: new Date(), by: req.user.id, location: location || 'School' };
+    roster.duties[dutyIndex].status = 'completed';
+    roster.duties[dutyIndex].notes = notes || '';
     await roster.save();
 
-    const teacherDuties = dutyArray(teacher.duties);
-    const teacherDuty = teacherDuties.find(d => moment(d.date).isSame(moment(), 'day'));
+    const teacherDuty = (teacher.duties || []).find(d => moment(d.date).isSame(moment(), 'day'));
     if (teacherDuty) {
       teacherDuty.status = 'completed';
       teacherDuty.completedAt = new Date();
       teacherDuty.checkedIn = { at: new Date(), location };
-      teacher.duties = teacherDuties;
-      teacher.changed && teacher.changed('duties', true);
-      teacher.statistics = teacher.statistics || {};
       teacher.statistics.dutiesCompleted = (teacher.statistics.dutiesCompleted || 0) + 1;
       teacher.updateReliabilityScore();
       await teacher.save();
@@ -560,7 +540,7 @@ exports.checkInDuty = async (req, res) => {
     for (const admin of admins) {
       await createAlert({
         userId: admin.id, role: 'admin', type: 'duty', severity: 'info',
-        title: 'Teacher Checked In', message: `${teacher.User?.name || 'Teacher'} checked in for ${rosterDuties[dutyIndex].type || 'assigned'} duty.`
+        title: 'Teacher Checked In', message: `${teacher.User?.name || 'Teacher'} checked in for ${roster.duties[dutyIndex].type} duty.`
       });
     }
     res.json({ success: true, message: 'Checked in successfully' });
@@ -581,13 +561,10 @@ exports.checkOutDuty = async (req, res) => {
     const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
     if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
 
-    const rosterDuties = dutyArray(roster.duties);
-    const dutyIndex = rosterDuties.findIndex(d => Number(d.teacherId) === Number(teacher.id) || Number(d.teacherId) === Number(req.user.id));
+    const dutyIndex = roster.duties.findIndex(d => Number(d.teacherId) === Number(teacher.id) || Number(d.teacherId) === Number(req.user.id));
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
 
-    rosterDuties[dutyIndex].checkedOut = { at: new Date(), by: req.user.id, location: location || 'School' };
-    roster.duties = rosterDuties;
-    roster.changed && roster.changed('duties', true);
+    roster.duties[dutyIndex].checkedOut = { at: new Date(), by: req.user.id, location: location || 'School' };
     await roster.save();
     res.json({ success: true, message: 'Checked out successfully' });
   } catch (error) {
@@ -625,7 +602,7 @@ exports.requestDutySwap = async (req, res) => {
     const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: moment(dutyDate).format('YYYY-MM-DD') } });
     if (!roster) return res.status(404).json({ success: false, message: 'No duty on that date' });
 
-    const duty = dutyArray(roster.duties).find(d => Number(d.teacherId) === Number(teacher.id));
+    const duty = roster.duties.find(d => d.teacherId === teacher.id);
     if (!duty) return res.status(403).json({ success: false, message: 'You are not on duty that day' });
 
     const swapRequest = {
@@ -784,11 +761,10 @@ exports.verifiedCheckInDuty = async (req, res) => {
     const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
     if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
 
-    const rosterDuties = dutyArray(roster.duties);
-    const dutyIndex = rosterDuties.findIndex(d => Number(d.teacherId) === Number(teacher.id));
+    const dutyIndex = roster.duties.findIndex(d => Number(d.teacherId) === Number(teacher.id));
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
 
-    const duty = rosterDuties[dutyIndex];
+    const duty = roster.duties[dutyIndex];
     const settings = getDutyVerificationSettings(school);
     const geo = verifyGeo(settings, gps);
     const qrOk = !settings.requireQr || verifyQrToken(qrToken, school.schoolId, today, duty.id || duty.type || duty.area);
@@ -814,9 +790,8 @@ exports.verifiedCheckInDuty = async (req, res) => {
     duty.checkedIn = verification;
     duty.status = accepted ? (late.isLate ? 'late' : 'checked_in') : 'rejected';
     duty.verification = verification;
-    rosterDuties[dutyIndex] = duty;
-    roster.duties = rosterDuties;
-    roster.changed && roster.changed('duties', true);
+    roster.duties[dutyIndex] = duty;
+    roster.changed('duties', true);
     await roster.save();
 
     if (!accepted) {
@@ -843,11 +818,10 @@ exports.verifiedCheckOutDuty = async (req, res) => {
     const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
     if (!roster) return res.status(404).json({ success: false, message: 'No duty today' });
 
-    const rosterDuties = dutyArray(roster.duties);
-    const dutyIndex = rosterDuties.findIndex(d => Number(d.teacherId) === Number(teacher.id));
+    const dutyIndex = roster.duties.findIndex(d => Number(d.teacherId) === Number(teacher.id));
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
 
-    const duty = rosterDuties[dutyIndex];
+    const duty = roster.duties[dutyIndex];
     const settings = getDutyVerificationSettings(school);
     const geo = verifyGeo(settings, gps);
     const qrOk = !settings.requireQr || verifyQrToken(qrToken, school.schoolId, today, duty.id || duty.type || duty.area);
@@ -870,9 +844,8 @@ exports.verifiedCheckOutDuty = async (req, res) => {
     duty.checkedOut = verification;
     duty.status = accepted ? 'completed' : (duty.status || 'checked_in');
     duty.checkOutVerification = verification;
-    rosterDuties[dutyIndex] = duty;
-    roster.duties = rosterDuties;
-    roster.changed && roster.changed('duties', true);
+    roster.duties[dutyIndex] = duty;
+    roster.changed('duties', true);
     await roster.save();
 
     if (!accepted) {

@@ -1,5 +1,6 @@
 const { sequelize, School, User, Student, Teacher, Parent, Class, Alert } = require('../models');
 const path = require('path');
+const fs = require('fs');
 const { getRoleAnalytics } = require('../services/ownerAnalyticsEngine');
 const { generateTemporaryPassword } = require('../utils/passwords');
 
@@ -33,7 +34,7 @@ function resolveColors(colorName, primaryColor, accentColor) {
 function publicBrandingPayload(school) {
   const branding = school?.settings?.branding || {};
   const colors = resolveColors(branding.colorName, branding.primaryColor, branding.accentColor);
-  const logo = branding.logoDataUrl || branding.logoUrl || branding.logo || null;
+  const logo = branding.logoUrl || branding.logo || branding.logoDataUrl || null;
   return {
     schoolId: school.schoolId,
     name: school.name,
@@ -42,7 +43,7 @@ function publicBrandingPayload(school) {
     logo,
     logoUrl: branding.logoUrl || null,
     logoDataUrl: branding.logoDataUrl || null,
-    logoSource: branding.logoDataUrl ? 'upload' : (branding.logoUrl ? 'url' : 'fallback'),
+    logoSource: branding.logoUrl ? 'upload' : (branding.logoDataUrl ? 'legacy_data_url' : 'fallback'),
     colorName: colors.colorName,
     primaryColor: colors.primaryColor,
     accentColor: colors.accentColor,
@@ -56,10 +57,10 @@ function extractUploadedFile(req) {
   return req.files?.logo || req.files?.file || req.files?.image || null;
 }
 
-async function fileToDataUrl(file) {
+async function saveLogoFile(file, schoolCode) {
   const mime = file.mimetype || file.type || 'image/png';
   const originalName = file.name || file.originalname || 'logo.png';
-  const ext = path.extname(originalName).toLowerCase();
+  const ext = (path.extname(originalName).toLowerCase() || '.png').replace(/[^.a-z0-9]/g, '') || '.png';
   if (!/^image\/(png|jpe?g|webp|gif|svg\+xml)$/.test(mime) && !['.png','.jpg','.jpeg','.webp','.gif','.svg'].includes(ext)) {
     const err = new Error('Only image files are allowed for school logos');
     err.statusCode = 400;
@@ -71,17 +72,22 @@ async function fileToDataUrl(file) {
     err.statusCode = 400;
     throw err;
   }
-  let buffer;
-  if (file.data) buffer = Buffer.from(file.data);
-  else if (file.tempFilePath) buffer = await require('fs').promises.readFile(file.tempFilePath);
-  else if (file.path) buffer = await require('fs').promises.readFile(file.path);
-  else if (file.buffer) buffer = Buffer.from(file.buffer);
+  const safeSchoolCode = String(schoolCode || 'school').replace(/[^a-zA-Z0-9_-]/g, '-');
+  const uploadDir = path.join(__dirname, '../../uploads/school-logos');
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+  const fileName = `school-${safeSchoolCode}-${Date.now()}${ext}`;
+  const dest = path.join(uploadDir, fileName);
+  if (file.mv) await file.mv(dest);
+  else if (file.tempFilePath) await fs.promises.copyFile(file.tempFilePath, dest);
+  else if (file.path) await fs.promises.copyFile(file.path, dest);
+  else if (file.buffer) await fs.promises.writeFile(dest, file.buffer);
+  else if (file.data) await fs.promises.writeFile(dest, Buffer.from(file.data));
   else {
     const err = new Error('Unsupported logo upload object');
     err.statusCode = 400;
     throw err;
   }
-  return `data:${mime};base64,${buffer.toString('base64')}`;
+  return `/uploads/school-logos/${fileName}`;
 }
 
 exports.getOwnerAnalytics = async (req, res) => {
@@ -155,11 +161,11 @@ exports.uploadSchoolLogo = async (req, res) => {
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
     const file = extractUploadedFile(req);
     if (!file) return res.status(400).json({ success: false, message: 'No logo file uploaded. Use form field: logo' });
-    const dataUrl = await fileToDataUrl(file);
+    const logoUrl = await saveLogoFile(file, schoolCode);
     const current = school.settings || {};
     const branding = { ...(current.branding || {}) };
-    branding.logoDataUrl = dataUrl;
-    branding.logoUrl = '';
+    branding.logoUrl = logoUrl;
+    delete branding.logoDataUrl;
     branding.logoSource = 'upload';
     branding.updatedBy = req.user.id;
     branding.updatedAt = new Date().toISOString();

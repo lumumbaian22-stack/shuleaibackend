@@ -1,4 +1,4 @@
-const { School, User, Admin, SchoolNameRequest, Student, Teacher, Parent, ApprovalRequest, Alert, SubscriptionPlan, Subscription, SubscriptionPayment } = require('../models');
+const { School, User, Admin, SchoolNameRequest, Student, Teacher, Parent, ApprovalRequest } = require('../models');
 const { createAlert } = require('../services/notificationService');
 // Removed self-import bug
 const { Op } = require('sequelize');
@@ -10,15 +10,26 @@ const { generateTemporaryPassword } = require('../utils/passwords');
 // @access  Private/SuperAdmin
 exports.getOverview = async (req, res) => {
     try {
+        const [events] = await sequelize.query(`
+          SELECT "schoolCode", "actorRole", "module", "action", "entityType", "entityId", "createdAt"
+          FROM "PlatformAuditEvents"
+          ORDER BY "createdAt" DESC
+          LIMIT 10
+        `).catch(() => [[]]);
         const stats = {
             schools: await School.count(),
             pendingSchools: await School.count({ where: { status: 'pending' } }),
             activeSchools: await School.count({ where: { status: 'active' } }),
+            suspendedSchools: await School.count({ where: { status: 'suspended' } }).catch(() => 0),
+            pilotSchools: await School.count({ where: { pilotFullAccessEnabled: true } }).catch(() => 0),
+            trialSchools: await School.count({ where: { trialAccessEnabled: true } }).catch(() => 0),
+            paidSchools: await School.count({ where: { subscriptionStatus: 'active' } }).catch(() => 0),
             students: await Student.count(),
             teachers: await Teacher.count(),
             parents: await Parent.count(),
             pendingApprovals: await ApprovalRequest.count({ where: { status: 'pending' } }),
-            users: await User.count()
+            users: await User.count(),
+            platformEvents: events || []
         };
         res.json({ success: true, data: stats });
     } catch (error) {
@@ -1470,6 +1481,18 @@ exports.updateSchoolAccessControls = async (req, res) => {
   } catch(error) { console.error('V102 update school access error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 
+function v110AddSubscriptionDuration(start, cycle) {
+  const d = new Date(start || Date.now());
+  if (Number.isNaN(d.getTime())) return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const end = new Date(d.getTime());
+  const c = String(cycle || 'monthly').toLowerCase();
+  if (c === 'yearly' || c === 'annual') end.setFullYear(end.getFullYear() + 1);
+  else if (c === 'termly' || c === 'term') end.setMonth(end.getMonth() + 3);
+  else if (c === 'custom') end.setMonth(end.getMonth() + 1);
+  else end.setDate(end.getDate() + 30);
+  return end;
+}
+
 exports.getSchoolPaymentRequests = async (req, res) => {
   try {
     const status = req.query.status || null;
@@ -1503,21 +1526,16 @@ exports.reviewSchoolPaymentRequest = async (req, res) => {
     const status = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'needs_more_details';
     await sequelize.query(`UPDATE "SchoolPaymentRequests" SET "status"=:status,"reviewedBy"=:reviewedBy,"reviewedAt"=NOW(),"reviewNotes"=:reviewNotes,"updatedAt"=NOW() WHERE id=:id`, { replacements:{ status, reviewedBy:req.user.id, reviewNotes:req.body.reviewNotes || null, id:requestId } });
     if (action === 'approve') {
-      const cycle = req.body.billingCycle || request.billingCycle || 'monthly';
-      const paymentDate = req.body.paymentDate || req.body.paidAt || request.paidAt || new Date();
-      const subscriptionEndsAt = req.body.subscriptionEndsAt || subscriptionEndForCycleV108(paymentDate, cycle);
-      const planCode = req.body.subscriptionPlan || req.body.planCode || request.requestedPlan || school.subscriptionPlan || 'school_standard';
       school.manualPaymentConfirmed = true;
       school.manualPaymentAmount = Number(req.body.amount || request.amount || 0);
       school.manualPaymentReference = req.body.reference || request.reference || `manual-${request.id}`;
       school.manualPaymentConfirmedBy = req.user.id;
       school.manualPaymentConfirmedAt = new Date();
-      school.subscriptionPlan = planCode;
+      school.subscriptionPlan = req.body.subscriptionPlan || request.requestedPlan || school.subscriptionPlan || 'growth';
       school.subscriptionStatus = 'active';
-      school.subscriptionStartedAt = paymentDate;
-      school.subscriptionEndsAt = subscriptionEndsAt;
-      await Subscription.upsert({ ownerType:'school', schoolId:school.id, schoolCode:school.schoolId, planCode, planName:planCode.replace(/_/g,' '), billingCycle:cycle, status:'active', startDate:paymentDate, endDate:subscriptionEndsAt, features:[], limits:{} }).catch(() => null);
-      await sequelize.query(`UPDATE "SchoolPaymentRequests" SET "billingCycle"=:billingCycle,"subscriptionStartDate"=:subscriptionStartDate,"subscriptionEndDate"=:subscriptionEndDate,"requestedPlan"=:requestedPlan,"updatedAt"=NOW() WHERE id=:id`, { replacements:{ billingCycle:cycle, subscriptionStartDate:paymentDate, subscriptionEndDate:subscriptionEndsAt, requestedPlan:planCode, id:requestId } }).catch(()=>null);
+      const paidStart = req.body.subscriptionStartedAt || request.paidAt || request.createdAt || new Date();
+      school.subscriptionStartedAt = paidStart;
+      school.subscriptionEndsAt = req.body.subscriptionEndsAt || v110AddSubscriptionDuration(paidStart, req.body.billingCycle || request.billingCycle || 'monthly');
     }
     const access = await v102RecalculateSchoolAccess(school);
     await v102Audit({ schoolCode:school.schoolId, actorUserId:req.user.id, actorRole:req.user.role, module:'billing', action:`payment_request_${status}`, entityType:'SchoolPaymentRequest', entityId:requestId, before:request, after:{ status, access } });
@@ -1544,101 +1562,4 @@ exports.getSchools = async (req, res) => {
     if (v102OriginalGetSchools) return v102OriginalGetSchools(req, res);
     res.status(500).json({ success:false, message:error.message });
   }
-};
-
-// ============ V108 FINAL STABILIZATION: PLATFORM-ONLY SUPER ADMIN DATA ============
-function addDaysV108(date, days) { const d = new Date(date || Date.now()); d.setDate(d.getDate() + days); return d; }
-function subscriptionEndForCycleV108(paymentDate, cycle) {
-  const start = new Date(paymentDate || Date.now());
-  const normalized = ['monthly','termly','yearly','custom'].includes(String(cycle || '').toLowerCase()) ? String(cycle).toLowerCase() : 'monthly';
-  if (normalized === 'yearly') { const d = new Date(start); d.setFullYear(d.getFullYear()+1); return d; }
-  if (normalized === 'termly') return addDaysV108(start, 90);
-  return addDaysV108(start, 30);
-}
-
-exports.getPlatformBranding = async (req, res) => {
-  res.json({ success:true, data:{
-    platformName:'Shule AI', shortName:'ShuleAI',
-    logoLight:'assets/logo-light.png', logoDark:'assets/logo-dark.png', logo:'assets/logo.png',
-    primaryColor:'#083A85', accentColor:'#11B5B1', scope:'platform'
-  }});
-};
-
-exports.getPlatformAnalytics = async (req, res) => {
-  try {
-    const [totalSchools, activeSchools, pendingSchools, suspendedSchools, totalStudents, totalTeachers, totalParents, totalAdmins] = await Promise.all([
-      School.count().catch(()=>0), School.count({ where:{ status:'active' } }).catch(()=>0), School.count({ where:{ status:'pending' } }).catch(()=>0), School.count({ where:{ status:'suspended' } }).catch(()=>0),
-      Student.count().catch(()=>0), Teacher.count().catch(()=>0), Parent.count().catch(()=>0), User.count({ where:{ role:'admin' } }).catch(()=>0)
-    ]);
-    const [accessRows] = await sequelize.query(`SELECT COALESCE("accessMode", 'unknown') AS mode, COUNT(*)::int AS count FROM "Schools" GROUP BY COALESCE("accessMode", 'unknown')`).catch(()=>[[]]);
-    const accessModes = {}; (accessRows || []).forEach(r => accessModes[r.mode] = Number(r.count || 0));
-    const [paymentRows] = await sequelize.query(`SELECT status, COUNT(*)::int AS count, COALESCE(SUM(amount),0)::int AS amount FROM "SchoolPaymentRequests" GROUP BY status`).catch(()=>[[]]);
-    const paymentSummary = {}; (paymentRows || []).forEach(r => paymentSummary[r.status || 'unknown'] = { count:Number(r.count||0), amount:Number(r.amount||0) });
-    const [recentEvents] = await sequelize.query(`SELECT * FROM "PlatformAuditEvents" ORDER BY "createdAt" DESC LIMIT 12`).catch(()=>[[]]);
-    const recentErrors = (recentEvents || []).filter(e => String(e.action || '').toLowerCase().includes('error') || String(e.module || '').toLowerCase().includes('error')).length;
-    res.json({ success:true, data:{
-      overview:{ totalSchools, activeSchools, pendingSchools, suspendedSchools, pilotSchools:accessModes.pilot_full_access || 0, trialSchools:accessModes.trial || 0, paidSchools:(accessModes.paid || 0) + (accessModes.manual_paid || 0), expiredSchools:accessModes.basic || 0, totalStudents, totalTeachers, totalParents, totalAdmins, paymentRequestsPending:paymentSummary.pending?.count || 0, recentErrors },
-      accessModes, paymentSummary, recentEvents
-    }});
-  } catch(error) { console.error('V108 platform analytics error:', error); res.status(500).json({ success:false, message:error.message }); }
-};
-
-exports.getPlatformHealthReal = async (req, res) => {
-  try {
-    let database = 'operational';
-    try { await sequelize.authenticate(); } catch(e) { database = 'error'; }
-    let activeConnections = 0;
-    if (global.io) activeConnections = (await global.io.fetchSockets().catch(()=>[])).length;
-    const [events] = await sequelize.query(`SELECT * FROM "PlatformAuditEvents" ORDER BY "createdAt" DESC LIMIT 20`).catch(()=>[[]]);
-    const recentErrors = (events || []).filter(e => /error|failed|crash/i.test(`${e.module} ${e.action}`)).length;
-    res.json({ success:true, data:{ database, api:'operational', websocket:global.io ? 'connected' : 'not_configured', activeConnections, recentErrors, events:events || [], checkedAt:new Date() }});
-  } catch(error) { console.error('V108 platform health error:', error); res.status(500).json({ success:false, message:error.message }); }
-};
-
-exports.getPlatformEventsReal = async (req, res) => {
-  try {
-    const [rows] = await sequelize.query(`SELECT * FROM "PlatformAuditEvents" ORDER BY "createdAt" DESC LIMIT 100`).catch(()=>[[]]);
-    res.json({ success:true, data: rows || [] });
-  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
-};
-
-exports.getPlatformAlertsReal = async (req, res) => {
-  try {
-    const alerts = await Alert.findAll({ where:{ role:'super_admin' }, order:[['createdAt','DESC']], limit:100 }).catch(()=>[]);
-    const [events] = await sequelize.query(`SELECT * FROM "PlatformAuditEvents" WHERE "module" IN ('billing','access','school','system','curriculum') ORDER BY "createdAt" DESC LIMIT 50`).catch(()=>[[]]);
-    const eventAlerts = (events || []).map(e => ({ id:`event-${e.id}`, type:e.module, severity:/error|failed/i.test(e.action||'')?'critical':'info', title:String(e.action || 'Platform event').replace(/_/g,' '), message:[e.schoolCode, e.entityType, e.entityId].filter(Boolean).join(' • '), createdAt:e.createdAt }));
-    res.json({ success:true, data:[...alerts.map(a => a.toJSON ? a.toJSON() : a), ...eventAlerts].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).slice(0,100) });
-  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
-};
-
-exports.getPlatformPlans = async (req, res) => {
-  try {
-    let plans = await SubscriptionPlan.findAll({ where:{ ownerType:'school', isActive:true }, order:[['sortOrder','ASC'],['id','ASC']] }).catch(()=>[]);
-    if (!plans.length) {
-      const defaults = [
-        { code:'school_basic', name:'school_basic', displayName:'Basic', ownerType:'school', price_kes:0, monthlyPriceKes:0, termlyPriceKes:0, yearlyPriceKes:0, features:['basic_mode'], sortOrder:1, isActive:true },
-        { code:'school_standard', name:'school_standard', displayName:'Standard', ownerType:'school', price_kes:10000, monthlyPriceKes:10000, termlyPriceKes:30000, yearlyPriceKes:100000, features:['students','teachers','attendance','grading','reports','chat'], sortOrder:2, isActive:true },
-        { code:'school_premium', name:'school_premium', displayName:'Premium', ownerType:'school', price_kes:15000, monthlyPriceKes:15000, termlyPriceKes:45000, yearlyPriceKes:150000, features:['full_system','career_compass','advanced_reports','analytics'], sortOrder:3, isActive:true }
-      ];
-      await SubscriptionPlan.bulkCreate(defaults, { ignoreDuplicates:true }).catch(()=>null);
-      plans = await SubscriptionPlan.findAll({ where:{ ownerType:'school', isActive:true }, order:[['sortOrder','ASC'],['id','ASC']] });
-    }
-    res.json({ success:true, data:plans });
-  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
-};
-
-exports.savePlatformPlans = async (req, res) => {
-  try {
-    const plans = Array.isArray(req.body.plans) ? req.body.plans : [];
-    const saved = [];
-    for (const p of plans) {
-      const code = String(p.code || p.name || '').trim().toLowerCase().replace(/\s+/g,'_');
-      if (!code) continue;
-      const [plan] = await SubscriptionPlan.findOrCreate({ where:{ code }, defaults:{ code, name:code, displayName:p.displayName || p.name || code, ownerType:'school' } });
-      await plan.update({ displayName:p.displayName || p.name || plan.displayName, ownerType:'school', price_kes:Number(p.price_kes || p.monthlyPriceKes || 0), monthlyPriceKes:Number(p.monthlyPriceKes || p.price_kes || 0), termlyPriceKes:p.termlyPriceKes != null ? Number(p.termlyPriceKes) : null, yearlyPriceKes:p.yearlyPriceKes != null ? Number(p.yearlyPriceKes) : null, features:p.features || plan.features || [], limits:p.limits || plan.limits || {}, sortOrder:Number(p.sortOrder || plan.sortOrder || 0), isActive:p.isActive !== false });
-      saved.push(plan);
-    }
-    await v102Audit({ actorUserId:req.user.id, actorRole:req.user.role, module:'billing', action:'platform_plans_updated', entityType:'SubscriptionPlan', entityId:'bulk', after:{ count:saved.length } });
-    res.json({ success:true, data:saved });
-  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };

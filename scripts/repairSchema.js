@@ -4,14 +4,13 @@ const { ensureRuntimeSchema } = require('../src/utils/schemaSafety');
 
 (async () => {
   try {
-    console.log('🔧 V105 strict schema repair starting...');
     await sequelize.authenticate();
-    await ensureRuntimeSchema();
-    console.log('✅ V105 strict schema repair completed. Login/access columns are aligned.');
+    await ensureRuntimeSchema({ force: true });
+    console.log('✅ Schema repair completed successfully');
     await sequelize.close();
     process.exit(0);
-  } catch (err) {
-    console.error('❌ V105 strict schema repair failed:', err);
+  } catch (error) {
+    console.error('❌ Schema repair failed:', error);
     try { await sequelize.close(); } catch (_) {}
     process.exit(1);
   }

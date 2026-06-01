@@ -12,14 +12,8 @@ module.exports = (sequelize, DataTypes) => {
     endDate: { type: DataTypes.DATEONLY, allowNull: true },
     time: { type: DataTypes.STRING, allowNull: true },
     location: { type: DataTypes.STRING, allowNull: true },
-    audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'personal' },
-    visibility: { type: DataTypes.STRING, allowNull: false, defaultValue: 'personal' },
-    createdByUserId: { type: DataTypes.INTEGER, allowNull: true },
-    targetRole: { type: DataTypes.STRING, allowNull: true },
-    targetUserId: { type: DataTypes.INTEGER, allowNull: true },
-    classId: { type: DataTypes.INTEGER, allowNull: true },
-    metadata: { type: DataTypes.JSONB, defaultValue: {} },
-    isPublic: { type: DataTypes.BOOLEAN, defaultValue: false }
+    audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'whole_school' },
+    isPublic: { type: DataTypes.BOOLEAN, defaultValue: true }
   }, {
     timestamps: true,
     indexes: [

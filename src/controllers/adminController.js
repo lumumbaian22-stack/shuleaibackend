@@ -1156,75 +1156,16 @@ exports.saveStudentSubjectSelection = async (req, res) => {
   } catch(error) { console.error('V102 save student subject selection error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 
-exports.addCustomSubject = async (req, res) => {
-  try {
-    const school = await v102GetSchool(req.user.schoolCode);
-    if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const { name, code, category='custom', classes=[], levelCodes=[], countsInFinalByDefault=true, requiresTeacher=true, gradingType='marks' } = req.body || {};
-    const subjectName = String(name || '').trim();
-    if (!subjectName) return res.status(400).json({ success:false, message:'Custom subject name is required' });
-    const selectedClasses = Array.isArray(classes) ? classes : [];
-    const classIds = selectedClasses.map(c => Number(c.classId || c.id || c)).filter(Boolean);
-    let resolvedLevels = Array.isArray(levelCodes) ? levelCodes.filter(Boolean) : [];
-    const selectedClassRows = classIds.length ? await Class.findAll({ where:{ id: classIds, schoolCode:req.user.schoolCode, isActive:true } }) : [];
-    const cfg = curriculumEngine.getCurriculumConfig(school);
-    for (const cls of selectedClassRows) {
-      const lc = curriculumEngine.levelCodeFromGrade(cfg.curriculum, cls.grade || cls.name);
-      if (lc && !resolvedLevels.includes(lc)) resolvedLevels.push(lc);
-    }
-    if (!resolvedLevels.length) return res.status(400).json({ success:false, message:'Select at least one valid class/level for this custom subject' });
-    const existingSettings = school.settings || {};
-    const engine = existingSettings.curriculumEngine || {};
-    const existingSubjects = Array.isArray(engine.schoolSubjects) ? engine.schoolSubjects : [];
-    const subjectId = `custom_${subjectName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`.slice(0, 120);
-    const customSubject = {
-      subjectId,
-      id: subjectId,
-      name: subjectName,
-      code: code || null,
-      category,
-      levelCodes: resolvedLevels,
-      classIds,
-      isCore: false,
-      isOptional: true,
-      countsInFinalByDefault: countsInFinalByDefault !== false,
-      requiresTeacher: requiresTeacher !== false,
-      gradingType,
-      isOffered: true,
-      source: 'admin_custom_subject',
-      savedAt: new Date().toISOString(),
-      savedBy: req.user.id
-    };
-    const nextSubjects = existingSubjects.filter(s => String(s.subjectId || s.id || s.name).toLowerCase() !== String(subjectId).toLowerCase() && String(s.name || '').toLowerCase() !== subjectName.toLowerCase());
-    nextSubjects.push(customSubject);
-    const settings = v102BuildCurriculumSettings(school, { schoolSubjects: nextSubjects });
-    const customNames = Array.from(new Set([...(Array.isArray(existingSettings.customSubjects) ? existingSettings.customSubjects : []), subjectName]));
-    school.settings = { ...settings, customSubjects: customNames };
-    await school.save();
-    for (const cls of selectedClassRows) {
-      const settings = cls.settings || {};
-      const subjects = Array.isArray(settings.subjects) ? settings.subjects : [];
-      if (!subjects.some(s => String(s.name).toLowerCase() === subjectName.toLowerCase())) {
-        subjects.push({ id:subjectId, name:subjectName, category, isCore:false, countsInFinalByDefault:customSubject.countsInFinalByDefault, source:'admin_custom_subject' });
-        await cls.update({ settings:{ ...settings, subjects } }).catch(()=>null);
-      }
-    }
-    await sequelize.query(`INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","actorRole","module","action","entityType","entityId","after","metadata","createdAt","updatedAt") VALUES (:schoolCode,:actorUserId,:actorRole,'curriculum','custom_subject_created','SchoolSubject',:entityId,:after,:metadata,NOW(),NOW())`, { replacements:{ schoolCode:req.user.schoolCode, actorUserId:req.user.id, actorRole:req.user.role, entityId:subjectId, after:JSON.stringify(customSubject), metadata:JSON.stringify({ classIds, levelCodes: resolvedLevels }) } }).catch(()=>null);
-    res.status(201).json({ success:true, message:'Custom subject saved and synced to selected classes', data:{ subject:customSubject, schoolSubjects:nextSubjects } });
-  } catch(error) { console.error('V108 add custom subject error:', error); res.status(500).json({ success:false, message:error.message }); }
-};
-
 exports.submitSchoolPaymentConfirmation = async (req, res) => {
   try {
     const school = await v102GetSchool(req.user.schoolCode);
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const { amount, method='mpesa', reference, paidAt, paymentDate, notes, proofUrl, requestedPlan='school_growth', planCode, billingCycle='monthly' } = req.body;
-    const cycle = ['monthly','termly','yearly','custom'].includes(String(billingCycle).toLowerCase()) ? String(billingCycle).toLowerCase() : 'monthly';
+    const { amount, method='mpesa', reference, paidAt, notes, proofUrl, requestedPlan='growth', billingCycle='monthly' } = req.body;
     const [rows] = await sequelize.query(`
-      INSERT INTO "SchoolPaymentRequests" ("schoolCode","submittedBy","amount","method","reference","paidAt","notes","proofUrl","requestedPlan","billingCycle","status","metadata","createdAt","updatedAt")
-      VALUES (:schoolCode,:submittedBy,:amount,:method,:reference,:paidAt,:notes,:proofUrl,:requestedPlan,:billingCycle,'pending',:metadata,NOW(),NOW())
+      INSERT INTO "SchoolPaymentRequests" ("schoolCode","submittedBy","amount","method","reference","paidAt","notes","proofUrl","requestedPlan","billingCycle","status","createdAt","updatedAt")
+      VALUES (:schoolCode,:submittedBy,:amount,:method,:reference,:paidAt,:notes,:proofUrl,:requestedPlan,:billingCycle,'pending',NOW(),NOW())
       RETURNING *
-    `, { replacements:{ schoolCode:req.user.schoolCode, submittedBy:req.user.id, amount:Number(amount || 0), method, reference:reference || null, paidAt:paidAt || paymentDate || new Date(), notes:notes || null, proofUrl:proofUrl || null, requestedPlan:planCode || requestedPlan, billingCycle:cycle, metadata: JSON.stringify({ submittedFrom:'admin_billing', planCode: planCode || requestedPlan, billingCycle: cycle }) } });
+    `, { replacements:{ schoolCode:req.user.schoolCode, submittedBy:req.user.id, amount:Number(amount || 0), method, reference:reference || null, paidAt:paidAt || new Date(), notes:notes || null, proofUrl:proofUrl || null, requestedPlan, billingCycle } });
     res.status(201).json({ success:true, message:'Payment confirmation submitted for super admin review', data:rows[0] });
   } catch(error) { console.error('V102 payment confirmation error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
