@@ -550,6 +550,48 @@ exports.upgradePlan = async (req, res) => {
   }
 };
 
+
+async function v107ParentOwnsStudent(parent, user, studentId) {
+  if (!parent || !user || !studentId) return false;
+  const ids = [parent.id, user.id].filter(v => v !== null && v !== undefined);
+  try {
+    const rows = await sequelize.query(
+      'SELECT 1 FROM "StudentParents" WHERE "parentId" IN (:ids) AND "studentId"=:studentId LIMIT 1',
+      { replacements: { ids: ids.length ? ids : [-1], studentId }, type: sequelize.QueryTypes.SELECT }
+    );
+    if (rows.length) return true;
+  } catch (_) {}
+  try {
+    if (typeof parent.hasStudent === 'function') {
+      const student = await Student.findByPk(studentId);
+      if (student && await parent.hasStudent(student).catch(() => false)) return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+async function v107FindClassTeacherForStudent(student, schoolCode) {
+  const possibleClassNames = [student.className, student.grade, student.class, student.stream].filter(Boolean).map(String);
+  let cls = null;
+  if (student.classId) cls = await Class.findOne({ where:{ id:student.classId, schoolCode } }).catch(()=>null);
+  if (!cls && possibleClassNames.length) {
+    cls = await Class.findOne({ where:{ schoolCode, [Op.or]: [{ name:{ [Op.in]: possibleClassNames } }, { grade:{ [Op.in]: possibleClassNames } }] } }).catch(()=>null);
+  }
+  let teacher = null;
+  if (cls?.teacherId) teacher = await Teacher.findOne({ where:{ id:cls.teacherId }, include:[{ model:User, where:{ schoolCode }, attributes:['id','name','email'] }] }).catch(()=>null);
+  if (!teacher && cls?.id) teacher = await Teacher.findOne({ where:{ classId:cls.id }, include:[{ model:User, where:{ schoolCode }, attributes:['id','name','email'] }] }).catch(()=>null);
+  if (!teacher && cls?.id) {
+    const { TeacherSubjectAssignment } = require('../models');
+    const ass = await TeacherSubjectAssignment.findOne({ where:{ classId:cls.id, isClassTeacher:true }, include:[{ model:Teacher, include:[{ model:User, where:{ schoolCode }, attributes:['id','name','email'] }] }] }).catch(()=>null);
+    teacher = ass?.Teacher || null;
+  }
+  if (!teacher) {
+    const teacherNames = [...possibleClassNames, cls?.name, cls?.grade].filter(Boolean);
+    if (teacherNames.length) teacher = await Teacher.findOne({ where:{ classTeacher:{ [Op.in]: teacherNames } }, include:[{ model:User, where:{ schoolCode }, attributes:['id','name','email'] }] }).catch(()=>null);
+  }
+  return { teacher, classItem: cls };
+}
+
 // @desc    Send message to class teacher or admin only
 // @route   POST /api/parent/message
 // @access  Private/Parent
@@ -561,8 +603,9 @@ exports.sendMessage = async (req, res) => {
     if (!parent) return res.status(404).json({ success:false, message:'Parent not found' });
     const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }] });
     if (!student) return res.status(404).json({ success:false, message:'Student not found' });
-    const linked = await sequelize.query('SELECT 1 FROM "StudentParents" WHERE "parentId"=:parentId AND "studentId"=:studentId LIMIT 1', { replacements:{ parentId:parent.id, studentId:student.id }, type:sequelize.QueryTypes.SELECT });
-    if (!linked.length || student.User?.schoolCode !== req.user.schoolCode) return res.status(403).json({ success:false, message:'Not your child' });
+    const sameSchool = student.User?.schoolCode === req.user.schoolCode;
+    const linked = await v107ParentOwnsStudent(parent, req.user, student.id);
+    if (!sameSchool || !linked) return res.status(403).json({ success:false, message:'Not your child' });
 
     let recipientId = null, recipientName = '', actualRecipientType = target;
     if (target === 'admin') {
@@ -570,29 +613,14 @@ exports.sendMessage = async (req, res) => {
       if (!admin) return res.status(404).json({ success:false, message:'School admin not found' });
       recipientId = admin.id; recipientName = admin.name; actualRecipientType = 'admin';
     } else if (target === 'teacher') {
-      let teacher = null;
-      const possibleClassNames = [student.className, student.grade, student.class, student.stream].filter(Boolean).map(String);
-      let cls = student.classId ? await Class.findOne({ where:{ id:student.classId, schoolCode:req.user.schoolCode } }).catch(()=>null) : null;
-      if (!cls && possibleClassNames.length) cls = await Class.findOne({ where:{ schoolCode:req.user.schoolCode, [Op.or]: [{ name:{ [Op.in]: possibleClassNames } }, { grade:{ [Op.in]: possibleClassNames } }] } }).catch(()=>null);
-      if (cls?.teacherId) teacher = await Teacher.findOne({ where:{ id:cls.teacherId }, include:[{ model:User, where:{ schoolCode:req.user.schoolCode }, attributes:['id','name','email'] }] }).catch(()=>null);
-      if (!teacher && cls?.id) {
-        const { TeacherSubjectAssignment } = require('../models');
-        const ass = await TeacherSubjectAssignment.findOne({ where:{ classId:cls.id, isClassTeacher:true }, include:[{ model:Teacher, include:[{ model:User, where:{ schoolCode:req.user.schoolCode }, attributes:['id','name','email'] }] }] }).catch(()=>null);
-        teacher = ass?.Teacher || null;
-      }
-      if (!teacher && cls?.id) teacher = await Teacher.findOne({ where:{ classId:cls.id }, include:[{ model:User, where:{ schoolCode:req.user.schoolCode }, attributes:['id','name','email'] }] }).catch(()=>null);
-      if (!teacher) {
-        const teacherNames = [...possibleClassNames, cls?.name, cls?.grade].filter(Boolean);
-        if (teacherNames.length) teacher = await Teacher.findOne({ where:{ classTeacher:{ [Op.in]: teacherNames } }, include:[{ model:User, where:{ schoolCode:req.user.schoolCode }, attributes:['id','name','email'] }] }).catch(()=>null);
-      }
-      if (!teacher) {
-        // Final consolidation: do not break parent messaging when class-teacher lookup
-        // cannot match legacy class storage. Fallback to school admin and return the
-        // actual recipient so the frontend toast is truthful.
-        const admin = await User.findOne({ where: { role: 'admin', schoolCode: req.user.schoolCode, isActive: true } })
-          || await User.findOne({ where:{ role:'admin', schoolCode:req.user.schoolCode } });
-        if (!admin) return res.status(404).json({ success:false, message:'Class teacher has not been assigned yet and school admin was not found.' });
-        recipientId = admin.id; recipientName = admin.name; actualRecipientType = 'admin';
+      const found = await v107FindClassTeacherForStudent(student, req.user.schoolCode);
+      const teacher = found.teacher;
+      if (!teacher || !teacher.User) {
+        return res.status(404).json({
+          success:false,
+          message:"Class teacher has not been assigned for this child's class yet. Please ask the school admin to assign a class teacher first.",
+          fallbackTarget:'admin'
+        });
       } else {
         recipientId = teacher.User.id; recipientName = teacher.User.name; actualRecipientType = 'teacher';
       }
@@ -605,10 +633,32 @@ exports.sendMessage = async (req, res) => {
       senderId: req.user.id,
       receiverId: recipientId,
       content: message,
-      metadata: { studentId: student.id, studentName: student.User?.name, parentName: req.user.name, requestedRecipientType: target, actualRecipientType, conversationType: 'parent-to-staff' }
+      metadata: { studentId: student.id, studentName: student.User?.name, parentName: req.user.name, parentUserId: req.user.id, requestedRecipientType: target, actualRecipientType, conversationType: 'parent-to-staff' }
     });
 
-    if (global.io) global.io.to(`user-${recipientId}`).emit('new-message', { from:req.user.id, fromName:req.user.name, content:message, studentName:student.User?.name, timestamp:new Date() });
+    await createAlert({
+      userId: recipientId,
+      role: actualRecipientType === 'admin' ? 'admin' : 'teacher',
+      type: 'message',
+      severity: 'info',
+      title: `📬 Message from parent of ${student.User?.name || 'student'}`,
+      message: String(message || '').substring(0, 100),
+      data: {
+        studentId: student.id,
+        studentName: student.User?.name,
+        parentUserId: req.user.id,
+        parentName: req.user.name,
+        messageId: newMessage.id,
+        conversationType: 'parent-to-staff',
+        requestedRecipientType: target,
+        actualRecipientType
+      }
+    }).catch(err => console.warn('Parent message alert failed:', err.message));
+
+    if (global.io) {
+      global.io.to(`user-${recipientId}`).emit('new-message', { from:req.user.id, fromName:req.user.name, content:message, studentName:student.User?.name, timestamp:new Date(), conversationType:'parent-to-staff' });
+      global.io.to(`user-${recipientId}`).emit('parent-message', { from:req.user.id, fromName:req.user.name, content:message, studentName:student.User?.name, timestamp:new Date(), messageId:newMessage.id });
+    }
 
     res.status(201).json({ success:true, message:'Message sent successfully', data:{ id:newMessage.id, recipient:recipientName, recipientType:actualRecipientType, requestedRecipientType:target, recipientId, sentAt:newMessage.createdAt } });
   } catch (error) {
@@ -812,11 +862,8 @@ exports.getChildTodayAttendance = async (req, res) => {
 // In parentController.js
 exports.getConversations = async (req, res) => {
   try {
-    const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const messages = await Message.findAll({
-      where: {
-        [Op.or]: [{ senderId: req.user.id }, { receiverId: req.user.id }]
-      },
+      where: { [Op.or]: [{ senderId: req.user.id }, { receiverId: req.user.id }] },
       include: [
         { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
         { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
@@ -825,21 +872,29 @@ exports.getConversations = async (req, res) => {
     });
     const conversations = {};
     messages.forEach(msg => {
-      const otherId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
+      const otherId = Number(msg.senderId) === Number(req.user.id) ? msg.receiverId : msg.senderId;
+      const otherUser = Number(msg.senderId) === Number(req.user.id) ? msg.Receiver : msg.Sender;
       if (!conversations[otherId]) {
         conversations[otherId] = {
           userId: otherId,
-          userName: msg.senderId === req.user.id ? msg.Receiver?.name : msg.Sender?.name,
+          userName: otherUser?.name || 'School Staff',
+          userRole: otherUser?.role || 'unknown',
           lastMessage: msg.content,
           lastMessageTime: msg.createdAt,
-          unreadCount: msg.receiverId === req.user.id && !msg.isRead ? 1 : 0
+          unreadCount: 0,
+          messages: [],
+          requestedRecipientType: msg.metadata?.requestedRecipientType || null,
+          actualRecipientType: msg.metadata?.actualRecipientType || otherUser?.role || null,
+          studentId: msg.metadata?.studentId || null,
+          studentName: msg.metadata?.studentName || null
         };
-      } else if (msg.receiverId === req.user.id && !msg.isRead) {
-        conversations[otherId].unreadCount++;
       }
+      if (Number(msg.receiverId) === Number(req.user.id) && !msg.isRead) conversations[otherId].unreadCount++;
+      conversations[otherId].messages.push(msg);
     });
     res.json({ success: true, data: Object.values(conversations) });
   } catch (error) {
+    console.error('Get parent conversations error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

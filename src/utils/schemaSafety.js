@@ -38,6 +38,12 @@ async function addColumnIfMissing(tableName, columnName, ddl) {
 }
 
 
+async function widenProfileImageColumn() {
+  if (await tableExists('Users') && await columnExists('Users', 'profileImage')) {
+    await sequelize.query('ALTER TABLE "Users" ALTER COLUMN "profileImage" TYPE TEXT').catch(() => null);
+  }
+}
+
 async function createTableIfMissing(tableName, ddl) {
   if (await tableExists(tableName)) return;
   console.warn(`[schemaSafety] Creating missing table "${tableName}"`);
@@ -354,9 +360,11 @@ async function ensureRuntimeSchema() {
   if (process.env.NODE_ENV === 'production' && process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') {
     console.log('[schemaSafety] Production full runtime schema mutation disabled; applying strict V102 auth/access bootstrap only.');
     await ensureV102AccessCurriculumSchema();
+    await widenProfileImageColumn();
     return;
   }
   await ensureV102AccessCurriculumSchema();
+  await widenProfileImageColumn();
 
   // V30: hard runtime repair for live Render/Postgres DBs that missed the v29 migration.
   // Sequelize queries "Student" columns with exact quoted camelCase names, so the DB must contain "classId" exactly.

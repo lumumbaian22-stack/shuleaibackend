@@ -2,9 +2,10 @@ const { HomeTask, HomeTaskAssignment, Student, Competency, LearningOutcome, Stud
 const { Op } = require('sequelize');
 
 async function parentOwnsStudent(parentId, studentId, userId = null) {
+  const ids = [parentId, userId].filter(v => v !== null && v !== undefined);
   const rows = await require('../models').sequelize.query(
-    'SELECT 1 FROM "StudentParents" WHERE ("parentId" = :parentId OR "parentId" = :userId) AND "studentId" = :studentId LIMIT 1',
-    { replacements: { parentId, userId: userId || parentId, studentId }, type: require('../models').sequelize.QueryTypes.SELECT }
+    'SELECT 1 FROM "StudentParents" WHERE "parentId" IN (:ids) AND "studentId" = :studentId LIMIT 1',
+    { replacements: { ids: ids.length ? ids : [-1], studentId }, type: require('../models').sequelize.QueryTypes.SELECT }
   );
   return rows.length > 0;
 }
@@ -152,6 +153,26 @@ exports.completeTask = async (req, res) => {
       });
     }
 
+    if (!assignment && requestedStudentId) {
+      const student = await Student.findByPk(requestedStudentId, { include: [{ model: require('../models').User, attributes: ['id','schoolCode','name'] }] });
+      if (!student) return res.status(404).json({ success: false, message: 'Child not found in this school.' });
+      const sameSchool = !student.User?.schoolCode || student.User.schoolCode === req.user.schoolCode;
+      if (!sameSchool) return res.status(404).json({ success: false, message: 'Child not found in this school.' });
+      const owns = await parentOwnsStudent(parent.id, student.id, req.user.id).catch(() => false);
+      if (!owns) return res.status(403).json({ success: false, message: 'You cannot update this task because it is not assigned to your child.' });
+      const task = await HomeTask.findByPk(id);
+      if (!task) return res.status(404).json({ success: false, message: 'Task not found for this child.' });
+      assignment = await HomeTaskAssignment.create({
+        taskId: task.id,
+        studentId: student.id,
+        schoolCode: req.user.schoolCode,
+        status: 'pending',
+        assignedAt: new Date()
+      });
+      assignment.HomeTask = task;
+      assignment.Student = student;
+    }
+
     if (!assignment) {
       return res.status(404).json({ success: false, message: 'Task assignment not found for this child.' });
     }
@@ -172,7 +193,7 @@ exports.completeTask = async (req, res) => {
       const phoneMatch = phone && childPhone && (phone.endsWith(childPhone.slice(-9)) || childPhone.endsWith(phone.slice(-9)));
       hasChild = !!(emailMatch || phoneMatch);
     }
-    if (!hasChild && requestedStudentId && Number(requestedStudentId) === Number(student.id) && student.User?.schoolCode === req.user.schoolCode) { hasChild = true; }
+    if (!hasChild && requestedStudentId && Number(requestedStudentId) === Number(student.id) && (!student.User?.schoolCode || student.User.schoolCode === req.user.schoolCode)) { hasChild = true; }
     if (!hasChild) return res.status(403).json({ success: false, message: 'You cannot update this task because it is not assigned to your child.' });
 
     assignment.status = 'completed';

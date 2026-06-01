@@ -234,15 +234,55 @@ function levelCodeFromGrade(curriculum, gradeOrName) {
   return null;
 }
 
+function safeObject(value) {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? parsed : {}; } catch (_) { return {}; }
+  }
+  return typeof value === 'object' ? value : {};
+}
+
 function getCurriculumConfig(school) {
-  const settings = school?.settings || {};
+  const settings = safeObject(school?.settings);
   const engine = settings.curriculumEngine || {};
   const curriculum = normalizeCurriculum(engine.curriculum || school?.system || settings.curriculum || 'cbc');
   const structureType = engine.structureType || settings.schoolStructure || settings.schoolLevel || 'mixed';
   const preset = STRUCTURE_PRESETS[curriculum]?.[structureType] || STRUCTURE_PRESETS[curriculum]?.mixed || getBank(curriculum).levels.map(l => l.code);
   const enabledLevels = Array.isArray(engine.enabledLevels) && engine.enabledLevels.length ? engine.enabledLevels : preset;
-  const schoolSubjects = Array.isArray(engine.schoolSubjects) ? engine.schoolSubjects : [];
-  return { curriculum, structureType, enabledLevels, schoolSubjects, gradingSettings: engine.gradingSettings || settings.gradingScale || null, seniorSettings: engine.seniorSettings || {}, raw: engine };
+
+  // Explicit admin-created custom subjects are part of the new engine, not a legacy fallback.
+  // They become school-offered subjects scoped to the enabled structure levels unless the admin saved
+  // more specific levelCodes through the Add Subjects checklist. This preserves custom-subject functionality
+  // without letting old random subjects override curriculum/structure rules.
+  const explicitSchoolSubjects = Array.isArray(engine.schoolSubjects) ? engine.schoolSubjects : [];
+  const customSources = [
+    settings.customSubjects,
+    settings.subjects,
+    settings.schoolCustomSubjects,
+    school?.customSubjects
+  ];
+  const customNames = customSources.flatMap(v => Array.isArray(v) ? v : []);
+  const existingNames = new Set(explicitSchoolSubjects.map(s => String(s.name || s.subjectName || s.subject || '').trim().toLowerCase()).filter(Boolean));
+  const customRows = customNames
+    .map(name => String(name || '').trim())
+    .filter(Boolean)
+    .filter(name => !existingNames.has(name.toLowerCase()))
+    .map((name, idx) => ({
+      subjectId: `custom_${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
+      id: `custom_${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
+      name,
+      category: 'custom',
+      levelCodes: enabledLevels,
+      isCore: false,
+      isOptional: true,
+      countsInFinalByDefault: true,
+      isOffered: true,
+      order: 900 + idx,
+      source: 'admin_custom_subjects'
+    }));
+  const schoolSubjects = [...explicitSchoolSubjects, ...customRows];
+
+  return { curriculum, structureType, enabledLevels, schoolSubjects, customSubjects: customRows, gradingSettings: engine.gradingSettings || settings.gradingScale || null, seniorSettings: engine.seniorSettings || {}, raw: engine };
 }
 
 function getAllowedLevelsForSchool(school) {
@@ -255,9 +295,13 @@ function getAllowedLevelsForSchool(school) {
 function getSubjectBankForSchool(school) {
   const cfg = getCurriculumConfig(school);
   const enabled = new Set(cfg.enabledLevels);
-  return getBank(cfg.curriculum).subjects
+  const bankRows = getBank(cfg.curriculum).subjects
     .filter(s => (s.levelCodes || []).some(l => enabled.has(l)))
-    .map(s => ({ ...s, curriculum: cfg.curriculum, levelLabels: (s.levelCodes || []).map(c => getLevelByCode(cfg.curriculum, c)?.label || titleCase(c)) }))
+    .map(s => ({ ...s, curriculum: cfg.curriculum, levelLabels: (s.levelCodes || []).map(c => getLevelByCode(cfg.curriculum, c)?.label || titleCase(c)) }));
+  const customRows = (cfg.customSubjects || []).map(s => ({ ...s, curriculum: cfg.curriculum, levelLabels: (s.levelCodes || []).map(c => getLevelByCode(cfg.curriculum, c)?.label || titleCase(c)) }));
+  const seen = new Set();
+  return [...bankRows, ...customRows]
+    .filter(s => { const key = String(s.id || s.name || '').toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; })
     .sort((a,b) => (a.levelCodes?.[0] || '').localeCompare(b.levelCodes?.[0] || '') || (a.order||0)-(b.order||0) || a.name.localeCompare(b.name));
 }
 

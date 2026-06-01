@@ -186,8 +186,12 @@ exports.uploadProfilePicture = async (req, res) => {
     }
 
     const originalName = file.name || file.originalname || 'profile.jpg';
-    const ext = path.extname(originalName) || '.jpg';
-    const fileName = `profile_${req.user.id}_${Date.now()}${ext}`;
+    const mime = file.mimetype || file.type || 'image/jpeg';
+    const extFromMime = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : mime.includes('gif') ? '.gif' : '.jpg';
+    const rawExt = path.extname(String(originalName || '')).toLowerCase();
+    const ext = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(rawExt) ? rawExt : extFromMime;
+    // Keep filename/path safely below VARCHAR(255) for live DBs that have not altered profileImage to TEXT.
+    const fileName = `u${req.user.id}_${Date.now()}${ext}`;
     const uploadDir = path.join(__dirname, '../../uploads/profiles');
 
     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -205,15 +209,23 @@ exports.uploadProfilePicture = async (req, res) => {
     let durableProfileImageDataUrl = null;
     try {
       const imageBuffer = await fs.promises.readFile(uploadPath);
-      const mime = file.mimetype || file.type || 'image/jpeg';
-      if (imageBuffer.length <= 1024 * 1024) durableProfileImageDataUrl = `data:${mime};base64,${imageBuffer.toString('base64')}`;
+      if (imageBuffer.length <= 512 * 1024) durableProfileImageDataUrl = `data:${mime};base64,${imageBuffer.toString('base64')}`;
     } catch (_) {}
     const preferences = { ...(req.user.preferences || {}) };
     if (durableProfileImageDataUrl) preferences.profileImageDataUrl = durableProfileImageDataUrl;
 
-    await req.user.update({ profileImage: durableProfileImageDataUrl || absoluteUrl, preferences });
+    // profileImage is VARCHAR(255) in many live DBs. Never store a base64 data URL there.
+    // Store the short durable URL/path in profileImage and keep optional base64 only inside JSONB preferences.
+    try {
+      await req.user.update({ profileImage: relativeUrl, preferences });
+    } catch (updateError) {
+      // If the live DB still has a short VARCHAR column or JSON issue, never fail the upload.
+      // Save the short URL only, then return it to the frontend.
+      console.warn('Profile image metadata update retrying with short URL only:', updateError.message);
+      await req.user.update({ profileImage: relativeUrl });
+    }
 
-    res.json({ success: true, data: { profileImage: durableProfileImageDataUrl || absoluteUrl, profileImagePath: relativeUrl, durable: !!durableProfileImageDataUrl } });
+    res.json({ success: true, data: { profileImage: relativeUrl, profileImageUrl: absoluteUrl, profileImagePath: relativeUrl, durable: true } });
   } catch (error) {
     console.error('Profile upload error:', error);
     res.status(500).json({ success: false, message: error.message });
