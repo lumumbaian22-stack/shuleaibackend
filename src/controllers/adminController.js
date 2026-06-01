@@ -1160,12 +1160,12 @@ exports.submitSchoolPaymentConfirmation = async (req, res) => {
   try {
     const school = await v102GetSchool(req.user.schoolCode);
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const { amount, method='mpesa', reference, paidAt, notes, proofUrl, requestedPlan='growth', billingCycle='monthly' } = req.body;
+    const { amount, method='mpesa', reference, paidAt, notes, proofUrl, requestedPlan='growth' } = req.body;
     const [rows] = await sequelize.query(`
-      INSERT INTO "SchoolPaymentRequests" ("schoolCode","submittedBy","amount","method","reference","paidAt","notes","proofUrl","requestedPlan","billingCycle","status","createdAt","updatedAt")
-      VALUES (:schoolCode,:submittedBy,:amount,:method,:reference,:paidAt,:notes,:proofUrl,:requestedPlan,:billingCycle,'pending',NOW(),NOW())
+      INSERT INTO "SchoolPaymentRequests" ("schoolCode","submittedBy","amount","method","reference","paidAt","notes","proofUrl","requestedPlan","status","createdAt","updatedAt")
+      VALUES (:schoolCode,:submittedBy,:amount,:method,:reference,:paidAt,:notes,:proofUrl,:requestedPlan,'pending',NOW(),NOW())
       RETURNING *
-    `, { replacements:{ schoolCode:req.user.schoolCode, submittedBy:req.user.id, amount:Number(amount || 0), method, reference:reference || null, paidAt:paidAt || new Date(), notes:notes || null, proofUrl:proofUrl || null, requestedPlan, billingCycle } });
+    `, { replacements:{ schoolCode:req.user.schoolCode, submittedBy:req.user.id, amount:Number(amount || 0), method, reference:reference || null, paidAt:paidAt || new Date(), notes:notes || null, proofUrl:proofUrl || null, requestedPlan } });
     res.status(201).json({ success:true, message:'Payment confirmation submitted for super admin review', data:rows[0] });
   } catch(error) { console.error('V102 payment confirmation error:', error); res.status(500).json({ success:false, message:error.message }); }
 };

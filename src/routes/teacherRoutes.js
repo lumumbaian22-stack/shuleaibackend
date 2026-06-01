@@ -63,7 +63,6 @@ router.get('/tasks', taskController.getTasks);
 router.post('/tasks', taskController.createTask);
 router.put('/tasks/:taskId', taskController.updateTask);
 router.delete('/tasks/:taskId', taskController.deleteTask);
-router.post('/tasks/:taskId/complete', taskController.completeTask);
 
 router.get('/attendance/:date', teacherController.getAttendanceForDate);
 

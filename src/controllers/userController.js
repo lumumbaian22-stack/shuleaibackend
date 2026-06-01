@@ -201,12 +201,19 @@ exports.uploadProfilePicture = async (req, res) => {
     else return res.status(400).json({ success: false, message: 'Unsupported upload object from server middleware' });
 
     const relativeUrl = `/uploads/profiles/${fileName}`;
+    const absoluteUrl = `${req.protocol}://${req.get('host')}${relativeUrl}`;
+    let durableProfileImageDataUrl = null;
+    try {
+      const imageBuffer = await fs.promises.readFile(uploadPath);
+      const mime = file.mimetype || file.type || 'image/jpeg';
+      if (imageBuffer.length <= 1024 * 1024) durableProfileImageDataUrl = `data:${mime};base64,${imageBuffer.toString('base64')}`;
+    } catch (_) {}
     const preferences = { ...(req.user.preferences || {}) };
-    delete preferences.profileImageDataUrl;
+    if (durableProfileImageDataUrl) preferences.profileImageDataUrl = durableProfileImageDataUrl;
 
-    await req.user.update({ profileImage: relativeUrl, preferences });
+    await req.user.update({ profileImage: durableProfileImageDataUrl || absoluteUrl, preferences });
 
-    res.json({ success: true, data: { profileImage: relativeUrl, profileImagePath: relativeUrl, durable: true } });
+    res.json({ success: true, data: { profileImage: durableProfileImageDataUrl || absoluteUrl, profileImagePath: relativeUrl, durable: !!durableProfileImageDataUrl } });
   } catch (error) {
     console.error('Profile upload error:', error);
     res.status(500).json({ success: false, message: error.message });

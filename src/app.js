@@ -190,29 +190,30 @@ app.get('/api/health/detailed', async (req, res) => {
 });
 
 
-// V42: run the schema guard once on first API request too. This protects Render deployments
-// where startup migrations are skipped, delayed, or the old process remains warm.
+// V105: run the schema guard once before API routes, including production.
+// Login uses school access columns, so schema readiness must happen before auth.
 let __v42SchemaGuardPromise = null;
 app.use('/api', async (req, res, next) => {
-  const allowRuntimeSchemaRepair = process.env.ALLOW_RUNTIME_SCHEMA_REPAIR === 'true' || process.env.NODE_ENV !== 'production';
-  if (!allowRuntimeSchemaRepair) return next();
   try {
     if (!__v42SchemaGuardPromise) {
       __v42SchemaGuardPromise = ensureRuntimeSchema().catch((err) => {
-        console.error('[v42-schema-guard] Runtime schema repair failed:', err.message);
+        console.error('[v105-schema-guard] Runtime schema repair failed:', err.message);
         __v42SchemaGuardPromise = null;
       });
     }
     await __v42SchemaGuardPromise;
   } catch (err) {
-    console.error('[v42-schema-guard] Continuing after schema guard error:', err.message);
+    console.error('[v105-schema-guard] Continuing after schema guard error:', err.message);
   }
   next();
 });
 
 
 async function ensureCriticalDashboardColumns(req, res, next) {
-  if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true' && process.env.NODE_ENV === 'production') return next();
+  // V105: This guard is no longer optional in production.
+  // The access/curriculum engine adds live columns used during login, so the schema
+  // must be aligned before any auth query runs. This is not fallback business logic;
+  // it is idempotent schema readiness for Render databases that missed migrations.
   try {
     const { sequelize } = require('./models');
     await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
@@ -244,12 +245,15 @@ async function ensureCriticalDashboardColumns(req, res, next) {
     await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "accessStatus" VARCHAR(255) DEFAULT 'limited'`).catch(() => null);
     await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "schoolStructure" VARCHAR(255) DEFAULT 'mixed'`).catch(() => null);
     await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "enabledLevels" JSONB DEFAULT '[]'::jsonb`).catch(() => null);
+    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "curriculumVersion" VARCHAR(255)').catch(() => null);
+    await sequelize.query('ALTER TABLE IF EXISTS "TeacherSubjectAssignments" ADD COLUMN IF NOT EXISTS "schoolSubjectId" VARCHAR(255)').catch(() => null);
+    await sequelize.query('ALTER TABLE IF EXISTS "TeacherSubjectAssignments" ADD COLUMN IF NOT EXISTS "curriculum" VARCHAR(255)').catch(() => null);
+    await sequelize.query('ALTER TABLE IF EXISTS "TeacherSubjectAssignments" ADD COLUMN IF NOT EXISTS "levelCode" VARCHAR(255)').catch(() => null);
     await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "curriculum" VARCHAR(255)').catch(() => null);
     await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "levelCode" VARCHAR(255)').catch(() => null);
     await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "levelLabel" VARCHAR(255)').catch(() => null);
     await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "curriculumLevel" VARCHAR(255)').catch(() => null);
-    await sequelize.query(`CREATE TABLE IF NOT EXISTS "SchoolPaymentRequests" ("id" SERIAL PRIMARY KEY, "schoolCode" VARCHAR(255) NOT NULL, "submittedBy" INTEGER, "amount" INTEGER DEFAULT 0, "currency" VARCHAR(255) DEFAULT 'KES', "method" VARCHAR(255) DEFAULT 'mpesa', "reference" VARCHAR(255), "paidAt" TIMESTAMP WITH TIME ZONE, "notes" TEXT, "proofUrl" TEXT, "requestedPlan" VARCHAR(255) DEFAULT 'growth', "billingCycle" VARCHAR(255) DEFAULT 'monthly', "status" VARCHAR(255) DEFAULT 'pending', "reviewedBy" INTEGER, "reviewedAt" TIMESTAMP WITH TIME ZONE, "reviewNotes" TEXT, "metadata" JSONB DEFAULT '{}'::jsonb, "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW())`).catch(() => null);
-    await sequelize.query(`ALTER TABLE IF EXISTS "SchoolPaymentRequests" ADD COLUMN IF NOT EXISTS "billingCycle" VARCHAR(255) DEFAULT 'monthly'`).catch(() => null);
+    await sequelize.query(`CREATE TABLE IF NOT EXISTS "SchoolPaymentRequests" ("id" SERIAL PRIMARY KEY, "schoolCode" VARCHAR(255) NOT NULL, "submittedBy" INTEGER, "amount" INTEGER DEFAULT 0, "currency" VARCHAR(255) DEFAULT 'KES', "method" VARCHAR(255) DEFAULT 'mpesa', "reference" VARCHAR(255), "paidAt" TIMESTAMP WITH TIME ZONE, "notes" TEXT, "proofUrl" TEXT, "requestedPlan" VARCHAR(255) DEFAULT 'growth', "status" VARCHAR(255) DEFAULT 'pending', "reviewedBy" INTEGER, "reviewedAt" TIMESTAMP WITH TIME ZONE, "reviewNotes" TEXT, "metadata" JSONB DEFAULT '{}'::jsonb, "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW())`).catch(() => null);
     await sequelize.query(`CREATE TABLE IF NOT EXISTS "StudentSubjectSelections" ("id" SERIAL PRIMARY KEY, "schoolCode" VARCHAR(255) NOT NULL, "studentId" INTEGER NOT NULL, "classId" INTEGER, "subjectId" VARCHAR(255), "subjectName" VARCHAR(255) NOT NULL, "status" VARCHAR(255) DEFAULT 'taking', "pathway" VARCHAR(255), "track" VARCHAR(255), "isCompulsory" BOOLEAN DEFAULT FALSE, "isElective" BOOLEAN DEFAULT TRUE, "requestedBy" INTEGER, "approvedBy" INTEGER, "approvedAt" TIMESTAMP WITH TIME ZONE, "metadata" JSONB DEFAULT '{}'::jsonb, "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW())`).catch(() => null);
     await sequelize.query(`CREATE TABLE IF NOT EXISTS "PlatformAuditEvents" ("id" SERIAL PRIMARY KEY, "schoolCode" VARCHAR(255), "actorUserId" INTEGER, "actorRole" VARCHAR(255), "module" VARCHAR(255), "action" VARCHAR(255), "entityType" VARCHAR(255), "entityId" VARCHAR(255), "before" JSONB DEFAULT '{}'::jsonb, "after" JSONB DEFAULT '{}'::jsonb, "metadata" JSONB DEFAULT '{}'::jsonb, "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW())`).catch(() => null);
     await sequelize.query(`ALTER TABLE IF EXISTS "TutorMessages" ADD COLUMN IF NOT EXISTS "content" TEXT NOT NULL DEFAULT ''`).catch(() => null);

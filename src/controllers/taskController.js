@@ -1,22 +1,6 @@
 // src/controllers/taskController.js
-const { Task, User, Teacher } = require('../models');
+const { Task, User } = require('../models');
 const { createAlert } = require('../services/notificationService');
-const { Op } = require('sequelize');
-
-async function getTaskOwnerIds(req) {
-  const ids = new Set([Number(req.user.id)]);
-  if (req.user.role === 'teacher') {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } }).catch(() => null);
-    if (teacher?.id) ids.add(Number(teacher.id));
-  }
-  return Array.from(ids).filter(Boolean);
-}
-
-async function findOwnedTask(req, id) {
-  const ownerIds = await getTaskOwnerIds(req);
-  return Task.findOne({ where: { id, userId: ownerIds } });
-}
-
 
 // @desc    Get user's tasks
 // @route   GET /api/tasks
@@ -24,9 +8,8 @@ async function findOwnedTask(req, id) {
 exports.getTasks = async (req, res) => {
   try {
     // Use userId column instead of teacherId
-    const ownerIds = await getTaskOwnerIds(req);
     const tasks = await Task.findAll({
-      where: { userId: { [Op.in]: ownerIds } },
+      where: { userId: req.user.id },
       order: [['dueDate', 'ASC'], ['createdAt', 'DESC']]
     });
     res.json({ success: true, data: tasks });
@@ -90,7 +73,7 @@ exports.createTask = async (req, res) => {
 exports.updateTask = async (req, res) => {
   try {
     const id = req.params.id || req.params.taskId;
-    const task = await findOwnedTask(req, id);
+    const task = await Task.findOne({ where: { id, userId: req.user.id } });
     
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found or not assigned to you' });
@@ -110,7 +93,7 @@ exports.updateTask = async (req, res) => {
 exports.deleteTask = async (req, res) => {
   try {
     const id = req.params.id || req.params.taskId;
-    const task = await findOwnedTask(req, id);
+    const task = await Task.findOne({ where: { id, userId: req.user.id } });
     
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found or not assigned to you' });
@@ -130,7 +113,7 @@ exports.deleteTask = async (req, res) => {
 exports.completeTask = async (req, res) => {
   try {
     const id = req.params.id || req.params.taskId;
-    const task = await findOwnedTask(req, id);
+    const task = await Task.findOne({ where: { id, userId: req.user.id } });
     
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found or not assigned to you' });

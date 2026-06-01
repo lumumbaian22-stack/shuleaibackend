@@ -10,26 +10,15 @@ const { generateTemporaryPassword } = require('../utils/passwords');
 // @access  Private/SuperAdmin
 exports.getOverview = async (req, res) => {
     try {
-        const [events] = await sequelize.query(`
-          SELECT "schoolCode", "actorRole", "module", "action", "entityType", "entityId", "createdAt"
-          FROM "PlatformAuditEvents"
-          ORDER BY "createdAt" DESC
-          LIMIT 10
-        `).catch(() => [[]]);
         const stats = {
             schools: await School.count(),
             pendingSchools: await School.count({ where: { status: 'pending' } }),
             activeSchools: await School.count({ where: { status: 'active' } }),
-            suspendedSchools: await School.count({ where: { status: 'suspended' } }).catch(() => 0),
-            pilotSchools: await School.count({ where: { pilotFullAccessEnabled: true } }).catch(() => 0),
-            trialSchools: await School.count({ where: { trialAccessEnabled: true } }).catch(() => 0),
-            paidSchools: await School.count({ where: { subscriptionStatus: 'active' } }).catch(() => 0),
             students: await Student.count(),
             teachers: await Teacher.count(),
             parents: await Parent.count(),
             pendingApprovals: await ApprovalRequest.count({ where: { status: 'pending' } }),
-            users: await User.count(),
-            platformEvents: events || []
+            users: await User.count()
         };
         res.json({ success: true, data: stats });
     } catch (error) {
@@ -1481,18 +1470,6 @@ exports.updateSchoolAccessControls = async (req, res) => {
   } catch(error) { console.error('V102 update school access error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 
-function v110AddSubscriptionDuration(start, cycle) {
-  const d = new Date(start || Date.now());
-  if (Number.isNaN(d.getTime())) return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-  const end = new Date(d.getTime());
-  const c = String(cycle || 'monthly').toLowerCase();
-  if (c === 'yearly' || c === 'annual') end.setFullYear(end.getFullYear() + 1);
-  else if (c === 'termly' || c === 'term') end.setMonth(end.getMonth() + 3);
-  else if (c === 'custom') end.setMonth(end.getMonth() + 1);
-  else end.setDate(end.getDate() + 30);
-  return end;
-}
-
 exports.getSchoolPaymentRequests = async (req, res) => {
   try {
     const status = req.query.status || null;
@@ -1533,9 +1510,8 @@ exports.reviewSchoolPaymentRequest = async (req, res) => {
       school.manualPaymentConfirmedAt = new Date();
       school.subscriptionPlan = req.body.subscriptionPlan || request.requestedPlan || school.subscriptionPlan || 'growth';
       school.subscriptionStatus = 'active';
-      const paidStart = req.body.subscriptionStartedAt || request.paidAt || request.createdAt || new Date();
-      school.subscriptionStartedAt = paidStart;
-      school.subscriptionEndsAt = req.body.subscriptionEndsAt || v110AddSubscriptionDuration(paidStart, req.body.billingCycle || request.billingCycle || 'monthly');
+      school.subscriptionStartedAt = school.subscriptionStartedAt || new Date();
+      if (req.body.subscriptionEndsAt) school.subscriptionEndsAt = req.body.subscriptionEndsAt;
     }
     const access = await v102RecalculateSchoolAccess(school);
     await v102Audit({ schoolCode:school.schoolId, actorUserId:req.user.id, actorRole:req.user.role, module:'billing', action:`payment_request_${status}`, entityType:'SchoolPaymentRequest', entityId:requestId, before:request, after:{ status, access } });
