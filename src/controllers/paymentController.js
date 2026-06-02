@@ -11,11 +11,29 @@ function auditEntry(action, actor, extra={}){ return { action, actorUserId: acto
 async function writeAudit(req, data){ try { await AuditLog?.create({ schoolCode: schoolCode(req) || data.schoolCode || 'platform', actorUserId:req.user?.id, actorRole:req.user?.role, ipAddress:req.ip, userAgent:req.get?.('user-agent'), ...data }); } catch(e){ console.error('Payment audit failed:', e.message); } }
 async function currentParent(req){ return Parent.findOne({ where:{ userId:req.user.id } }); }
 async function findStudentForParent(req, studentId){
-  const student = await Student.findByPk(studentId, { include:[{model:User, attributes:['id','name','schoolCode']}] });
+  const rawId = Number(studentId) || 0;
+  const student = await Student.findOne({ where: { [require('sequelize').Op.or]: [{ id: rawId }, { userId: rawId }] }, include:[{model:User, attributes:['id','name','schoolCode']}] });
   if(!student) return null;
   if(req.user.role !== 'parent') return student;
   const parent = await currentParent(req);
-  if(parent?.hasStudent){ const ok = await parent.hasStudent(student); if(!ok) return null; }
+  if(!parent) return null;
+  const parentProfileId = Number(parent.id || 0);
+  const parentUserId = Number(req.user.id || parent.userId || 0);
+  const studentIds = [...new Set([Number(student.id || 0), Number(student.userId || student.User?.id || 0)].filter(Boolean))];
+  const parentIds = [...new Set([parentProfileId, parentUserId].filter(Boolean))];
+  const rows = await require('../models').sequelize.query(`
+    SELECT sp."studentId", sp."parentId", p."userId" AS "linkedParentUserId"
+      FROM "StudentParents" sp
+      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
+     WHERE sp."studentId" IN (:studentIds)
+       AND (sp."parentId" IN (:parentIds) OR p."userId" = :parentUserId)
+     LIMIT 1`,
+    { replacements:{ studentIds, parentIds, parentUserId }, type:require('../models').sequelize.QueryTypes.SELECT }
+  ).catch(() => []);
+  if(!rows.length) return null;
+  if(parentProfileId && (Number(rows[0].studentId) !== Number(student.id) || Number(rows[0].parentId) !== parentProfileId)) {
+    await require('../models').sequelize.query(`INSERT INTO "StudentParents" ("studentId", "parentId") VALUES (:studentId, :parentId) ON CONFLICT ("studentId", "parentId") DO NOTHING`, { replacements:{ studentId:student.id, parentId:parentProfileId } }).catch(() => null);
+  }
   return student;
 }
 
@@ -609,6 +627,119 @@ exports.parentSubscriptionSTK = async (req, res) => {
     const payment = await createPendingPayment(req, { studentId:student.id, parentId:parent.id, amount:payAmount, reference, phone, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, accountReference:reference, schoolCode:schoolCode(req), paymentType:'subscription', paidTo:'platform', ownerType:'child', plan:plan.code || plan.name, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle, subscriptionPaymentId:subscriptionPayment.id, subscriptionId:subscription.id, gatewayResponse:stk, metadata:{ planCode:plan.code || plan.name, billingCycle, studentId:student.id, parentId:parent.id, ownerType:'child' } });
     res.json({ success:true, message:'M-PESA prompt sent. Subscription activates only after Daraja callback confirmation.', data:{ paymentId:payment.id, subscriptionPaymentId:subscriptionPayment.id, subscriptionId:subscription.id, reference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
   } catch(error){ res.status(error.statusCode || 500).json({ success:false, message:error.message, data:error.data || undefined }); }
+};
+
+
+
+exports.parentSubscriptionManual = async (req, res) => {
+  try {
+    const { studentId, planCode, plan, amount, phone, mpesaCode, reference, billingCycle='monthly', notes } = req.body || {};
+    const code = normalizePlanInput(planCode || plan || 'child_essential', 'child');
+    if (!studentId || !(mpesaCode || reference)) return res.status(400).json({ success:false, message:'studentId and M-Pesa code/reference are required' });
+    const parent = await currentParent(req);
+    if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
+    const student = await findStudentForParent(req, studentId);
+    if (!student) return res.status(403).json({ success:false, message:'Student is not linked to this parent' });
+    const platform = await getPlatformPaymentConfig();
+    const mode = normalizePlatformPaymentMode(platform.value);
+    if (!(mode === 'manual' || mode === 'both')) return res.status(400).json({ success:false, message:'Manual platform subscription verification is disabled. Use Daraja STK.' });
+    if (platform.value.parentSubscriptionsEnabled === false) return res.status(403).json({ success:false, message:'Parent subscriptions are disabled in Super Admin Platform Payments.' });
+    const subPlan = await subscriptionController.getPlanByCode(code, 'child');
+    if (!subPlan) return res.status(404).json({ success:false, message:'Child subscription plan not found' });
+    const payAmount = cleanAmount(amount || subscriptionController.planAmount(subPlan, billingCycle));
+    const subscription = await subscriptionController.findOrCreateChildSubscription(parent, student, subPlan, billingCycle);
+    await subscription.update({ planId:subPlan.id, planCode:subPlan.code || subPlan.name, planName:subPlan.displayName || subPlan.name, billingCycle, status:'pending', features:subPlan.features || [], limits:subPlan.limits || {} });
+    const manualRef = String(mpesaCode || reference).trim().toUpperCase();
+    const subscriptionPayment = await SubscriptionPayment.create({
+      subscriptionId:subscription.id,
+      ownerType:'child',
+      schoolCode:studentSchoolCode(student) || schoolCode(req),
+      parentId:parent.id,
+      studentId:student.id,
+      planId:subPlan.id,
+      planCode:subPlan.code || subPlan.name,
+      planName:subPlan.displayName || subPlan.name,
+      billingCycle,
+      amount:payAmount,
+      status:'pending',
+      mpesaReceiptNumber:manualRef,
+      metadata:{ reference:manualRef, phone, source:'parent-child-subscription-manual', notes },
+      auditTrail:[auditEntry('child_subscription_manual_submitted', req.user, { reference:manualRef })]
+    });
+    const payment = await Payment.create({
+      studentId:student.id,
+      parentId:parent.id,
+      amount:payAmount,
+      method:'manual_mpesa',
+      transactionType:'payment',
+      source:'parent',
+      reference:manualRef,
+      idempotencyKey:`manual-child-sub-${student.id}-${manualRef}`,
+      reconciliationStatus:'pending',
+      plan:subPlan.code || subPlan.name,
+      status:'pending',
+      transactionId:manualRef,
+      schoolCode:studentSchoolCode(student) || schoolCode(req),
+      paymentType:'subscription',
+      subscriptionPaymentId:subscriptionPayment.id,
+      subscriptionId:subscription.id,
+      ownerType:'child',
+      billingCycle,
+      planCode:subPlan.code || subPlan.name,
+      planName:subPlan.displayName || subPlan.name,
+      currency:'KES',
+      paymentGateway:'manual_mpesa',
+      paidTo:'platform',
+      payerPhone:phone,
+      locked:true,
+      metadata:{ planCode:subPlan.code || subPlan.name, billingCycle, studentId:student.id, parentId:parent.id, ownerType:'child', manual:true, notes },
+      auditTrail:[auditEntry('manual_child_subscription_submitted', req.user, { reference:manualRef })]
+    });
+    res.json({ success:true, message:'Subscription code submitted for Super Admin approval. The child subscription activates after approval.', data:{ paymentId:payment.id, subscriptionPaymentId:subscriptionPayment.id, reference:manualRef, status:'pending', amount:payAmount } });
+  } catch(error) {
+    console.error('Parent manual subscription error:', error);
+    res.status(error.statusCode || 500).json({ success:false, message:error.message });
+  }
+};
+
+exports.getPlatformManualQueue = async (req, res) => {
+  try {
+    const rows = await Payment.findAll({
+      where:{ paymentType:'subscription', paidTo:'platform', paymentGateway:'manual_mpesa', status:'pending' },
+      include:[{ model:Student, include:[{ model:User, attributes:['id','name','email','schoolCode'] }] }, { model:Parent, include:[{ model:User, attributes:['id','name','phone','email'] }] }],
+      order:[['createdAt','DESC']], limit:200
+    });
+    res.json({ success:true, data:rows });
+  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.reviewPlatformManualPayment = async (req, res) => {
+  try {
+    const { action, notes } = req.body || {};
+    const approve = String(action || '').toLowerCase() !== 'reject';
+    const payment = await Payment.findOne({ where:{ id:req.params.paymentId, paymentType:'subscription', paidTo:'platform', paymentGateway:'manual_mpesa' } });
+    if (!payment) return res.status(404).json({ success:false, message:'Manual platform payment not found' });
+    if (payment.status !== 'pending') return res.status(400).json({ success:false, message:`Payment is already ${payment.status}` });
+    const before = payment.toJSON();
+    const trail = Array.isArray(payment.auditTrail) ? payment.auditTrail : [];
+    trail.push(auditEntry(approve ? 'manual_platform_subscription_approved' : 'manual_platform_subscription_rejected', req.user, { notes }));
+    await payment.update({ status: approve ? 'completed' : 'rejected', completedAt: approve ? new Date() : null, notes:notes || payment.notes, auditTrail:trail, reconciliationStatus: approve ? 'matched' : 'rejected' });
+    if (payment.subscriptionPaymentId) {
+      const subscriptionPayment = await SubscriptionPayment.findByPk(payment.subscriptionPaymentId);
+      if (subscriptionPayment) {
+        const spTrail = Array.isArray(subscriptionPayment.auditTrail) ? subscriptionPayment.auditTrail : [];
+        spTrail.push(auditEntry(approve ? 'manual_confirmed' : 'manual_rejected', req.user, { paymentId:payment.id, notes }));
+        await subscriptionPayment.update({ status: approve ? 'success' : 'failed', paidAt: approve ? new Date() : subscriptionPayment.paidAt, auditTrail:spTrail });
+        if (approve) {
+          const subPlan = await SubscriptionPlan.findByPk(subscriptionPayment.planId) || await subscriptionController.getPlanByCode(subscriptionPayment.planCode, subscriptionPayment.ownerType === 'school' ? 'school' : 'child');
+          const subscription = await Subscription.findByPk(subscriptionPayment.subscriptionId);
+          if (subPlan && subscription) await subscriptionController.renewSubscription(subscription, subPlan, subscriptionPayment.billingCycle, payment.id);
+        }
+      }
+    }
+    await writeAudit(req, { schoolCode:payment.schoolCode || 'platform', module:'payments', action:approve?'platform_manual_payment_approved':'platform_manual_payment_rejected', entityType:'Payment', entityId:String(payment.id), before, after:payment.toJSON(), metadata:{ notes } });
+    res.json({ success:true, message: approve ? 'Manual platform payment approved and subscription activated.' : 'Manual platform payment rejected.', data:payment });
+  } catch(error){ console.error('Review platform manual payment error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 
 

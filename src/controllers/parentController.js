@@ -38,6 +38,39 @@ function normalizePhone(value) {
   return String(value || '').replace(/\D/g, '').replace(/^0/, '254');
 }
 
+
+async function parentOwnsStudentStrict(parent, student, user) {
+  if (!parent || !student || !user) return false;
+  const studentId = Number(student.id || 0);
+  const studentUserId = Number(student.userId || student.User?.id || 0);
+  const parentProfileId = Number(parent.id || 0);
+  const parentUserId = Number(user.id || parent.userId || 0);
+  if (!studentId || !parentUserId) return false;
+  const studentIds = [...new Set([studentId, studentUserId].filter(Boolean))];
+  const parentIds = [...new Set([parentProfileId, parentUserId].filter(Boolean))];
+  const rows = await sequelize.query(`
+    SELECT sp."studentId", sp."parentId", p."id" AS "realParentId", p."userId" AS "linkedParentUserId"
+      FROM "StudentParents" sp
+      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
+     WHERE sp."studentId" IN (:studentIds)
+       AND (sp."parentId" IN (:parentIds) OR p."userId" = :parentUserId)
+     LIMIT 1`,
+    { replacements: { studentIds, parentIds, parentUserId }, type: sequelize.QueryTypes.SELECT }
+  ).catch(() => []);
+  if (rows.length) {
+    if (parentProfileId && Number(rows[0].studentId) !== studentId || parentProfileId && Number(rows[0].parentId) !== parentProfileId) {
+      await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
+    }
+    return true;
+  }
+  const directParentId = Number(student.parentId || student.parentUserId || student.guardianId || student.guardianUserId || 0);
+  if (directParentId && (directParentId === parentProfileId || directParentId === parentUserId)) {
+    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
+    return true;
+  }
+  return false;
+}
+
 async function parentOwnsStudent(parent, student, user) {
   if (!parent || !student || !user) return false;
   const studentId = Number(student.id || student.studentId || 0);
@@ -127,12 +160,25 @@ exports.getChildren = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Parent profile not found' });
     }
 
-    const children = await parent.getStudents({
+    const linkedRows = await sequelize.query(`
+      SELECT DISTINCT s."id"
+        FROM "Students" s
+        JOIN "StudentParents" sp ON sp."studentId" IN (s."id", s."userId")
+        LEFT JOIN "Parents" p ON p."id" = sp."parentId"
+        JOIN "Users" u ON u."id" = s."userId"
+       WHERE u."schoolCode" = :schoolCode
+         AND (sp."parentId" = :parentProfileId OR sp."parentId" = :parentUserId OR p."userId" = :parentUserId)
+       ORDER BY s."id" ASC`,
+      { replacements: { schoolCode: req.user.schoolCode, parentProfileId: parent.id, parentUserId: req.user.id }, type: sequelize.QueryTypes.SELECT }
+    ).catch(() => []);
+    const ids = linkedRows.map(r => Number(r.id)).filter(Boolean);
+    const children = ids.length ? await Student.findAll({
+      where: { id: { [Op.in]: ids } },
       attributes: { include: ['classId'] },
-      joinTableAttributes: [],
       include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode', 'profileImage'] }],
       order: [[User, 'name', 'ASC']]
-    });
+    }) : [];
+    for (const child of children) await linkParentToStudentSafely(parent.id, child.id).catch(() => null);
 
     const enrichedChildren = await enrichLinkedChildren(children);
     res.json({ success: true, data: enrichedChildren });
@@ -283,7 +329,7 @@ exports.getChildReportCardDetails = async (req, res) => {
       include: [{ model: User, attributes: ['id','name','email','phone','schoolCode','profileImage'] }]
     });
     if (!student) return res.status(404).json({ success:false, message:'Student not found' });
-    const linked = await parentOwnsStudent(parent, student, req.user);
+    const linked = await parentOwnsStudentStrict(parent, student, req.user);
     if (!linked || student.User?.schoolCode !== req.user.schoolCode) return res.status(403).json({ success:false, message:'Not your child' });
 
     const schoolCode = student.User?.schoolCode || req.user.schoolCode;

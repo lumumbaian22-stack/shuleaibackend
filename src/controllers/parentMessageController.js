@@ -57,14 +57,6 @@ async function verifyParentChild(parent, student, user = null) {
     await healParentStudentLink(parent, student); return true;
   }
 
-  const userEmail = String(user?.email || '').trim().toLowerCase();
-  const userPhone = normalizePhone(user?.phone || user?.phoneNumber || user?.mobile || '');
-  const studentEmail = String(student.parentEmail || student.guardianEmail || '').trim().toLowerCase();
-  const studentPhone = normalizePhone(student.parentPhone || student.guardianPhone || student.emergencyContact || '');
-  if ((userEmail && studentEmail && userEmail === studentEmail) || (userPhone && studentPhone && userPhone === studentPhone)) {
-    await healParentStudentLink(parent, student);
-    return true;
-  }
   return false;
 }
 

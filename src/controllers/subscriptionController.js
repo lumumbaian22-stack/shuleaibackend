@@ -7,7 +7,8 @@ const {
   Student,
   User,
   School,
-  AuditLog
+  AuditLog,
+  Settings
 } = require('../models');
 
 const SCHOOL_CORE_FEATURES = ['attendance', 'marks', 'students', 'teachers', 'basic_reports', 'fees'];
@@ -39,6 +40,55 @@ function planAmount(plan, cycle) {
   if (normalized === 'yearly' && plan.yearlyPriceKes) return Number(plan.yearlyPriceKes);
   if (normalized === 'termly' && plan.termlyPriceKes) return Number(plan.termlyPriceKes);
   return Number(plan.monthlyPriceKes || plan.price_kes || 0);
+}
+
+
+function normalizeSettingsPlan(raw, ownerType, index = 0) {
+  if (!raw || typeof raw !== 'object') return null;
+  const rawCode = String(raw.code || raw.id || raw.name || raw.displayName || '').trim().toLowerCase().replace(/\s+/g, '_');
+  const prefix = ownerType === 'school' ? 'school' : 'child';
+  const code = rawCode.startsWith(`${prefix}_`) ? rawCode : `${prefix}_${rawCode || (ownerType === 'school' ? 'plan' : 'plan')}_${index + 1}`;
+  const amount = Math.max(0, Math.round(Number(raw.monthlyPriceKes ?? raw.price_kes ?? raw.price ?? raw.amount ?? raw.monthly ?? 0)) || 0);
+  const displayName = raw.displayName || raw.name || raw.title || code.replace(`${prefix}_`, '').replace(/_/g, ' ');
+  return {
+    id: raw.id || code,
+    code,
+    name: displayName,
+    displayName,
+    ownerType,
+    price: amount,
+    monthlyPriceKes: amount,
+    termlyPriceKes: raw.termlyPriceKes ?? raw.termly ?? null,
+    yearlyPriceKes: raw.yearlyPriceKes ?? raw.yearly ?? null,
+    setupFeeMinKes: raw.setupFeeMinKes ?? raw.setupMin ?? null,
+    setupFeeMaxKes: raw.setupFeeMaxKes ?? raw.setupMax ?? null,
+    features: Array.isArray(raw.features) ? raw.features : [],
+    lockedFeatures: Array.isArray(raw.lockedFeatures) ? raw.lockedFeatures : [],
+    limits: raw.limits && typeof raw.limits === 'object' ? raw.limits : { days: Number(raw.days || 30) || 30 },
+    sortOrder: Number(raw.sortOrder ?? index ?? 0),
+    isActive: raw.isActive !== false,
+    source: 'platform_payment_settings'
+  };
+}
+
+async function getPlatformConfiguredPlans(ownerType) {
+  const row = await Settings.findOne({ where: { key: 'platform_payment_settings' } }).catch(() => null);
+  const value = row?.value || {};
+  const key = ownerType === 'school' ? 'schoolPlans' : ownerType === 'child' ? 'parentPlans' : null;
+  if (!key || !Array.isArray(value[key]) || !value[key].length) return null;
+  const legacy = new Set(['monthly', 'termly', 'yearly', 'month', 'term', 'year']);
+  const seen = new Set();
+  return value[key]
+    .map((p, idx) => normalizeSettingsPlan(p, ownerType, idx))
+    .filter(Boolean)
+    .filter(plan => {
+      const c = String(plan.code || '').replace(/^(school|child)_/, '');
+      const n = String(plan.displayName || plan.name || '').trim().toLowerCase();
+      if (legacy.has(c) || legacy.has(n)) return false;
+      if (seen.has(plan.code)) return false;
+      seen.add(plan.code);
+      return plan.isActive !== false;
+    });
 }
 
 function planPayload(plan) {
@@ -188,10 +238,22 @@ exports.daysRemaining = daysRemaining;
 exports.getPlans = async (req, res) => {
   try {
     const ownerType = req.query.ownerType;
+    // v117: if Super Admin has saved platform plan JSON, that is the source of truth.
+    // This prevents the admin/parent dashboards from showing old seeded Monthly/Termly/Yearly or Starter/Growth/Enterprise cards beside the new live cards.
+    if (ownerType === 'school' || ownerType === 'child') {
+      const configured = await getPlatformConfiguredPlans(ownerType);
+      if (configured && configured.length) return res.json({ success: true, data: configured });
+    }
     const where = { isActive: true };
     if (ownerType) where.ownerType = ownerType;
     const plans = await SubscriptionPlan.findAll({ where, order: [['sortOrder', 'ASC'], ['price_kes', 'ASC']] });
-    res.json({ success: true, data: plans.map(planPayload) });
+    const legacyCycleCards = new Set(['monthly', 'termly', 'yearly', 'month', 'term', 'year']);
+    const cleaned = plans.map(planPayload).filter(p => {
+      const code = String(p.code || p.name || '').toLowerCase().replace(/^(school|child)_/, '');
+      const name = String(p.displayName || p.name || '').trim().toLowerCase();
+      return !legacyCycleCards.has(code) && !legacyCycleCards.has(name);
+    });
+    res.json({ success: true, data: cleaned });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

@@ -29,10 +29,13 @@ router.post('/admin/manual-queue/:paymentId/reject', protect, authorize('admin')
 
 router.get('/superadmin/platform-settings', protect, authorize('super_admin'), ctrl.getPlatformPaymentSettings);
 router.put('/superadmin/platform-settings', protect, authorize('super_admin'), ctrl.updatePlatformPaymentSettings);
+router.get('/superadmin/platform-manual-queue', protect, authorize('super_admin'), ctrl.getPlatformManualQueue);
+router.post('/superadmin/platform-manual-queue/:paymentId/review', protect, authorize('super_admin'), ctrl.reviewPlatformManualPayment);
 
 router.post('/parent/fee/stk', protect, authorize('parent'), ctrl.parentFeeSTK);
 router.post('/parent/fee/manual', protect, authorize('parent'), ctrl.parentFeeManual);
 router.post('/parent/subscription/stk', protect, authorize('parent'), ctrl.parentSubscriptionSTK);
+router.post('/parent/subscription/manual', protect, authorize('parent'), ctrl.parentSubscriptionManual);
 router.post('/school/subscription/stk', protect, authorize('admin', 'super_admin'), ctrl.schoolSubscriptionSTK);
 router.post('/admin/name-change/stk', protect, authorize('admin'), ctrl.adminNameChangePaymentSTK);
 router.post('/platform/stk', protect, ctrl.genericPlatformSTK);
