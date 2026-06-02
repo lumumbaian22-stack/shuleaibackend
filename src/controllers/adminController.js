@@ -805,10 +805,8 @@ function v102BuildCurriculumSettings(school, patch = {}) {
   const structureType = patch.structureType || patch.schoolStructure || currentEngine.structureType || school.schoolStructure || currentSettings.schoolLevel || 'mixed';
   const enabledLevels = Array.isArray(patch.enabledLevels) ? patch.enabledLevels : (Array.isArray(currentEngine.enabledLevels) ? currentEngine.enabledLevels : []);
   const schoolSubjects = Array.isArray(patch.schoolSubjects) ? patch.schoolSubjects : (Array.isArray(currentEngine.schoolSubjects) ? currentEngine.schoolSubjects : []);
-  const classCustomSubjects = patch.classCustomSubjects || currentSettings.classCustomSubjects || currentSettings.customSubjectsByClass || {};
   return {
     ...currentSettings,
-    classCustomSubjects,
     schoolStructure: structureType,
     curriculum,
     curriculumEngine: {
@@ -889,7 +887,7 @@ exports.updateSchoolSettings = async (req, res) => {
     if (patch.schoolName) school.name = patch.schoolName;
     if (patch.schoolStructure || patch.structureType) school.schoolStructure = patch.schoolStructure || patch.structureType;
     if (Array.isArray(newSettings.curriculumEngine.enabledLevels) && newSettings.curriculumEngine.enabledLevels.length) school.enabledLevels = newSettings.curriculumEngine.enabledLevels;
-    school.settings = { ...newSettings, customSubjects: Array.isArray(patch.customSubjects) ? patch.customSubjects : (newSettings.customSubjects || []), classCustomSubjects: patch.classCustomSubjects || newSettings.classCustomSubjects || {} };
+    school.settings = { ...newSettings, customSubjects: patch.customSubjects || newSettings.customSubjects || [] };
     await school.save();
     await sequelize.query(`INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","actorRole","module","action","entityType","entityId","before","after","createdAt","updatedAt") VALUES (:schoolCode,:actorUserId,:actorRole,'curriculum','school_settings_updated','School',:entityId,:before,:after,NOW(),NOW())`, {
       replacements: { schoolCode: school.schoolId, actorUserId: req.user.id, actorRole: req.user.role, entityId: String(school.id), before: JSON.stringify({ system: before.system, settings: before.settings }), after: JSON.stringify({ system: school.system, settings: school.settings }) }
@@ -950,15 +948,19 @@ exports.saveSchoolSubjects = async (req, res) => {
     const byId = new Map(bank.map(s => [s.id, s]));
     const schoolSubjects = selected.map(item => {
       const subject = byId.get(item.subjectId || item.id) || item;
+      const isCustom = !!(item.isCustom || item.source === 'custom' || item.scope || item.classIds);
       return {
-        subjectId: subject.id || item.subjectId || null,
+        subjectId: subject.id || item.subjectId || item.id || (isCustom ? `custom_${String(item.name || item.subjectName || '').toLowerCase().replace(/[^a-z0-9]+/g, '_')}` : null),
         name: subject.name || item.name || item.subjectName,
-        category: subject.category || item.category || 'custom',
-        levelCodes: subject.levelCodes || item.levelCodes || [],
+        category: subject.category || item.category || (isCustom ? 'custom' : 'school_subject'),
+        levelCodes: Array.isArray(item.levelCodes) && item.levelCodes.length ? item.levelCodes : (subject.levelCodes || []),
+        classIds: Array.isArray(item.classIds) ? item.classIds.map(Number).filter(Boolean) : [],
+        scope: item.scope || (Array.isArray(item.classIds) && item.classIds.length ? 'class' : 'school'),
         pathway: subject.pathway || item.pathway || null,
         track: subject.track || item.track || null,
         isCore: !!(subject.isCore || item.isCore),
-        isOptional: !!(subject.isOptional || item.isOptional),
+        isOptional: item.isOptional !== undefined ? !!item.isOptional : !!(subject.isOptional || isCustom),
+        isCustom,
         countsInFinalByDefault: item.countsInFinalByDefault !== undefined ? !!item.countsInFinalByDefault : subject.countsInFinalByDefault !== false,
         isOffered: item.isOffered !== false,
         savedAt: new Date().toISOString(),

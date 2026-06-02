@@ -26,31 +26,67 @@ async function linkParentToStudentSafely(parentId, studentId) {
   });
 }
 
-async function parentHasStudent(parentId, studentId, parentUserId = null, studentUserId = null) {
-  const parentIds = [parentId, parentUserId].filter(v => Number(v) > 0).map(Number);
-  const studentIds = [studentId, studentUserId].filter(v => Number(v) > 0).map(Number);
+async function parentHasStudent(parentId, studentId) {
   const rows = await sequelize.query(
-    `SELECT 1
-       FROM "StudentParents" sp
-       LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-       LEFT JOIN "Students" s ON (s."id" = sp."studentId" OR s."userId" = sp."studentId")
-      WHERE (sp."parentId" IN (:parentIds) OR p."userId" IN (:parentIds))
-        AND (sp."studentId" IN (:studentIds) OR s."userId" IN (:studentIds))
-      LIMIT 1`,
-    { replacements: { parentIds: parentIds.length ? parentIds : [0], studentIds: studentIds.length ? studentIds : [0] }, type: sequelize.QueryTypes.SELECT }
+    'SELECT 1 FROM "StudentParents" WHERE "parentId" = :parentId AND "studentId" = :studentId LIMIT 1',
+    { replacements: { parentId, studentId }, type: sequelize.QueryTypes.SELECT }
   );
   return rows.length > 0;
 }
 
-async function parentCanAccessStudent(parent, student, reqUser = null) {
-  if (!parent || !student) return false;
-  const raw = student.toJSON ? student.toJSON() : student;
-  const studentSchoolCode = raw.User?.schoolCode || raw.schoolCode || null;
-  if (reqUser?.schoolCode && studentSchoolCode && String(studentSchoolCode) !== String(reqUser.schoolCode)) return false;
-  let linked = false;
-  if (typeof parent.hasStudent === 'function') linked = await parent.hasStudent(student).catch(() => false);
-  if (!linked) linked = await parentHasStudent(parent.id, raw.id, parent.userId || reqUser?.id || null, raw.userId || raw.User?.id || null).catch(() => false);
-  return !!linked;
+function normalizePhone(value) {
+  return String(value || '').replace(/\D/g, '').replace(/^0/, '254');
+}
+
+async function parentOwnsStudent(parent, student, user) {
+  if (!parent || !student || !user) return false;
+  const studentId = Number(student.id || student.studentId || 0);
+  const studentUserId = Number(student.userId || student.User?.id || 0);
+  const parentProfileId = Number(parent.id || 0);
+  const parentUserId = Number(user.id || parent.userId || 0);
+  if (!studentId || !parentUserId) return false;
+
+  const studentIds = [...new Set([studentId, studentUserId].filter(Boolean))];
+  const rows = await sequelize.query(`
+    SELECT sp."studentId", sp."parentId", p."userId" AS "linkedParentUserId"
+      FROM "StudentParents" sp
+      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
+     WHERE sp."studentId" IN (:studentIds)
+       AND (
+         sp."parentId" = :parentProfileId
+         OR sp."parentId" = :parentUserId
+         OR p."userId" = :parentUserId
+       )
+     LIMIT 1`,
+    { replacements: { studentIds, parentProfileId, parentUserId }, type: sequelize.QueryTypes.SELECT }
+  ).catch(() => []);
+
+  if (rows.length) {
+    // Heal old links that used User.id instead of Student.id, or parent User.id instead of Parent.id.
+    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
+    return true;
+  }
+
+  // Direct student fields used by some legacy imports/manual links.
+  const directParentId = Number(student.parentId || student.parentUserId || student.guardianId || student.guardianUserId || 0);
+  if (directParentId && (directParentId === parentProfileId || directParentId === parentUserId)) {
+    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
+    return true;
+  }
+
+  // Safe fallback for schools that imported students with parent contact details before StudentParents existed.
+  const userEmail = String(user.email || '').trim().toLowerCase();
+  const userPhone = normalizePhone(user.phone || user.phoneNumber || user.mobile || '');
+  const studentEmail = String(student.parentEmail || student.guardianEmail || '').trim().toLowerCase();
+  const studentPhone = normalizePhone(student.parentPhone || student.guardianPhone || student.emergencyContact || '');
+  const emailMatches = userEmail && studentEmail && userEmail === studentEmail;
+  const phoneMatches = userPhone && studentPhone && userPhone === studentPhone;
+  if (emailMatches || phoneMatches) {
+    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
+    return true;
+  }
+
+  return false;
 }
 
 async function enrichLinkedChildren(children) {
@@ -131,7 +167,7 @@ exports.linkChildByElimuId = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Unable to link child with this Elimu ID' });
     }
 
-    const alreadyLinked = await parentHasStudent(parent.id, student.id, parent.userId || req.user.id, student.userId || student.User?.id || null);
+    const alreadyLinked = await parentHasStudent(parent.id, student.id);
     if (alreadyLinked) {
       const children = await enrichLinkedChildren([student]);
       return res.json({ success: true, message: 'This child is already linked to your account', data: children[0] });
@@ -170,7 +206,7 @@ exports.getChildSummary = async (req, res) => {
       ] 
     });
     
-    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
+    if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
@@ -247,7 +283,7 @@ exports.getChildReportCardDetails = async (req, res) => {
       include: [{ model: User, attributes: ['id','name','email','phone','schoolCode','profileImage'] }]
     });
     if (!student) return res.status(404).json({ success:false, message:'Student not found' });
-    const linked = await parentCanAccessStudent(parent, student, req.user);
+    const linked = await parentOwnsStudent(parent, student, req.user);
     if (!linked || student.User?.schoolCode !== req.user.schoolCode) return res.status(403).json({ success:false, message:'Not your child' });
 
     const schoolCode = student.User?.schoolCode || req.user.schoolCode;
@@ -324,7 +360,7 @@ exports.reportAbsence = async (req, res) => {
       include: [{ model: User, attributes: ['id', 'name'] }] 
     });
     
-    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
+    if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
@@ -483,7 +519,7 @@ exports.makePayment = async (req, res) => {
       include: [{ model: User, attributes: ['name'] }] 
     });
     
-    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
+    if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
@@ -635,7 +671,7 @@ exports.upgradePlan = async (req, res) => {
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId);
     
-    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
+    if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
@@ -784,7 +820,7 @@ exports.getChildAnalytics = async (req, res) => {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId);
-    if (!parent || !student || !(await parentCanAccessStudent(parent, student, req.user))) return res.status(403).json({ success: false, message: 'Child not linked to this parent' });
+    if (!parent || !student || !(await parentOwnsStudent(parent, student, req.user))) return res.status(403).json({ success: false, message: 'Child not linked to this parent' });
 
     // Only published marks
     const records = await AcademicRecord.findAll({ where: { studentId, isPublished: true } });
@@ -845,7 +881,7 @@ exports.getFees = async (req, res) => {
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
     const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
-    if (!student || !(await parentCanAccessStudent(parent, student, req.user)) || student.User?.schoolCode !== req.user.schoolCode) {
+    if (!student || !(await parentOwnsStudent(parent, student, req.user)) || student.User?.schoolCode !== req.user.schoolCode) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
     const fees = await Fee.findAll({
@@ -874,7 +910,7 @@ exports.addPayment = async (req, res) => {
     const { studentId, term, year, amount, method, reference } = req.body;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
-    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
+    if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
@@ -921,7 +957,7 @@ exports.getChildTodayAttendance = async (req, res) => {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
-    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
+    if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
     

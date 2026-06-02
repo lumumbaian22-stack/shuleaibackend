@@ -16,35 +16,66 @@ async function getParentProfile(userId) {
   return Parent.findOne({ where: { userId } });
 }
 
-async function verifyParentChild(parent, student, reqUser = null) {
-  if (!parent || !student) return false;
-  const raw = student.toJSON ? student.toJSON() : student;
-  const schoolCode = raw.User?.schoolCode || raw.schoolCode || null;
-  if (reqUser?.schoolCode && schoolCode && String(schoolCode) !== String(reqUser.schoolCode)) return false;
-  let ok = false;
-  if (typeof parent.hasStudent === 'function') ok = await parent.hasStudent(student).catch(() => false);
-  if (ok) return true;
-  const rows = await sequelize.query(
-    `SELECT 1
-       FROM "StudentParents" sp
-       LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-       LEFT JOIN "Students" s ON (s."id" = sp."studentId" OR s."userId" = sp."studentId")
-      WHERE (sp."parentId" = :parentId OR sp."parentId" = :parentUserId OR p."userId" = :parentUserId)
-        AND (sp."studentId" = :studentId OR sp."studentId" = :studentUserId OR s."userId" = :studentUserId)
-      LIMIT 1`,
-    { replacements: { parentId: parent.id, parentUserId: parent.userId || reqUser?.id || 0, studentId: raw.id, studentUserId: raw.userId || raw.User?.id || 0 }, type: sequelize.QueryTypes.SELECT }
-  ).catch(() => []);
-  return rows.length > 0;
+function normalizePhone(value) { return String(value || '').replace(/\D/g, '').replace(/^0/, '254'); }
+
+async function healParentStudentLink(parent, student) {
+  if (!parent?.id || !student?.id) return;
+  await sequelize.query(`
+    INSERT INTO "StudentParents" ("studentId", "parentId", "createdAt", "updatedAt")
+    VALUES (:studentId, :parentId, NOW(), NOW())
+    ON CONFLICT ("studentId", "parentId") DO UPDATE SET "updatedAt" = EXCLUDED."updatedAt"`,
+    { replacements: { studentId: student.id, parentId: parent.id }, type: sequelize.QueryTypes.INSERT }
+  ).catch(() => null);
 }
 
-async function findStudentForParent({ parent, studentId, schoolCode }) {
-  const n = Number(studentId) || 0;
+async function verifyParentChild(parent, student, user = null) {
+  if (!parent || !student) return false;
+  const parentProfileId = Number(parent.id || 0);
+  const parentUserId = Number(user?.id || parent.userId || 0);
+  const studentId = Number(student.id || 0);
+  const studentUserId = Number(student.userId || student.User?.id || 0);
+  const studentIds = [...new Set([studentId, studentUserId].filter(Boolean))];
+  if (!studentIds.length || !parentUserId) return false;
+
+  const rows = await sequelize.query(`
+    SELECT sp."studentId", sp."parentId", p."userId" AS "linkedParentUserId"
+      FROM "StudentParents" sp
+      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
+     WHERE sp."studentId" IN (:studentIds)
+       AND (
+         sp."parentId" = :parentProfileId
+         OR sp."parentId" = :parentUserId
+         OR p."userId" = :parentUserId
+       )
+     LIMIT 1`,
+    { replacements: { parentProfileId, parentUserId, studentIds }, type: sequelize.QueryTypes.SELECT }
+  ).catch(() => []);
+  if (rows.length) { await healParentStudentLink(parent, student); return true; }
+
+  const directParentId = Number(student.parentId || student.parentUserId || student.guardianId || student.guardianUserId || 0);
+  if (directParentId && (directParentId === parentProfileId || directParentId === parentUserId)) {
+    await healParentStudentLink(parent, student); return true;
+  }
+
+  const userEmail = String(user?.email || '').trim().toLowerCase();
+  const userPhone = normalizePhone(user?.phone || user?.phoneNumber || user?.mobile || '');
+  const studentEmail = String(student.parentEmail || student.guardianEmail || '').trim().toLowerCase();
+  const studentPhone = normalizePhone(student.parentPhone || student.guardianPhone || student.emergencyContact || '');
+  if ((userEmail && studentEmail && userEmail === studentEmail) || (userPhone && studentPhone && userPhone === studentPhone)) {
+    await healParentStudentLink(parent, student);
+    return true;
+  }
+  return false;
+}
+
+async function findStudentForParent({ parent, studentId, schoolCode, user }) {
+  const rawId = Number(studentId) || 0;
   const student = await Student.findOne({
-    where: { [Op.or]: [{ id: n }, { userId: n }] },
-    include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }]
+    where: { [Op.or]: [{ id: rawId }, { userId: rawId }] },
+    include: [{ model: User, attributes: ['id', 'name', 'email', 'schoolCode'] }]
   });
   if (!student || student.User?.schoolCode !== schoolCode) return null;
-  const ok = await verifyParentChild(parent, student, { id: parent.userId, schoolCode });
+  const ok = await verifyParentChild(parent, student, user || {});
   return ok ? student : null;
 }
 
@@ -101,7 +132,7 @@ exports.sendMessage = async (req, res) => {
     const parent = await getParentProfile(req.user.id);
     if (!parent) return res.status(404).json({ success: false, message: 'Parent not found' });
 
-    const student = await findStudentForParent({ parent, studentId, schoolCode: req.user.schoolCode });
+    const student = await findStudentForParent({ parent, studentId, schoolCode: req.user.schoolCode, user: req.user });
     if (!student) return res.status(403).json({ success: false, message: 'Not your child or child is outside your school' });
 
     let recipientId = null;
@@ -195,22 +226,16 @@ function groupConversation(messages, currentUserId) {
 
 exports.getConversations = async (req, res) => {
   try {
-    const parent = await getParentProfile(req.user.id);
-    let selectedStudent = null;
-    if (req.query.studentId || req.query.childId) {
-      selectedStudent = await findStudentForParent({ parent, studentId: req.query.studentId || req.query.childId, schoolCode: req.user.schoolCode });
-      if (!selectedStudent) return res.status(403).json({ success:false, message:'Not your child' });
-    }
     const messages = await Message.findAll({
       where: { [Op.or]: [{ senderId: req.user.id }, { receiverId: req.user.id }] },
       include: [{ model: User, as: 'Sender', attributes: ['id', 'name', 'role'] }, { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }],
       order: [['createdAt', 'DESC']]
     });
-    const selectedId = selectedStudent ? Number(selectedStudent.id) : null;
+    const requestedStudentId = req.query.studentId || req.query.childId || null;
     const scoped = messages.filter(m => {
       const md = meta(m);
       if (!schoolMatches(m, req.user.schoolCode) || !['parent_class_teacher', 'parent_admin'].includes(md.conversationType)) return false;
-      if (selectedId && Number(md.studentId || 0) !== selectedId) return false;
+      if (requestedStudentId && String(md.studentId || '') !== String(requestedStudentId)) return false;
       return true;
     });
     res.json({ success: true, data: groupConversation(scoped, req.user.id) });
@@ -228,17 +253,14 @@ exports.getMessages = async (req, res) => {
       include: [{ model: User, as: 'Sender', attributes: ['id', 'name', 'role'] }, { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }],
       order: [['createdAt', 'ASC']]
     });
-    const parent = await getParentProfile(req.user.id);
-    let selectedStudent = null;
-    if (req.query.studentId || req.query.childId) {
-      selectedStudent = await findStudentForParent({ parent, studentId: req.query.studentId || req.query.childId, schoolCode: req.user.schoolCode });
-      if (!selectedStudent) return res.status(403).json({ success:false, message:'Not your child' });
-    }
-    const selectedId = selectedStudent ? Number(selectedStudent.id) : null;
+    const requestedStudentId = req.query.studentId || req.query.childId || null;
+    const requestedType = String(req.query.recipientType || req.query.type || '').toLowerCase();
+    const wantedConversation = requestedType === 'admin' ? 'parent_admin' : requestedType === 'teacher' ? 'parent_class_teacher' : null;
     const scoped = messages.filter(m => {
       const md = meta(m);
       if (!schoolMatches(m, req.user.schoolCode) || !['parent_class_teacher', 'parent_admin'].includes(md.conversationType)) return false;
-      if (selectedId && Number(md.studentId || 0) !== selectedId) return false;
+      if (wantedConversation && md.conversationType !== wantedConversation) return false;
+      if (requestedStudentId && String(md.studentId || '') !== String(requestedStudentId)) return false;
       return true;
     });
     await Message.update({ isRead: true, readAt: new Date() }, { where: { senderId: otherUserId, receiverId: req.user.id, isRead: false } });

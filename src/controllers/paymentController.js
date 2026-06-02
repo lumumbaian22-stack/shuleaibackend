@@ -11,29 +11,11 @@ function auditEntry(action, actor, extra={}){ return { action, actorUserId: acto
 async function writeAudit(req, data){ try { await AuditLog?.create({ schoolCode: schoolCode(req) || data.schoolCode || 'platform', actorUserId:req.user?.id, actorRole:req.user?.role, ipAddress:req.ip, userAgent:req.get?.('user-agent'), ...data }); } catch(e){ console.error('Payment audit failed:', e.message); } }
 async function currentParent(req){ return Parent.findOne({ where:{ userId:req.user.id } }); }
 async function findStudentForParent(req, studentId){
-  const n = Number(studentId) || 0;
-  const student = await Student.findOne({ where:{ [require('sequelize').Op.or]: [{ id:n }, { userId:n }] }, include:[{model:User, attributes:['id','name','schoolCode']}] });
+  const student = await Student.findByPk(studentId, { include:[{model:User, attributes:['id','name','schoolCode']}] });
   if(!student) return null;
   if(req.user.role !== 'parent') return student;
   const parent = await currentParent(req);
-  if(!parent) return null;
-  let ok = false;
-  if(parent?.hasStudent) ok = await parent.hasStudent(student).catch(()=>false);
-  if(!ok){
-    const rows = await require('../models').sequelize.query(
-      `SELECT 1
-         FROM "StudentParents" sp
-         LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-         LEFT JOIN "Students" s ON (s."id" = sp."studentId" OR s."userId" = sp."studentId")
-        WHERE (sp."parentId" = :parentId OR sp."parentId" = :parentUserId OR p."userId" = :parentUserId)
-          AND (sp."studentId" = :studentId OR sp."studentId" = :studentUserId OR s."userId" = :studentUserId)
-        LIMIT 1`,
-      { replacements:{ parentId:parent.id, parentUserId:parent.userId || req.user.id, studentId:student.id, studentUserId:student.userId || student.User?.id || 0 }, type: require('../models').sequelize.QueryTypes.SELECT }
-    ).catch(()=>[]);
-    ok = rows.length > 0;
-  }
-  if(!ok) return null;
-  if(student.User?.schoolCode && req.user.schoolCode && String(student.User.schoolCode) !== String(req.user.schoolCode)) return null;
+  if(parent?.hasStudent){ const ok = await parent.hasStudent(student); if(!ok) return null; }
   return student;
 }
 

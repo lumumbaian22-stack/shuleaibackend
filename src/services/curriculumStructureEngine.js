@@ -242,8 +242,7 @@ function getCurriculumConfig(school) {
   const preset = STRUCTURE_PRESETS[curriculum]?.[structureType] || STRUCTURE_PRESETS[curriculum]?.mixed || getBank(curriculum).levels.map(l => l.code);
   const enabledLevels = Array.isArray(engine.enabledLevels) && engine.enabledLevels.length ? engine.enabledLevels : preset;
   const schoolSubjects = Array.isArray(engine.schoolSubjects) ? engine.schoolSubjects : [];
-  const classCustomSubjects = settings.classCustomSubjects || settings.customSubjectsByClass || {};
-  return { curriculum, structureType, enabledLevels, schoolSubjects, classCustomSubjects, gradingSettings: engine.gradingSettings || settings.gradingScale || null, seniorSettings: engine.seniorSettings || {}, raw: engine };
+  return { curriculum, structureType, enabledLevels, schoolSubjects, gradingSettings: engine.gradingSettings || settings.gradingScale || null, seniorSettings: engine.seniorSettings || {}, raw: engine };
 }
 
 function getAllowedLevelsForSchool(school) {
@@ -273,14 +272,20 @@ function schoolOffersSubject(school, subject) {
 
 function normalizeSchoolSubject(row, cfg, levelCode, classItem) {
   if (!row || row.isOffered === false) return null;
-  const levels = Array.isArray(row.levelCodes) ? row.levelCodes : [];
-  if (levelCode && levels.length && !levels.includes(levelCode)) return null;
-  if (levelCode && !levels.length) return null;
+  const levels = Array.isArray(row.levelCodes) ? row.levelCodes.map(String) : [];
+  const classIds = Array.isArray(row.classIds) ? row.classIds.map(Number).filter(Boolean) : [];
+  const classItemId = Number(classItem?.id || 0) || null;
+  if (classIds.length && (!classItemId || !classIds.includes(classItemId))) return null;
+  if (levelCode && levels.length && !levels.includes(String(levelCode))) return null;
+  // Empty levelCodes means custom subject applies to the whole school or selected class(es).
+  // This is intentional so admins can add non-curriculum subjects without rebuilding the curriculum bank.
   return {
     id: row.subjectId || row.id || `school_${String(row.name || row.subjectName || '').toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
     name: row.name || row.subjectName || row.subject || 'Unnamed Subject',
-    category: row.category || 'school_subject',
+    category: row.category || (row.isCustom ? 'custom' : 'school_subject'),
     levelCodes: levels,
+    classIds,
+    scope: row.scope || (classIds.length ? 'class' : 'school'),
     levelCode,
     levelLabel: getLevelByCode(cfg.curriculum, levelCode)?.label || classItem?.grade || classItem?.name || null,
     curriculum: cfg.curriculum,
@@ -288,9 +293,10 @@ function normalizeSchoolSubject(row, cfg, levelCode, classItem) {
     track: row.track || null,
     isCore: !!row.isCore,
     isOptional: row.isOptional !== undefined ? !!row.isOptional : !row.isCore,
+    isCustom: !!row.isCustom || row.category === 'custom',
     countsInFinalByDefault: row.countsInFinalByDefault !== false,
     order: row.order || 999,
-    source: 'school_subjects'
+    source: row.isCustom ? 'custom_school_subject' : 'school_subjects'
   };
 }
 
@@ -312,30 +318,7 @@ function getEligibleSubjectsForClass(school, classItem) {
     .filter(Boolean)
     .filter(s => !bankNames.has(String(s.name || '').toLowerCase()));
 
-  // v115: class-only custom subjects are additive. They do not replace the approved school/curriculum logic.
-  const classOnlyNames = Array.isArray(classItem?.settings?.customSubjects)
-    ? classItem.settings.customSubjects
-    : (cfg.classCustomSubjects && classItem?.id ? (cfg.classCustomSubjects[String(classItem.id)] || []) : []);
-  const seen = new Set([...bankSubjects, ...customSchoolSubjects].map(s => String(s.name || '').toLowerCase()));
-  const classOnlySubjects = (classOnlyNames || [])
-    .filter(Boolean)
-    .filter(name => !seen.has(String(name).toLowerCase()))
-    .map((name, idx) => ({
-      id: `class_custom_${classItem?.id || 'class'}_${String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
-      name: String(name),
-      category: 'class_custom',
-      levelCodes: levelCode ? [levelCode] : [],
-      levelCode,
-      levelLabel: getLevelByCode(cfg.curriculum, levelCode)?.label || classItem?.grade || classItem?.name || null,
-      curriculum: cfg.curriculum,
-      isCore: false,
-      isOptional: true,
-      countsInFinalByDefault: true,
-      order: 1200 + idx,
-      source: 'class_custom_subjects'
-    }));
-
-  return [...bankSubjects, ...customSchoolSubjects, ...classOnlySubjects]
+  return [...bankSubjects, ...customSchoolSubjects]
     .sort((a,b) => (a.order||0)-(b.order||0) || a.name.localeCompare(b.name));
 }
 
