@@ -1,4 +1,4 @@
-const { User, Teacher, Message, Student, Parent } = require('../models');
+const { User, Teacher, Message, Student, Parent, Class, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 const { literal } = require('sequelize'); // Add at top of file
@@ -27,20 +27,8 @@ exports.getStaffMembers = async (req, res) => {
             isClassTeacher: t.classTeacher !== null
         }));
         
-        const admins = await User.findAll({
-            where: { schoolCode: req.user.schoolCode, role: 'admin', isActive: true },
-            attributes: ['id', 'name', 'email', 'role']
-        });
-        
-        admins.forEach(admin => {
-            staff.push({
-                id: admin.id,
-                name: admin.name,
-                role: admin.role,
-                isOnline: false,
-                isAdmin: true
-            });
-        });
+        // Private staff contacts are intentionally teachers-only.
+        // Admin/parent messaging is handled in the dedicated admin/parent flows, not in teacher private chat.
         
         res.json({ success: true, data: staff });
     } catch (error) {
@@ -94,6 +82,7 @@ exports.sendPrivateMessage = async (req, res) => {
     const { receiverId, content, replyToId } = req.body;
     const receiver = await User.findOne({ where: { id: receiverId, schoolCode: req.user.schoolCode, isActive: true } });
     if (!receiver) return res.status(404).json({ success: false, message: 'Recipient not found' });
+    if (receiver.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teacher private messages are limited to fellow teachers only.' });
     const message = await Message.create({
       senderId: req.user.id,
       receiverId,
@@ -150,6 +139,9 @@ exports.sendPrivateMessage = async (req, res) => {
         
         if (!receiver) {
             return res.status(404).json({ success: false, message: 'Recipient not found' });
+        }
+        if (receiver.role !== 'teacher') {
+            return res.status(403).json({ success: false, message: 'Teacher private messages are limited to fellow teachers only.' });
         }
         
         const message = await Message.create({
@@ -331,13 +323,21 @@ exports.getParentConversations = async (req, res) => {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.json({ success: true, data: [] });
 
+    const classWhere = {
+      schoolCode: req.user.schoolCode,
+      isActive: true,
+      [Op.or]: [
+        { teacherId: teacher.id },
+        { id: teacher.classId || 0 },
+        ...(teacher.classTeacher ? [{ name: teacher.classTeacher }] : [])
+      ]
+    };
+    const classes = await Class.findAll({ where: classWhere, attributes: ['id','name','grade'] }).catch(() => []);
+    const classIds = classes.map(c => c.id).filter(Boolean);
+    if (!classIds.length) return res.json({ success: true, data: [] });
+
     const messages = await Message.findAll({
-      where: {
-        [Op.or]: [
-          { receiverId: req.user.id },
-          { senderId: req.user.id }
-        ]
-      },
+      where: { [Op.or]: [{ receiverId: req.user.id }, { senderId: req.user.id }] },
       include: [
         { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
         { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
@@ -346,15 +346,59 @@ exports.getParentConversations = async (req, res) => {
     });
 
     const conversations = {};
+    const keyFor = (parentUserId, studentId, classId) => `${req.user.schoolCode}:parent_class_teacher:${parentUserId}:${studentId || 'student'}:${classId || 'class'}:${req.user.id}`;
+
+    // First list all parents linked to students in this class teacher's actual class.
+    const parentRows = await sequelize.query(
+      `SELECT DISTINCT pu."id" AS "userId", pu."name" AS "userName", p."id" AS "parentProfileId",
+              s."id" AS "studentId", su."name" AS "studentName",
+              s."grade" AS "studentGrade", s."classId" AS "classId", c."name" AS "className"
+         FROM "Students" s
+         JOIN "Users" su ON su."id" = s."userId"
+         JOIN "StudentParents" sp ON sp."studentId" = s."id"
+         JOIN "Parents" p ON p."id" = sp."parentId"
+         JOIN "Users" pu ON pu."id" = p."userId"
+         LEFT JOIN "Classes" c ON c."id" = s."classId"
+        WHERE su."schoolCode" = :schoolCode
+          AND pu."schoolCode" = :schoolCode
+          AND pu."role" = 'parent'
+          AND pu."isActive" = true
+          AND s."classId" IN (:classIds)
+        ORDER BY pu."name" ASC, "studentName" ASC`,
+      { replacements: { schoolCode: req.user.schoolCode, classIds }, type: sequelize.QueryTypes.SELECT }
+    ).catch(() => []);
+
+    for (const row of parentRows) {
+      const key = keyFor(row.userId, row.studentId, row.classId);
+      conversations[key] = {
+        conversationKey: key,
+        userId: row.userId,
+        userName: row.userName || 'Parent',
+        userRole: 'parent',
+        conversationType: 'parent_class_teacher',
+        studentId: row.studentId || null,
+        studentName: row.studentName || null,
+        studentGrade: row.studentGrade || null,
+        classId: row.classId || null,
+        className: row.className || null,
+        lastMessage: '',
+        lastMessageTime: null,
+        unreadCount: 0,
+        hasHistory: false
+      };
+    }
+
+    // Then overlay real conversations/history on top of the parent list.
     for (const msg of messages) {
       const md = msg.metadata || {};
       if (md.schoolCode && String(md.schoolCode) !== String(req.user.schoolCode)) continue;
       if (md.conversationType !== 'parent_class_teacher') continue;
       if (Number(md.classTeacherUserId) !== Number(req.user.id)) continue;
+      if (md.classId && !classIds.includes(Number(md.classId))) continue;
 
-      const parentUserId = Number(md.parentUserId || (msg.senderId === req.user.id ? msg.receiverId : msg.senderId));
-      const parentUser = msg.senderId === req.user.id ? msg.Receiver : msg.Sender;
-      const key = md.conversationKey || `${req.user.schoolCode}:parent_class_teacher:${parentUserId}:${md.studentId || ''}:${md.classId || ''}:${req.user.id}`;
+      const parentUserId = Number(md.parentUserId || (Number(msg.senderId) === Number(req.user.id) ? msg.receiverId : msg.senderId));
+      const parentUser = Number(msg.senderId) === Number(req.user.id) ? msg.Receiver : msg.Sender;
+      const key = md.conversationKey || keyFor(parentUserId, md.studentId, md.classId);
       if (!conversations[key]) {
         conversations[key] = {
           conversationKey: key,
@@ -367,15 +411,26 @@ exports.getParentConversations = async (req, res) => {
           studentGrade: md.studentGrade || null,
           classId: md.classId || null,
           className: md.className || null,
-          lastMessage: msg.content,
-          lastMessageTime: msg.createdAt,
-          unreadCount: 0
+          lastMessage: '',
+          lastMessageTime: null,
+          unreadCount: 0,
+          hasHistory: false
         };
       }
-      if (Number(msg.receiverId) === Number(req.user.id) && !msg.isRead) conversations[key].unreadCount += 1;
+      const conv = conversations[key];
+      if (!conv.lastMessageTime || new Date(msg.createdAt) > new Date(conv.lastMessageTime)) {
+        conv.lastMessage = msg.content;
+        conv.lastMessageTime = msg.createdAt;
+      }
+      conv.hasHistory = true;
+      if (Number(msg.receiverId) === Number(req.user.id) && !msg.isRead) conv.unreadCount += 1;
     }
 
-    res.json({ success: true, data: Object.values(conversations).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime)) });
+    res.json({ success: true, data: Object.values(conversations).sort((a, b) => {
+      const at = a.lastMessageTime ? new Date(a.lastMessageTime).getTime() : 0;
+      const bt = b.lastMessageTime ? new Date(b.lastMessageTime).getTime() : 0;
+      return bt - at || String(a.userName || '').localeCompare(String(b.userName || ''));
+    }) });
   } catch (error) {
     console.error('Get parent conversations error:', error);
     res.status(500).json({ success: false, message: error.message });

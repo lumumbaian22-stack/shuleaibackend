@@ -1,6 +1,6 @@
 // src/controllers/teacherMessageController.js
 const { Op } = require('sequelize');
-const { Message, User, Teacher, Student, Parent } = require('../models');
+const { Message, User, Teacher, Student, Parent, Class, sequelize } = require('../models');
 const { createAlert } = require('../services/notificationService');
 
 function messageMeta(message) { return (message?.toJSON ? message.toJSON() : (message || {})).metadata || {}; }
@@ -9,6 +9,65 @@ function isTeacherParentConversation(message, user) {
   return (!md.schoolCode || String(md.schoolCode) === String(user.schoolCode))
     && md.conversationType === 'parent_class_teacher'
     && Number(md.classTeacherUserId) === Number(user.id);
+}
+
+async function resolveClassTeacherParentContext(req, parentUserId) {
+  const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+  if (!teacher) return null;
+  const classes = await Class.findAll({
+    where: {
+      schoolCode: req.user.schoolCode,
+      isActive: true,
+      [Op.or]: [
+        { teacherId: teacher.id },
+        { id: teacher.classId || 0 },
+        ...(teacher.classTeacher ? [{ name: teacher.classTeacher }] : [])
+      ]
+    },
+    attributes: ['id','name','grade']
+  }).catch(() => []);
+  const classIds = classes.map(c => c.id).filter(Boolean);
+  if (!classIds.length) return null;
+
+  const rows = await sequelize.query(
+    `SELECT pu."id" AS "parentUserId", pu."name" AS "parentName", p."id" AS "parentProfileId",
+            s."id" AS "studentId", su."name" AS "studentName",
+            s."grade" AS "studentGrade", s."classId" AS "classId", c."name" AS "className"
+       FROM "Students" s
+       JOIN "Users" su ON su."id" = s."userId"
+       JOIN "StudentParents" sp ON sp."studentId" = s."id"
+       JOIN "Parents" p ON p."id" = sp."parentId"
+       JOIN "Users" pu ON pu."id" = p."userId"
+       LEFT JOIN "Classes" c ON c."id" = s."classId"
+      WHERE su."schoolCode" = :schoolCode
+        AND pu."schoolCode" = :schoolCode
+        AND pu."role" = 'parent'
+        AND pu."isActive" = true
+        AND pu."id" = :parentUserId
+        AND s."classId" IN (:classIds)
+      ORDER BY s."id" ASC
+      LIMIT 1`,
+    { replacements: { schoolCode: req.user.schoolCode, parentUserId, classIds }, type: sequelize.QueryTypes.SELECT }
+  ).catch(() => []);
+  const row = rows[0];
+  if (!row) return null;
+  const conversationKey = [req.user.schoolCode, 'parent_class_teacher', row.parentUserId, row.studentId || 'student', row.classId || 'class', req.user.id].join(':');
+  return {
+    schoolCode: req.user.schoolCode,
+    conversationType: 'parent_class_teacher',
+    conversationKey,
+    parentUserId: Number(row.parentUserId),
+    parentProfileId: row.parentProfileId || null,
+    parentName: row.parentName || 'Parent',
+    studentId: row.studentId || null,
+    studentName: row.studentName || null,
+    studentGrade: row.studentGrade || null,
+    classId: row.classId || null,
+    className: row.className || null,
+    classTeacherUserId: req.user.id,
+    actualRecipientType: 'parent',
+    senderRole: req.user.role
+  };
 }
 
 // @desc    Get all conversations for teacher
@@ -180,10 +239,13 @@ exports.replyToParent = async (req, res) => {
             });
             baseMessage = recent.find(m => isTeacherParentConversation(m, req.user)) || null;
         }
-        if (!baseMessage) {
-            return res.status(403).json({ success: false, message: 'This parent conversation is not assigned to you as class teacher.' });
+        let baseMeta = baseMessage ? messageMeta(baseMessage) : null;
+        if (!baseMeta || baseMeta.conversationType !== 'parent_class_teacher') {
+            baseMeta = await resolveClassTeacherParentContext(req, parentId);
         }
-        const baseMeta = messageMeta(baseMessage);
+        if (!baseMeta) {
+            return res.status(403).json({ success: false, message: 'This parent is not linked to a student in your class teacher class.' });
+        }
 
         const reply = await Message.create({
             senderId: req.user.id,
@@ -192,7 +254,7 @@ exports.replyToParent = async (req, res) => {
             metadata: {
                 ...baseMeta,
                 schoolCode: req.user.schoolCode,
-                inReplyTo: originalMessageId || baseMessage.id,
+                inReplyTo: originalMessageId || baseMessage?.id || null,
                 type: 'teacher_reply',
                 teacherName: req.user.name,
                 teacherId: req.user.id

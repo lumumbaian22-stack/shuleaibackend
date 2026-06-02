@@ -415,9 +415,8 @@ exports.listTeacherDirectory = async (req, res) => {
     }
 
     let roleFilter = ['teacher'];
-    // V66K safe private-chat rule:
-    // Subject teachers must not see parents in private chat.
-    // Class teachers may see parents, but group/study chats remain available for subject teachers.
+    // Private teacher chat is strictly teacher-to-teacher.
+    // Parent communication is loaded in the dedicated Parents tab for class teachers only.
     if (req.user.role === 'teacher') {
       const meTeacher = await Teacher.findOne({ where: { userId: req.user.id } }).catch(() => null);
       let isClassTeacher = false;
@@ -435,7 +434,7 @@ exports.listTeacherDirectory = async (req, res) => {
         }).catch(() => 0);
         isClassTeacher = classCount > 0;
       }
-      roleFilter = isClassTeacher ? ['teacher', 'admin', 'parent'] : ['teacher', 'admin'];
+      roleFilter = ['teacher'];
     }
     else if (req.user.role === 'parent') roleFilter = ['teacher', 'admin'];
     else if (['admin', 'super_admin'].includes(req.user.role)) roleFilter = ['teacher', 'admin', 'parent'];
