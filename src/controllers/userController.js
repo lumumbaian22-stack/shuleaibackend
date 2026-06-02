@@ -5,6 +5,7 @@ const { createAlert } = require('../services/notificationService');
 const path = require('path');
 const fs = require('fs');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
+const { getAlertsForUser } = require('../services/alertReceiverEngine');
 
 // @desc    Get user statistics for profile
 exports.getUserStats = async (req, res) => {
@@ -223,10 +224,9 @@ exports.uploadProfilePicture = async (req, res) => {
 // @desc    Get user alerts
 exports.getAlerts = async (req, res) => {
   try {
-    const alerts = await Alert.findAll({
-      where: { userId: req.user.id },
-      order: [['createdAt', 'DESC']],
-      limit: 50
+    const alerts = await getAlertsForUser(req.user, {
+      studentId: req.query.studentId || req.query.childId || null,
+      limit: Number(req.query.limit || 50)
     });
     res.json({ success: true, data: alerts });
   } catch (error) {
