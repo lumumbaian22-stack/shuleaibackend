@@ -26,12 +26,29 @@ async function linkParentToStudentSafely(parentId, studentId) {
   });
 }
 
-async function parentHasStudent(parentId, studentId) {
+async function parentHasStudent(parentId, studentId, parentUserId = null, studentUserId = null) {
   const rows = await sequelize.query(
-    'SELECT 1 FROM "StudentParents" WHERE "parentId" = :parentId AND "studentId" = :studentId LIMIT 1',
-    { replacements: { parentId, studentId }, type: sequelize.QueryTypes.SELECT }
+    `SELECT 1
+       FROM "StudentParents" sp
+       LEFT JOIN "Parents" p ON p."id" = sp."parentId"
+       LEFT JOIN "Students" s ON (s."id" = sp."studentId" OR s."userId" = sp."studentId")
+      WHERE (sp."parentId" = :parentId OR (:parentUserId::integer IS NOT NULL AND (sp."parentId" = :parentUserId OR p."userId" = :parentUserId)))
+        AND (sp."studentId" = :studentId OR (:studentUserId::integer IS NOT NULL AND (sp."studentId" = :studentUserId OR s."userId" = :studentUserId)))
+      LIMIT 1`,
+    { replacements: { parentId, studentId, parentUserId, studentUserId }, type: sequelize.QueryTypes.SELECT }
   );
   return rows.length > 0;
+}
+
+async function parentCanAccessStudent(parent, student, reqUser = null) {
+  if (!parent || !student) return false;
+  const raw = student.toJSON ? student.toJSON() : student;
+  const studentSchoolCode = raw.User?.schoolCode || raw.schoolCode || null;
+  if (reqUser?.schoolCode && studentSchoolCode && String(studentSchoolCode) !== String(reqUser.schoolCode)) return false;
+  let linked = false;
+  if (typeof parent.hasStudent === 'function') linked = await parent.hasStudent(student).catch(() => false);
+  if (!linked) linked = await parentHasStudent(parent.id, raw.id, parent.userId || reqUser?.id || null, raw.userId || raw.User?.id || null).catch(() => false);
+  return !!linked;
 }
 
 async function enrichLinkedChildren(children) {
@@ -112,7 +129,7 @@ exports.linkChildByElimuId = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Unable to link child with this Elimu ID' });
     }
 
-    const alreadyLinked = await parentHasStudent(parent.id, student.id);
+    const alreadyLinked = await parentHasStudent(parent.id, student.id, parent.userId || req.user.id, student.userId || student.User?.id || null);
     if (alreadyLinked) {
       const children = await enrichLinkedChildren([student]);
       return res.json({ success: true, message: 'This child is already linked to your account', data: children[0] });
@@ -151,7 +168,7 @@ exports.getChildSummary = async (req, res) => {
       ] 
     });
     
-    if (!student || !(await parent.hasStudent(student))) {
+    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
@@ -228,9 +245,7 @@ exports.getChildReportCardDetails = async (req, res) => {
       include: [{ model: User, attributes: ['id','name','email','phone','schoolCode','profileImage'] }]
     });
     if (!student) return res.status(404).json({ success:false, message:'Student not found' });
-    let linked = false;
-    if (typeof parent.hasStudent === 'function') linked = await parent.hasStudent(student).catch(() => false);
-    if (!linked) linked = await parentHasStudent(parent.id, student.id).catch(() => false);
+    const linked = await parentCanAccessStudent(parent, student, req.user);
     if (!linked || student.User?.schoolCode !== req.user.schoolCode) return res.status(403).json({ success:false, message:'Not your child' });
 
     const schoolCode = student.User?.schoolCode || req.user.schoolCode;
@@ -307,7 +322,7 @@ exports.reportAbsence = async (req, res) => {
       include: [{ model: User, attributes: ['id', 'name'] }] 
     });
     
-    if (!student || !(await parent.hasStudent(student))) {
+    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
@@ -466,7 +481,7 @@ exports.makePayment = async (req, res) => {
       include: [{ model: User, attributes: ['name'] }] 
     });
     
-    if (!student || !(await parent.hasStudent(student))) {
+    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
@@ -618,7 +633,7 @@ exports.upgradePlan = async (req, res) => {
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId);
     
-    if (!student || !(await parent.hasStudent(student))) {
+    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
@@ -767,7 +782,7 @@ exports.getChildAnalytics = async (req, res) => {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId);
-    if (!parent || !student || !(await parent.hasStudent(student))) return res.status(403).json({ success: false, message: 'Child not linked to this parent' });
+    if (!parent || !student || !(await parentCanAccessStudent(parent, student, req.user))) return res.status(403).json({ success: false, message: 'Child not linked to this parent' });
 
     // Only published marks
     const records = await AcademicRecord.findAll({ where: { studentId, isPublished: true } });
@@ -828,7 +843,7 @@ exports.getFees = async (req, res) => {
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
     const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
-    if (!student || !(await parent.hasStudent(student)) || student.User?.schoolCode !== req.user.schoolCode) {
+    if (!student || !(await parentCanAccessStudent(parent, student, req.user)) || student.User?.schoolCode !== req.user.schoolCode) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
     const fees = await Fee.findAll({
@@ -857,7 +872,7 @@ exports.addPayment = async (req, res) => {
     const { studentId, term, year, amount, method, reference } = req.body;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
-    if (!student || !(await parent.hasStudent(student))) {
+    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
@@ -904,7 +919,7 @@ exports.getChildTodayAttendance = async (req, res) => {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
-    if (!student || !(await parent.hasStudent(student))) {
+    if (!student || !(await parentCanAccessStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
     

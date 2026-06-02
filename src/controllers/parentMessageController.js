@@ -16,20 +16,35 @@ async function getParentProfile(userId) {
   return Parent.findOne({ where: { userId } });
 }
 
-async function verifyParentChild(parent, student) {
+async function verifyParentChild(parent, student, reqUser = null) {
   if (!parent || !student) return false;
-  if (typeof parent.hasStudent === 'function') return parent.hasStudent(student).catch(() => false);
+  const raw = student.toJSON ? student.toJSON() : student;
+  const schoolCode = raw.User?.schoolCode || raw.schoolCode || null;
+  if (reqUser?.schoolCode && schoolCode && String(schoolCode) !== String(reqUser.schoolCode)) return false;
+  let ok = false;
+  if (typeof parent.hasStudent === 'function') ok = await parent.hasStudent(student).catch(() => false);
+  if (ok) return true;
   const rows = await sequelize.query(
-    'SELECT 1 FROM "StudentParents" WHERE "parentId" = :parentId AND "studentId" = :studentId LIMIT 1',
-    { replacements: { parentId: parent.id, studentId: student.id }, type: sequelize.QueryTypes.SELECT }
+    `SELECT 1
+       FROM "StudentParents" sp
+       LEFT JOIN "Parents" p ON p."id" = sp."parentId"
+       LEFT JOIN "Students" s ON (s."id" = sp."studentId" OR s."userId" = sp."studentId")
+      WHERE (sp."parentId" = :parentId OR sp."parentId" = :parentUserId OR p."userId" = :parentUserId)
+        AND (sp."studentId" = :studentId OR sp."studentId" = :studentUserId OR s."userId" = :studentUserId)
+      LIMIT 1`,
+    { replacements: { parentId: parent.id, parentUserId: parent.userId || reqUser?.id || 0, studentId: raw.id, studentUserId: raw.userId || raw.User?.id || 0 }, type: sequelize.QueryTypes.SELECT }
   ).catch(() => []);
   return rows.length > 0;
 }
 
 async function findStudentForParent({ parent, studentId, schoolCode }) {
-  const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }] });
+  const n = Number(studentId) || 0;
+  const student = await Student.findOne({
+    where: { [Op.or]: [{ id: n }, { userId: n }] },
+    include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }]
+  });
   if (!student || student.User?.schoolCode !== schoolCode) return null;
-  const ok = await verifyParentChild(parent, student);
+  const ok = await verifyParentChild(parent, student, { id: parent.userId, schoolCode });
   return ok ? student : null;
 }
 
@@ -180,12 +195,24 @@ function groupConversation(messages, currentUserId) {
 
 exports.getConversations = async (req, res) => {
   try {
+    const parent = await getParentProfile(req.user.id);
+    let selectedStudent = null;
+    if (req.query.studentId || req.query.childId) {
+      selectedStudent = await findStudentForParent({ parent, studentId: req.query.studentId || req.query.childId, schoolCode: req.user.schoolCode });
+      if (!selectedStudent) return res.status(403).json({ success:false, message:'Not your child' });
+    }
     const messages = await Message.findAll({
       where: { [Op.or]: [{ senderId: req.user.id }, { receiverId: req.user.id }] },
       include: [{ model: User, as: 'Sender', attributes: ['id', 'name', 'role'] }, { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }],
       order: [['createdAt', 'DESC']]
     });
-    const scoped = messages.filter(m => schoolMatches(m, req.user.schoolCode) && ['parent_class_teacher', 'parent_admin'].includes(meta(m).conversationType));
+    const selectedId = selectedStudent ? Number(selectedStudent.id) : null;
+    const scoped = messages.filter(m => {
+      const md = meta(m);
+      if (!schoolMatches(m, req.user.schoolCode) || !['parent_class_teacher', 'parent_admin'].includes(md.conversationType)) return false;
+      if (selectedId && Number(md.studentId || 0) !== selectedId) return false;
+      return true;
+    });
     res.json({ success: true, data: groupConversation(scoped, req.user.id) });
   } catch (error) {
     console.error('Get parent conversations error:', error);
@@ -201,7 +228,19 @@ exports.getMessages = async (req, res) => {
       include: [{ model: User, as: 'Sender', attributes: ['id', 'name', 'role'] }, { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }],
       order: [['createdAt', 'ASC']]
     });
-    const scoped = messages.filter(m => schoolMatches(m, req.user.schoolCode) && ['parent_class_teacher', 'parent_admin'].includes(meta(m).conversationType));
+    const parent = await getParentProfile(req.user.id);
+    let selectedStudent = null;
+    if (req.query.studentId || req.query.childId) {
+      selectedStudent = await findStudentForParent({ parent, studentId: req.query.studentId || req.query.childId, schoolCode: req.user.schoolCode });
+      if (!selectedStudent) return res.status(403).json({ success:false, message:'Not your child' });
+    }
+    const selectedId = selectedStudent ? Number(selectedStudent.id) : null;
+    const scoped = messages.filter(m => {
+      const md = meta(m);
+      if (!schoolMatches(m, req.user.schoolCode) || !['parent_class_teacher', 'parent_admin'].includes(md.conversationType)) return false;
+      if (selectedId && Number(md.studentId || 0) !== selectedId) return false;
+      return true;
+    });
     await Message.update({ isRead: true, readAt: new Date() }, { where: { senderId: otherUserId, receiverId: req.user.id, isRead: false } });
     res.json({ success: true, data: scoped });
   } catch (error) {

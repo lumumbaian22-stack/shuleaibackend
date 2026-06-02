@@ -7,8 +7,7 @@ const {
   Student,
   User,
   School,
-  AuditLog,
-  Settings
+  AuditLog
 } = require('../models');
 
 const SCHOOL_CORE_FEATURES = ['attendance', 'marks', 'students', 'teachers', 'basic_reports', 'fees'];
@@ -189,32 +188,6 @@ exports.daysRemaining = daysRemaining;
 exports.getPlans = async (req, res) => {
   try {
     const ownerType = req.query.ownerType;
-    const settings = await Settings.findOne({ where: { key: 'platform_payment_settings' } }).catch(() => null);
-    const cfg = settings?.value || {};
-    const cfgPlans = ownerType === 'school' ? cfg.schoolPlans : ownerType === 'child' ? cfg.parentPlans : null;
-    if (Array.isArray(cfgPlans) && cfgPlans.length) {
-      const data = cfgPlans.filter(p => p && p.isActive !== false).map((p, idx) => {
-        const rawCode = String(p.code || p.id || p.name || `plan_${idx + 1}`).trim().toLowerCase().replace(/\s+/g, '_');
-        let code = rawCode;
-        if (ownerType === 'school') {
-          if (!code || code === 'growth') code = 'school_growth';
-          else if (!code.startsWith('school_')) code = `school_${code}`;
-        } else if (ownerType === 'child') {
-          if (!code || code === 'basic' || code === 'essential') code = 'child_essential';
-          else if (code === 'premium' || code === 'smart') code = 'child_smart';
-          else if (code === 'ultimate' || code === 'genius') code = 'child_genius';
-          else if (!code.startsWith('child_')) code = `child_${code}`;
-        }
-        const amount = Number(p.monthlyPriceKes ?? p.price_kes ?? p.price ?? p.amount ?? 0) || 0;
-        return {
-          id: p.id || code, code, name: p.displayName || p.name || code, displayName: p.displayName || p.name || code, ownerType,
-          price: amount, monthlyPriceKes: amount, termlyPriceKes: p.termlyPriceKes ?? p.termly ?? (amount ? amount * 3 : null), yearlyPriceKes: p.yearlyPriceKes ?? p.yearly ?? (amount ? amount * 12 : null),
-          setupFeeMinKes: p.setupFeeMinKes ?? p.setupMin ?? null, setupFeeMaxKes: p.setupFeeMaxKes ?? p.setupMax ?? null,
-          features: Array.isArray(p.features) ? p.features : [], lockedFeatures: Array.isArray(p.lockedFeatures) ? p.lockedFeatures : [], limits: p.limits || { days: Number(p.days || 30) || 30 }, sortOrder: p.sortOrder ?? idx
-        };
-      });
-      return res.json({ success: true, data });
-    }
     const where = { isActive: true };
     if (ownerType) where.ownerType = ownerType;
     const plans = await SubscriptionPlan.findAll({ where, order: [['sortOrder', 'ASC'], ['price_kes', 'ASC']] });
