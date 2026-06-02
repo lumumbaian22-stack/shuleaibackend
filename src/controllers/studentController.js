@@ -2,8 +2,6 @@
 const { sequelize, Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School, Alert, TeacherSubjectAssignment } = require('../models');
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
-const curriculumStructureEngine = require('../services/curriculumStructureEngine');
-const studentSubjectSelectionService = require('../services/studentSubjectSelectionService');
 
 // Helper: get grade from score using the school's curriculum (simplified)
 function getGradeFromScore(score, curriculum, level) {
@@ -180,13 +178,12 @@ exports.getDashboard = async (req, res) => {
         school: {
             name: school?.name || null,
             schoolName: school?.name || null,
-            schoolId: school?.schoolId || req.user.schoolCode,
-            logo: school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.branding?.logoDataUrl || null,
-            logoUrl: school?.settings?.branding?.logoUrl || null,
-            branding: school?.settings?.branding || {},
+            schoolCode: req.user.schoolCode,
             curriculum,
             system: curriculum,
-            schoolLevel
+            schoolLevel,
+            logo: school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null,
+            branding: school?.settings?.branding || {}
         }
       }
     });
@@ -581,8 +578,17 @@ exports.getStudentFullDetails = async (req, res) => {
             }
         } else if (user.role === 'parent') {
             const parent = await Parent.findOne({ where: { userId: user.id } });
-            if (parent && await parent.hasStudent(student)) {
-                authorized = true;
+            if (parent) {
+                try {
+                    if (typeof parent.hasStudent === 'function' && await parent.hasStudent(student)) authorized = true;
+                } catch (_) {}
+                if (!authorized) {
+                    const linked = await sequelize.query(
+                        'SELECT 1 FROM "StudentParents" WHERE "parentId" = :parentId AND "studentId" = :studentId LIMIT 1',
+                        { replacements: { parentId: parent.id, studentId: student.id }, type: sequelize.QueryTypes.SELECT }
+                    ).catch(() => []);
+                    authorized = linked.length > 0;
+                }
             }
         } else if (user.role === 'student') {
             if (student.userId === user.id) {
@@ -627,28 +633,24 @@ exports.getStudentFullDetails = async (req, res) => {
 
         // Academic records (only published)
         const records = await AcademicRecord.findAll({
-            where: { studentId, schoolCode: student.User?.schoolCode || user.schoolCode, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
+            where: { studentId: student.id, schoolCode: student.User?.schoolCode || user.schoolCode, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
             order: [['year', 'DESC'], ['term', 'DESC'], ['date', 'DESC']]
         });
-        // Subject averages from the locked curriculum/report-card engine.
-        let studentSubjectSelections = [];
-        if (studentClass) {
-            studentSubjectSelections = await studentSubjectSelectionService.listStudentSubjectSelections({
-                schoolCode: student.User?.schoolCode || user.schoolCode,
-                studentId: student.id,
-                classId: studentClass.id
-            }).catch(() => []);
-        }
-        const reportRows = school && studentClass
-            ? curriculumStructureEngine.buildSubjectRowsForReport({ school, classItem: studentClass, student, records, studentSubjectSelections })
-            : [];
-        const reportSummary = curriculumStructureEngine.summarizeReportRows(reportRows);
-        const subjects = reportRows.map(row => ({
-            subject: row.subject,
-            average: row.score,
-            grade: row.score == null ? null : getGradeFromScore(row.score, curriculum, schoolLevel, gradingScale),
-            status: row.status,
-            counted: row.counted
+        const overallAverage = records.length
+            ? Math.round(records.reduce((s, r) => s + r.score, 0) / records.length)
+            : 0;
+
+        // Subject averages with curriculum grading
+        const subjectMap = {};
+        records.forEach(r => {
+            if (!subjectMap[r.subject]) subjectMap[r.subject] = { total: 0, count: 0 };
+            subjectMap[r.subject].total += r.score;
+            subjectMap[r.subject].count++;
+        });
+        const subjects = Object.entries(subjectMap).map(([subject, data]) => ({
+            subject,
+            average: Math.round(data.total / data.count),
+            grade: getGradeFromScore(Math.round(data.total / data.count), curriculum, schoolLevel, gradingScale)
         }));
 
         // Term averages
@@ -666,7 +668,7 @@ exports.getStudentFullDetails = async (req, res) => {
         }
 
         // Attendance summary
-        const attendance = await Attendance.findAll({ where: { studentId } });
+        const attendance = await Attendance.findAll({ where: { studentId: student.id, schoolCode: student.User?.schoolCode || user.schoolCode } });
         const present = attendance.filter(a => a.status === 'present').length;
         const absent = attendance.filter(a => a.status === 'absent').length;
         const late = attendance.filter(a => a.status === 'late').length;
@@ -714,14 +716,9 @@ exports.getStudentFullDetails = async (req, res) => {
                     phone: classTeacher.User.phone
                 } : null,
                 academicSummary: {
-                    overallAverage: reportSummary.average ?? 0,
+                    overallAverage,
                     termAverages,
-                    subjects,
-                    totalMarks: reportSummary.totalMarks || 0,
-                    countedSubjects: reportSummary.countedSubjects || 0,
-                    pendingSubjects: reportSummary.pendingSubjects || 0,
-                    notTakenSubjects: reportSummary.notTakenSubjects || 0,
-                    calculationRule: 'Only completed subjects the student is taking are counted. Pending/null and Not Taken subjects are not counted.'
+                    subjects
                 },
                 attendanceSummary: {
                     rate: attendanceRate,
@@ -734,13 +731,12 @@ exports.getStudentFullDetails = async (req, res) => {
                 school: {
                     name: school?.name || null,
                     schoolName: school?.name || null,
-                    schoolId: school?.schoolId || student.User?.schoolCode || user.schoolCode,
-                    logo: school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.branding?.logoDataUrl || null,
-                    logoUrl: school?.settings?.branding?.logoUrl || null,
-                    branding: school?.settings?.branding || {},
+                    schoolCode: student.User?.schoolCode || user.schoolCode,
                     curriculum,
                     system: curriculum,
-                    schoolLevel
+                    schoolLevel,
+                    logo: school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null,
+                    branding: school?.settings?.branding || {}
                 }
             }
         });

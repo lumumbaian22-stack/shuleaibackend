@@ -3,6 +3,14 @@ const { Op } = require('sequelize');
 const { Message, User, Teacher, Student, Parent } = require('../models');
 const { createAlert } = require('../services/notificationService');
 
+function messageMeta(message) { return (message?.toJSON ? message.toJSON() : (message || {})).metadata || {}; }
+function isTeacherParentConversation(message, user) {
+  const md = messageMeta(message);
+  return (!md.schoolCode || String(md.schoolCode) === String(user.schoolCode))
+    && md.conversationType === 'parent_class_teacher'
+    && Number(md.classTeacherUserId) === Number(user.id);
+}
+
 // @desc    Get all conversations for teacher
 // @route   GET /api/teacher/conversations
 // @access  Private/Teacher
@@ -84,7 +92,7 @@ exports.getConversations = async (req, res) => {
 exports.getMessages = async (req, res) => {
     try {
         const { parentId } = req.params;
-        
+
         const messages = await Message.findAll({
             where: {
                 [Op.or]: [
@@ -98,8 +106,9 @@ exports.getMessages = async (req, res) => {
             ],
             order: [['createdAt', 'ASC']]
         });
-        
-        // Mark messages as read
+
+        const scoped = messages.filter(message => isTeacherParentConversation(message, req.user));
+
         await Message.update(
             { isRead: true, readAt: new Date() },
             {
@@ -110,8 +119,8 @@ exports.getMessages = async (req, res) => {
                 }
             }
         );
-        
-        res.json({ success: true, data: messages });
+
+        res.json({ success: true, data: scoped });
     } catch (error) {
         console.error('Get messages error:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -149,45 +158,57 @@ exports.markMessagesAsRead = async (req, res) => {
 exports.replyToParent = async (req, res) => {
     try {
         const { parentId, message, originalMessageId } = req.body;
-        
-        if (!parentId || !message) {
+
+        if (!parentId || !String(message || '').trim()) {
             return res.status(400).json({ success: false, message: 'Parent ID and message are required' });
         }
-        
-        // Create reply message
+
+        let baseMessage = null;
+        if (originalMessageId) {
+            baseMessage = await Message.findByPk(originalMessageId).catch(() => null);
+        }
+        if (!baseMessage) {
+            const recent = await Message.findAll({
+                where: {
+                    [Op.or]: [
+                        { senderId: req.user.id, receiverId: parentId },
+                        { senderId: parentId, receiverId: req.user.id }
+                    ]
+                },
+                order: [['createdAt', 'DESC']],
+                limit: 20
+            });
+            baseMessage = recent.find(m => isTeacherParentConversation(m, req.user)) || null;
+        }
+        if (!baseMessage) {
+            return res.status(403).json({ success: false, message: 'This parent conversation is not assigned to you as class teacher.' });
+        }
+        const baseMeta = messageMeta(baseMessage);
+
         const reply = await Message.create({
             senderId: req.user.id,
             receiverId: parentId,
-            content: message,
+            content: String(message).trim(),
             metadata: {
-                inReplyTo: originalMessageId,
+                ...baseMeta,
+                schoolCode: req.user.schoolCode,
+                inReplyTo: originalMessageId || baseMessage.id,
                 type: 'teacher_reply',
                 teacherName: req.user.name,
                 teacherId: req.user.id
             }
         });
-        
-        // Get parent info for notification
-        const parent = await User.findByPk(parentId);
-        const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-        
-        // Create alert for parent
+
         await createAlert({
             userId: parentId,
             role: 'parent',
             type: 'message',
             severity: 'info',
-            title: `📬 Reply from ${req.user.name}`,
-            message: message.substring(0, 100) + (message.length > 100 ? '...' : ''),
-            data: {
-                teacherId: req.user.id,
-                teacherName: req.user.name,
-                messageId: reply.id,
-                teacherClass: teacher?.classTeacher || 'Not specified'
-            }
+            title: `Reply from ${req.user.name}`,
+            message: String(message).substring(0, 100) + (String(message).length > 100 ? '...' : ''),
+            data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: baseMeta.conversationType, conversationKey: baseMeta.conversationKey, messageId: reply.id }
         });
-        
-        // Real-time notification
+
         if (global.io) {
             global.io.to(`user-${parentId}`).emit('new-message', {
                 from: req.user.id,
@@ -197,13 +218,8 @@ exports.replyToParent = async (req, res) => {
                 timestamp: new Date()
             });
         }
-        
-        res.status(201).json({
-            success: true,
-            message: 'Reply sent successfully',
-            data: reply
-        });
-        
+
+        res.status(201).json({ success: true, message: 'Reply sent successfully', data: reply });
     } catch (error) {
         console.error('Reply error:', error);
         res.status(500).json({ success: false, message: error.message });

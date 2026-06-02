@@ -1,5 +1,6 @@
 const { Alert, User, School, Student, Parent, Teacher, TeacherSubjectAssignment, sequelize } = require('../models');
 const { generateParentAlertSuggestion } = require('../services/aiProviderService');
+const { getAlertsForUser } = require('../services/alertReceiverEngine');
 
 async function userCanViewStudentAlert(req, studentId) {
   if (!studentId) return true;
@@ -85,12 +86,12 @@ async function filterAlertsForRequester(req, alerts, requestedStudentId) {
 exports.getMyAlerts = async (req, res) => {
   try {
     const requestedStudentId = req.query.studentId || req.query.childId || null;
-    const alerts = await Alert.findAll({
-      where: { userId: req.user.id },
-      order: [['createdAt', 'DESC']],
-      limit: Number(req.query.limit || 120)
+    const safeAlerts = await getAlertsForUser(req.user, {
+      studentId: requestedStudentId,
+      limit: Number(req.query.limit || 120),
+      calendarOnly: req.query.calendarOnly === 'true',
+      upcomingOnly: req.query.upcomingOnly === 'true'
     });
-    const safeAlerts = await filterAlertsForRequester(req, alerts, requestedStudentId);
     res.json({ success: true, data: safeAlerts, scope: { role: req.user.role, studentId: requestedStudentId || null } });
   } catch (error) {
     console.error('Get alerts error:', error);
@@ -286,7 +287,16 @@ exports.createAlert = async (req, res) => {
       message,
       data,
       deliveryMethods,
-      scheduledAt
+      scheduledAt,
+      scope,
+      showInCalendar,
+      showInUpcomingEvents,
+      eventDate,
+      targetRoles,
+      targetUserIds,
+      targetClassIds,
+      targetSubjectIds,
+      targetStudentIds
     } = req.body;
 
     if (!['admin', 'super_admin', 'teacher'].includes(req.user.role)) {
@@ -306,21 +316,29 @@ exports.createAlert = async (req, res) => {
     const dbSeverity = severityMap[rawSeverity] || 'info';
 
     let recipients = [];
-    if (Array.isArray(userIds) && userIds.length) {
-      recipients = await User.findAll({ where: { id: userIds, schoolCode: req.user.schoolCode } });
+    const explicitUserIds = Array.isArray(targetUserIds) && targetUserIds.length ? targetUserIds : (Array.isArray(userIds) && userIds.length ? userIds : []);
+    if (explicitUserIds.length) {
+      recipients = await User.findAll({ where: { id: explicitUserIds, schoolCode: req.user.schoolCode, isActive: true } });
     } else if (userId) {
-      const user = await User.findOne({ where: { id: userId, schoolCode: req.user.schoolCode } });
+      const user = await User.findOne({ where: { id: userId, schoolCode: req.user.schoolCode, isActive: true } });
       if (user) recipients = [user];
     } else {
-      const selectedRoles = Array.isArray(roles) && roles.length ? roles : (role ? [role] : (Array.isArray(targetAudience) ? targetAudience : ['student']));
-      const cleanRoles = selectedRoles.map(r => String(r).toLowerCase()).filter(r => ['student','parent','teacher','admin','super_admin'].includes(r));
-      recipients = await User.findAll({
-        where: {
-          role: cleanRoles.length ? cleanRoles : ['student'],
-          schoolCode: req.user.schoolCode,
-          isActive: true
-        }
-      });
+      const selectedRolesRaw = Array.isArray(targetRoles) && targetRoles.length ? targetRoles : (Array.isArray(roles) && roles.length ? roles : (role ? [role] : (Array.isArray(targetAudience) ? targetAudience : (targetAudience ? [targetAudience] : []))));
+      const allSchoolRoles = ['student', 'parent', 'teacher', 'admin'];
+      const selectedRoles = selectedRolesRaw.some(r => String(r).toLowerCase() === 'all' || String(r).toLowerCase() === 'whole_school') ? allSchoolRoles : selectedRolesRaw;
+      const cleanRoles = selectedRoles.map(r => String(r).toLowerCase().replace('-', '_')).filter(r => ['student','parent','teacher','admin','super_admin'].includes(r));
+      if (!cleanRoles.length) {
+        // No silent broadcast. An alert with no explicit audience belongs to the creator only.
+        recipients = [req.user];
+      } else {
+        recipients = await User.findAll({
+          where: {
+            role: cleanRoles,
+            schoolCode: req.user.schoolCode,
+            isActive: true
+          }
+        });
+      }
     }
 
     if (!recipients.length) {
@@ -349,7 +367,17 @@ exports.createAlert = async (req, res) => {
         createdBy: req.user.id,
         createdByRole: req.user.role,
         studentId: studentId || data?.studentId || null,
-        classId: classId || data?.classId || null
+        classId: classId || data?.classId || null,
+        schoolCode: req.user.schoolCode || data?.schoolCode || null,
+        scope: scope || data?.scope || (req.user.role === 'super_admin' ? 'platform' : (targetRoles || roles || role || targetAudience ? 'school' : 'user')),
+        targetRoles: targetRoles || roles || (role ? [role] : (Array.isArray(targetAudience) ? targetAudience : (targetAudience ? [targetAudience] : []))),
+        targetUserIds: targetUserIds || userIds || (userId ? [userId] : [recipient.id]),
+        targetClassIds: targetClassIds || (classId ? [classId] : []),
+        targetSubjectIds: targetSubjectIds || [],
+        targetStudentIds: targetStudentIds || (studentId ? [studentId] : []),
+        showInCalendar: !!(showInCalendar || data?.showInCalendar),
+        showInUpcomingEvents: !!(showInUpcomingEvents || data?.showInUpcomingEvents),
+        eventDate: eventDate || data?.eventDate || scheduledAt || null
       };
       const finalDedupeKey = dedupeKey || buildDedupeKey({ req, recipient, type, category: finalCategory, title, data: finalData });
       let alert = await Alert.findOne({ where: { userId: recipient.id, dedupeKey: finalDedupeKey } }).catch(() => null);

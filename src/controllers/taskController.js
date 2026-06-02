@@ -1,22 +1,6 @@
 // src/controllers/taskController.js
-const { Task, User, Teacher } = require('../models');
+const { Task, User } = require('../models');
 const { createAlert } = require('../services/notificationService');
-const { Op } = require('sequelize');
-
-async function getTaskOwnerIds(req) {
-  const ids = new Set([Number(req.user.id)]);
-  if (req.user.role === 'teacher') {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } }).catch(() => null);
-    if (teacher?.id) ids.add(Number(teacher.id));
-  }
-  return Array.from(ids).filter(Boolean);
-}
-
-async function findOwnedTask(req, id) {
-  const ownerIds = await getTaskOwnerIds(req);
-  return Task.findOne({ where: { id, userId: ownerIds } });
-}
-
 
 // @desc    Get user's tasks
 // @route   GET /api/tasks
@@ -24,9 +8,8 @@ async function findOwnedTask(req, id) {
 exports.getTasks = async (req, res) => {
   try {
     // Use userId column instead of teacherId
-    const ownerIds = await getTaskOwnerIds(req);
     const tasks = await Task.findAll({
-      where: { userId: { [Op.in]: ownerIds } },
+      where: { userId: req.user.id },
       order: [['dueDate', 'ASC'], ['createdAt', 'DESC']]
     });
     res.json({ success: true, data: tasks });
@@ -90,13 +73,24 @@ exports.createTask = async (req, res) => {
 exports.updateTask = async (req, res) => {
   try {
     const id = req.params.id || req.params.taskId;
-    const task = await findOwnedTask(req, id);
+    const task = await Task.findOne({ where: { id, userId: req.user.id } });
     
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found or not assigned to you' });
     }
     
-    await task.update(req.body);
+    const safeBody = { ...(req.body || {}) };
+    delete safeBody.id;
+    delete safeBody.userId;
+    delete safeBody.createdAt;
+    delete safeBody.updatedAt;
+    // Teacher personal tasks are controlled by the owning teacher. Completion can be
+    // changed from the teacher's own task section only because this query is locked
+    // to userId = logged-in user. Official/admin/school-assigned tasks must not be
+    // stored in this personal Tasks table.
+    if (safeBody.status === 'completed' && !task.completedAt) safeBody.completedAt = new Date();
+    if (safeBody.status && safeBody.status !== 'completed') safeBody.completedAt = null;
+    await task.update(safeBody);
     res.json({ success: true, data: task });
   } catch (error) {
     console.error('Update task error:', error);
@@ -110,7 +104,7 @@ exports.updateTask = async (req, res) => {
 exports.deleteTask = async (req, res) => {
   try {
     const id = req.params.id || req.params.taskId;
-    const task = await findOwnedTask(req, id);
+    const task = await Task.findOne({ where: { id, userId: req.user.id } });
     
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found or not assigned to you' });
@@ -130,12 +124,15 @@ exports.deleteTask = async (req, res) => {
 exports.completeTask = async (req, res) => {
   try {
     const id = req.params.id || req.params.taskId;
-    const task = await findOwnedTask(req, id);
+    const task = await Task.findOne({ where: { id, userId: req.user.id } });
     
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found or not assigned to you' });
     }
     
+    // This endpoint is for the logged-in user's own personal task only.
+    // The lookup above enforces task.userId === req.user.id, so a teacher can
+    // complete their own task but cannot complete any other user's task.
     task.status = 'completed';
     task.completedAt = new Date();
     await task.save();

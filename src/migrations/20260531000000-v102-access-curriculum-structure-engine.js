@@ -50,7 +50,6 @@ module.exports = {
       notes: { type: Sequelize.TEXT },
       proofUrl: { type: Sequelize.TEXT },
       requestedPlan: { type: Sequelize.STRING, defaultValue: 'growth' },
-      billingCycle: { type: Sequelize.STRING, defaultValue: 'monthly' },
       status: { type: Sequelize.STRING, defaultValue: 'pending' },
       reviewedBy: { type: Sequelize.INTEGER },
       reviewedAt: { type: Sequelize.DATE },
@@ -59,7 +58,6 @@ module.exports = {
       createdAt: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') },
       updatedAt: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') }
     }).catch(e => { if (!/already exists/i.test(e.message)) throw e; });
-    await addColumnIfMissing(queryInterface, 'SchoolPaymentRequests', 'billingCycle', { type: Sequelize.STRING, defaultValue: 'monthly' });
     await queryInterface.addIndex('SchoolPaymentRequests', ['schoolCode', 'status'], { name: 'school_payment_requests_school_status_idx' }).catch(() => null);
 
     await queryInterface.createTable('StudentSubjectSelections', {

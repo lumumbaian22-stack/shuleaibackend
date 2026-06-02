@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const parentController = require('../controllers/parentController');
+const parentMessageController = require('../controllers/parentMessageController');
 const analyticsController = require('../controllers/analyticsController'); // Add import
 
 router.use(protect, authorize('parent'));
@@ -13,9 +14,9 @@ router.get('/child/:studentId/summary', parentController.getChildSummary);
 router.post('/report-absence', parentController.reportAbsence);
 router.get('/fees/:studentId', parentController.getFees);
 router.post('/fees/pay', parentController.addPayment);
-router.get('/conversations', parentController.getConversations);
-router.get('/messages/:otherUserId', parentController.getMessages);
-router.post('/message', parentController.sendMessage);
+router.get('/conversations', parentMessageController.getConversations);
+router.get('/messages/:otherUserId', parentMessageController.getMessages);
+router.post('/message', parentMessageController.sendMessage);
 router.get('/child/:studentId/attendance/today', parentController.getChildTodayAttendance);
 router.get('/child/:studentId/analytics', parentController.getChildAnalytics);
 
