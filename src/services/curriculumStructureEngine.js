@@ -242,7 +242,8 @@ function getCurriculumConfig(school) {
   const preset = STRUCTURE_PRESETS[curriculum]?.[structureType] || STRUCTURE_PRESETS[curriculum]?.mixed || getBank(curriculum).levels.map(l => l.code);
   const enabledLevels = Array.isArray(engine.enabledLevels) && engine.enabledLevels.length ? engine.enabledLevels : preset;
   const schoolSubjects = Array.isArray(engine.schoolSubjects) ? engine.schoolSubjects : [];
-  return { curriculum, structureType, enabledLevels, schoolSubjects, gradingSettings: engine.gradingSettings || settings.gradingScale || null, seniorSettings: engine.seniorSettings || {}, raw: engine };
+  const classCustomSubjects = settings.classCustomSubjects || settings.customSubjectsByClass || {};
+  return { curriculum, structureType, enabledLevels, schoolSubjects, classCustomSubjects, gradingSettings: engine.gradingSettings || settings.gradingScale || null, seniorSettings: engine.seniorSettings || {}, raw: engine };
 }
 
 function getAllowedLevelsForSchool(school) {
@@ -311,7 +312,30 @@ function getEligibleSubjectsForClass(school, classItem) {
     .filter(Boolean)
     .filter(s => !bankNames.has(String(s.name || '').toLowerCase()));
 
-  return [...bankSubjects, ...customSchoolSubjects]
+  // v115: class-only custom subjects are additive. They do not replace the approved school/curriculum logic.
+  const classOnlyNames = Array.isArray(classItem?.settings?.customSubjects)
+    ? classItem.settings.customSubjects
+    : (cfg.classCustomSubjects && classItem?.id ? (cfg.classCustomSubjects[String(classItem.id)] || []) : []);
+  const seen = new Set([...bankSubjects, ...customSchoolSubjects].map(s => String(s.name || '').toLowerCase()));
+  const classOnlySubjects = (classOnlyNames || [])
+    .filter(Boolean)
+    .filter(name => !seen.has(String(name).toLowerCase()))
+    .map((name, idx) => ({
+      id: `class_custom_${classItem?.id || 'class'}_${String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
+      name: String(name),
+      category: 'class_custom',
+      levelCodes: levelCode ? [levelCode] : [],
+      levelCode,
+      levelLabel: getLevelByCode(cfg.curriculum, levelCode)?.label || classItem?.grade || classItem?.name || null,
+      curriculum: cfg.curriculum,
+      isCore: false,
+      isOptional: true,
+      countsInFinalByDefault: true,
+      order: 1200 + idx,
+      source: 'class_custom_subjects'
+    }));
+
+  return [...bankSubjects, ...customSchoolSubjects, ...classOnlySubjects]
     .sort((a,b) => (a.order||0)-(b.order||0) || a.name.localeCompare(b.name));
 }
 

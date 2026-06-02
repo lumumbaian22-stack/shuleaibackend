@@ -805,8 +805,10 @@ function v102BuildCurriculumSettings(school, patch = {}) {
   const structureType = patch.structureType || patch.schoolStructure || currentEngine.structureType || school.schoolStructure || currentSettings.schoolLevel || 'mixed';
   const enabledLevels = Array.isArray(patch.enabledLevels) ? patch.enabledLevels : (Array.isArray(currentEngine.enabledLevels) ? currentEngine.enabledLevels : []);
   const schoolSubjects = Array.isArray(patch.schoolSubjects) ? patch.schoolSubjects : (Array.isArray(currentEngine.schoolSubjects) ? currentEngine.schoolSubjects : []);
+  const classCustomSubjects = patch.classCustomSubjects || currentSettings.classCustomSubjects || currentSettings.customSubjectsByClass || {};
   return {
     ...currentSettings,
+    classCustomSubjects,
     schoolStructure: structureType,
     curriculum,
     curriculumEngine: {
@@ -887,7 +889,7 @@ exports.updateSchoolSettings = async (req, res) => {
     if (patch.schoolName) school.name = patch.schoolName;
     if (patch.schoolStructure || patch.structureType) school.schoolStructure = patch.schoolStructure || patch.structureType;
     if (Array.isArray(newSettings.curriculumEngine.enabledLevels) && newSettings.curriculumEngine.enabledLevels.length) school.enabledLevels = newSettings.curriculumEngine.enabledLevels;
-    school.settings = { ...newSettings, customSubjects: patch.customSubjects || newSettings.customSubjects || [] };
+    school.settings = { ...newSettings, customSubjects: Array.isArray(patch.customSubjects) ? patch.customSubjects : (newSettings.customSubjects || []), classCustomSubjects: patch.classCustomSubjects || newSettings.classCustomSubjects || {} };
     await school.save();
     await sequelize.query(`INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","actorRole","module","action","entityType","entityId","before","after","createdAt","updatedAt") VALUES (:schoolCode,:actorUserId,:actorRole,'curriculum','school_settings_updated','School',:entityId,:before,:after,NOW(),NOW())`, {
       replacements: { schoolCode: school.schoolId, actorUserId: req.user.id, actorRole: req.user.role, entityId: String(school.id), before: JSON.stringify({ system: before.system, settings: before.settings }), after: JSON.stringify({ system: school.system, settings: school.settings }) }

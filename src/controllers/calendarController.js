@@ -124,12 +124,15 @@ exports.getCalendarEvents = async (req, res) => {
         return allowedAudiences.has(String(e.audience || e.broadcastTo || 'whole_school').toLowerCase());
       });
 
-    const alertEvents = (await getAlertsForUser(req.user, {
+    // v115: Calendar is a persistent event store. Events should not disappear just because their date passed.
+    // Alert-derived calendar cards are only included when explicitly requested; otherwise /api/calendar returns saved SchoolCalendar rows only.
+    const includeAlertEvents = req.query.includeAlerts === 'true' || req.query.upcomingOnly === 'true';
+    const alertEvents = includeAlertEvents ? (await getAlertsForUser(req.user, {
       studentId: req.query.studentId || req.query.childId || null,
       limit: 200,
       calendarOnly: req.query.upcomingOnly === 'true' ? false : true,
       upcomingOnly: req.query.upcomingOnly === 'true'
-    })).map(alertToCalendarEvent);
+    })).map(alertToCalendarEvent) : [];
 
     const out = [...calendarEvents, ...alertEvents].sort((a, b) => new Date(a.startDate || a.date || 0) - new Date(b.startDate || b.date || 0));
     res.json({ success: true, data: out, events: out });

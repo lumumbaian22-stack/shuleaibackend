@@ -27,15 +27,17 @@ async function linkParentToStudentSafely(parentId, studentId) {
 }
 
 async function parentHasStudent(parentId, studentId, parentUserId = null, studentUserId = null) {
+  const parentIds = [parentId, parentUserId].filter(v => Number(v) > 0).map(Number);
+  const studentIds = [studentId, studentUserId].filter(v => Number(v) > 0).map(Number);
   const rows = await sequelize.query(
     `SELECT 1
        FROM "StudentParents" sp
        LEFT JOIN "Parents" p ON p."id" = sp."parentId"
        LEFT JOIN "Students" s ON (s."id" = sp."studentId" OR s."userId" = sp."studentId")
-      WHERE (sp."parentId" = :parentId OR (:parentUserId::integer IS NOT NULL AND (sp."parentId" = :parentUserId OR p."userId" = :parentUserId)))
-        AND (sp."studentId" = :studentId OR (:studentUserId::integer IS NOT NULL AND (sp."studentId" = :studentUserId OR s."userId" = :studentUserId)))
+      WHERE (sp."parentId" IN (:parentIds) OR p."userId" IN (:parentIds))
+        AND (sp."studentId" IN (:studentIds) OR s."userId" IN (:studentIds))
       LIMIT 1`,
-    { replacements: { parentId, studentId, parentUserId, studentUserId }, type: sequelize.QueryTypes.SELECT }
+    { replacements: { parentIds: parentIds.length ? parentIds : [0], studentIds: studentIds.length ? studentIds : [0] }, type: sequelize.QueryTypes.SELECT }
   );
   return rows.length > 0;
 }

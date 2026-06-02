@@ -52,12 +52,12 @@ async function parentCanViewStudent(userId, studentId, schoolCode) {
   const rows = await sequelize.query(
     `SELECT 1
        FROM "StudentParents" sp
-       JOIN "Parents" p ON p."id" = sp."parentId"
-       JOIN "Students" s ON s."id" = sp."studentId"
-       JOIN "Users" su ON su."id" = s."userId"
-      WHERE p."userId" = :userId
-        AND sp."studentId" = :studentId
-        AND su."schoolCode" = :schoolCode
+       LEFT JOIN "Parents" p ON (p."id" = sp."parentId" OR p."userId" = sp."parentId")
+       LEFT JOIN "Students" s ON (s."id" = sp."studentId" OR s."userId" = sp."studentId")
+       LEFT JOIN "Users" su ON su."id" = s."userId"
+      WHERE (p."userId" = :userId OR sp."parentId" = :userId)
+        AND (s."id" = :studentId OR s."userId" = :studentId OR sp."studentId" = :studentId)
+        AND (:schoolCode IS NULL OR su."schoolCode" = :schoolCode)
       LIMIT 1`,
     { replacements: { userId, studentId, schoolCode }, type: sequelize.QueryTypes.SELECT }
   ).catch(() => []);
