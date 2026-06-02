@@ -77,10 +77,11 @@ function buildConversationKey({ type, schoolCode, parentUserId, studentId, class
 
 exports.sendMessage = async (req, res) => {
   try {
-    const { studentId, message, recipientType } = req.body || {};
+    const { studentId, message, recipientType, attachment } = req.body || {};
     const cleanMessage = String(message || '').trim();
+    const attachmentMeta = attachment && typeof attachment === 'object' ? attachment : null;
     if (!studentId) return res.status(400).json({ success: false, message: 'Student is required' });
-    if (!cleanMessage) return res.status(400).json({ success: false, message: 'Message is required' });
+    if (!cleanMessage && !attachmentMeta) return res.status(400).json({ success: false, message: 'Message or attachment is required' });
 
     const parent = await getParentProfile(req.user.id);
     if (!parent) return res.status(404).json({ success: false, message: 'Parent not found' });
@@ -120,7 +121,7 @@ exports.sendMessage = async (req, res) => {
     const newMessage = await Message.create({
       senderId: req.user.id,
       receiverId: recipientId,
-      content: cleanMessage,
+      content: cleanMessage || (attachmentMeta?.originalName || attachmentMeta?.filename || 'Attachment'),
       metadata: {
         schoolCode: req.user.schoolCode,
         conversationType,
@@ -135,7 +136,8 @@ exports.sendMessage = async (req, res) => {
         classTeacherUserId: conversationType === 'parent_class_teacher' ? recipientId : null,
         adminUserId: conversationType === 'parent_admin' ? recipientId : null,
         recipientType,
-        actualRecipientType: recipientRole
+        actualRecipientType: recipientRole,
+        attachment: attachmentMeta
       }
     });
 
@@ -145,12 +147,12 @@ exports.sendMessage = async (req, res) => {
       type: 'message',
       severity: 'info',
       title: `Message from parent of ${student.User?.name || 'student'}`,
-      message: cleanMessage.substring(0, 100) + (cleanMessage.length > 100 ? '...' : ''),
+      message: (cleanMessage || attachmentMeta?.originalName || attachmentMeta?.filename || 'Attachment').substring(0, 100) + ((cleanMessage || '').length > 100 ? '...' : ''),
       data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [recipientId], conversationType, conversationKey, studentId: student.id, classId, messageId: newMessage.id }
     });
 
     if (global.io) {
-      global.io.to(`user-${recipientId}`).emit('new-parent-message', { messageId: newMessage.id, from: req.user.id, fromName: req.user.name, fromRole: 'parent', studentName: student.User?.name, studentGrade: student.grade, content: cleanMessage, conversationType, conversationKey, timestamp: new Date() });
+      global.io.to(`user-${recipientId}`).emit('new-parent-message', { messageId: newMessage.id, from: req.user.id, fromName: req.user.name, fromRole: 'parent', studentName: student.User?.name, studentGrade: student.grade, content: cleanMessage || (attachmentMeta?.originalName || attachmentMeta?.filename || 'Attachment'), attachment: attachmentMeta, conversationType, conversationKey, timestamp: new Date() });
     }
 
     res.status(201).json({ success: true, message: 'Message sent successfully', data: { id: newMessage.id, conversationKey, recipient: recipientName, recipientType: recipientRole, requestedRecipientType: recipientType, recipientId, sentAt: newMessage.createdAt } });
@@ -218,7 +220,7 @@ exports.replyToParent = async (req, res) => {
     const reply = await Message.create({
       senderId: req.user.id,
       receiverId: parentId,
-      content: cleanMessage,
+      content: cleanMessage || (attachmentMeta?.originalName || attachmentMeta?.filename || 'Attachment'),
       metadata: { ...originalMeta, schoolCode: req.user.schoolCode, inReplyTo: originalMessageId || null, senderRole: req.user.role, type: `${req.user.role}_reply` }
     });
     await createAlert({ userId: parentId, role: 'parent', type: 'message', severity: 'info', title: `Reply from ${req.user.name}`, message: cleanMessage.substring(0, 100), data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: originalMeta.conversationType || 'parent_reply', conversationKey: originalMeta.conversationKey || null, messageId: reply.id } });

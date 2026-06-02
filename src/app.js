@@ -43,6 +43,7 @@ const scaleRoutes = require('./routes/scaleRoutes');
 const jobRoutes = require('./routes/jobRoutes');
 const tutorRoutes = require('./routes/tutorRoutes');
 const reportRoutes = require('./routes/reportRoutes');
+const smsRoutes = require('./routes/smsRoutes');
 const compatibilityRoutes = require('./routes/compatibilityRoutes');
 const feeStructureRoutes = require('./routes/feeStructureRoutes');
 const ownerHardeningRoutes = require('./routes/ownerHardeningRoutes');
@@ -262,6 +263,10 @@ async function ensureCriticalDashboardColumns(req, res, next) {
     await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "curriculumLevel" VARCHAR(255)').catch(() => null);
     await sequelize.query(`CREATE TABLE IF NOT EXISTS "SchoolPaymentRequests" ("id" SERIAL PRIMARY KEY, "schoolCode" VARCHAR(255) NOT NULL, "submittedBy" INTEGER, "amount" INTEGER DEFAULT 0, "currency" VARCHAR(255) DEFAULT 'KES', "method" VARCHAR(255) DEFAULT 'mpesa', "reference" VARCHAR(255), "paidAt" TIMESTAMP WITH TIME ZONE, "notes" TEXT, "proofUrl" TEXT, "requestedPlan" VARCHAR(255) DEFAULT 'growth', "status" VARCHAR(255) DEFAULT 'pending', "reviewedBy" INTEGER, "reviewedAt" TIMESTAMP WITH TIME ZONE, "reviewNotes" TEXT, "metadata" JSONB DEFAULT '{}'::jsonb, "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW())`).catch(() => null);
     await sequelize.query(`CREATE TABLE IF NOT EXISTS "StudentSubjectSelections" ("id" SERIAL PRIMARY KEY, "schoolCode" VARCHAR(255) NOT NULL, "studentId" INTEGER NOT NULL, "classId" INTEGER, "subjectId" VARCHAR(255), "subjectName" VARCHAR(255) NOT NULL, "status" VARCHAR(255) DEFAULT 'taking', "pathway" VARCHAR(255), "track" VARCHAR(255), "isCompulsory" BOOLEAN DEFAULT FALSE, "isElective" BOOLEAN DEFAULT TRUE, "requestedBy" INTEGER, "approvedBy" INTEGER, "approvedAt" TIMESTAMP WITH TIME ZONE, "metadata" JSONB DEFAULT '{}'::jsonb, "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW())`).catch(() => null);
+    await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+    await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "createdByUserId" INTEGER').catch(() => null);
+    await sequelize.query(`ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "metadata" JSONB DEFAULT '{}'::jsonb`).catch(() => null);
+    await sequelize.query('CREATE INDEX IF NOT EXISTS "idx_school_calendars_owner" ON "SchoolCalendars" ("schoolId", "createdByUserId")').catch(() => null);
     await sequelize.query(`CREATE TABLE IF NOT EXISTS "PlatformAuditEvents" ("id" SERIAL PRIMARY KEY, "schoolCode" VARCHAR(255), "actorUserId" INTEGER, "actorRole" VARCHAR(255), "module" VARCHAR(255), "action" VARCHAR(255), "entityType" VARCHAR(255), "entityId" VARCHAR(255), "before" JSONB DEFAULT '{}'::jsonb, "after" JSONB DEFAULT '{}'::jsonb, "metadata" JSONB DEFAULT '{}'::jsonb, "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW())`).catch(() => null);
     await sequelize.query(`ALTER TABLE IF EXISTS "TutorMessages" ADD COLUMN IF NOT EXISTS "content" TEXT NOT NULL DEFAULT ''`).catch(() => null);
     await sequelize.query(`UPDATE "TutorMessages" SET "content" = COALESCE(NULLIF("content", ''), "message", 'Tutor message') WHERE "content" IS NULL OR "content" = ''`).catch(() => null);
@@ -304,6 +309,7 @@ app.use('/api/home-tasks', homeTaskRoutes);
 app.use('/api/consent', consentRoutes);   // <-- ADDED
 app.use('/api/search', searchRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/sms', smsRoutes);
 // V27 compatibility routes fix old frontend/test endpoints and role-safe aliases.
 app.use('/api', compatibilityRoutes);
 app.use('/api/calendar', calendarRoutes);

@@ -1510,8 +1510,10 @@ exports.reviewSchoolPaymentRequest = async (req, res) => {
       school.manualPaymentConfirmedAt = new Date();
       school.subscriptionPlan = req.body.subscriptionPlan || request.requestedPlan || school.subscriptionPlan || 'growth';
       school.subscriptionStatus = 'active';
-      school.subscriptionStartedAt = school.subscriptionStartedAt || new Date();
-      if (req.body.subscriptionEndsAt) school.subscriptionEndsAt = req.body.subscriptionEndsAt;
+      const startedAt = new Date();
+      const endsAt = req.body.subscriptionEndsAt ? new Date(req.body.subscriptionEndsAt) : new Date(startedAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+      school.subscriptionStartedAt = startedAt;
+      school.subscriptionEndsAt = endsAt;
     }
     const access = await v102RecalculateSchoolAccess(school);
     await v102Audit({ schoolCode:school.schoolId, actorUserId:req.user.id, actorRole:req.user.role, module:'billing', action:`payment_request_${status}`, entityType:'SchoolPaymentRequest', entityId:requestId, before:request, after:{ status, access } });
@@ -1530,7 +1532,11 @@ exports.getSchools = async (req, res) => {
     const data = await Promise.all(schools.map(async s => {
       const access = await v102RecalculateSchoolAccess(s).catch(() => computeSchoolAccess(s));
       const json = s.toJSON();
-      return { ...json, access };
+      const settings = json.settings || {};
+      const originalSignupName = settings.originalSignupName || settings.displayName || json.name;
+      const genericName = /^shule\s*ai$/i.test(String(json.name || '').trim()) || /^shuleai$/i.test(String(json.name || '').trim());
+      const displayName = genericName && originalSignupName ? originalSignupName : (json.name || originalSignupName || 'Unnamed School');
+      return { ...json, name: displayName, originalName: json.name, originalSignupName, displayName, access };
     }));
     res.json({ success:true, data });
   } catch(error) {

@@ -13,12 +13,16 @@ module.exports = (sequelize, DataTypes) => {
     time: { type: DataTypes.STRING, allowNull: true },
     location: { type: DataTypes.STRING, allowNull: true },
     audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'whole_school' },
+    classId: { type: DataTypes.INTEGER, allowNull: true },
+    createdByUserId: { type: DataTypes.INTEGER, allowNull: true },
+    metadata: { type: DataTypes.JSONB, defaultValue: {} },
     isPublic: { type: DataTypes.BOOLEAN, defaultValue: true }
   }, {
     timestamps: true,
     indexes: [
       { fields: ['schoolId', 'startDate'] },
-      { fields: ['schoolId', 'year', 'term'] }
+      { fields: ['schoolId', 'year', 'term'] },
+      { fields: ['schoolId', 'createdByUserId'] }
     ]
   });
   return SchoolCalendar;

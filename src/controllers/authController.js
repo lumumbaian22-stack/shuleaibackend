@@ -104,6 +104,8 @@ const authController = {
           schoolLevel: schoolLevel || 'secondary',
           curriculum: curriculum || 'cbc',
           schoolType: schoolType || 'day',
+          originalSignupName: schoolName,
+          displayName: schoolName,
           boarding: { type: schoolType || 'day', hasBoarding: ['boarding','day_boarding'].includes(schoolType || 'day') },
           dutyManagement: {
             enabled: true,

@@ -4,6 +4,7 @@ const { protect, authorize } = require('../middleware/auth');
 const parentController = require('../controllers/parentController');
 const parentMessageController = require('../controllers/parentMessageController');
 const analyticsController = require('../controllers/analyticsController'); // Add import
+const subjectSelectionController = require('../controllers/subjectSelectionController');
 
 router.use(protect, authorize('parent'));
 
@@ -19,6 +20,8 @@ router.get('/messages/:otherUserId', parentMessageController.getMessages);
 router.post('/message', parentMessageController.sendMessage);
 router.get('/child/:studentId/attendance/today', parentController.getChildTodayAttendance);
 router.get('/child/:studentId/analytics', parentController.getChildAnalytics);
+router.get('/child/:studentId/subject-selection', subjectSelectionController.getParentChildSelection);
+router.put('/child/:studentId/subject-selection', subjectSelectionController.saveParentChildSelection);
 
 // Payment/Subscription routes
 router.get('/plans', parentController.getSubscriptionPlans);

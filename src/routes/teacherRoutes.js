@@ -6,6 +6,7 @@ const teacherMessageController = require('../controllers/teacherMessageControlle
 const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
 const analyticsController = require('../controllers/analyticsController'); // Add import
+const subjectSelectionController = require('../controllers/subjectSelectionController');
 
 router.use(protect);
 router.use(authorize('teacher'));
@@ -42,6 +43,8 @@ router.get('/classes/:classId/students', teacherController.getClassStudents);
 router.get('/gradebook', teacherController.getClassGradebook);
 router.get('/reports/snapshots', teacherController.listClassReportSnapshots);
 router.get('/performance', teacherController.getPerformanceData);
+router.get('/subject-selection-requests', subjectSelectionController.listTeacherSubjectRequests);
+router.post('/subject-selection-requests/:selectionId/review', subjectSelectionController.reviewTeacherSubjectRequest);
 
 // Messaging (Parent)
 router.get('/parent-conversations', chatController.getParentConversations);

@@ -9,19 +9,30 @@ function getSchoolId(req) {
 function normalizeEvent(body, user) {
   const startDate = body.startDate || body.date;
   const endDate = body.endDate || body.date || startDate;
+  const rawAudience = body.audience || body.broadcastTo || 'whole_school';
+  const rawType = body.eventType || body.type || 'other';
+  const ownEvent = body.isPublic === false || body.personal === true || body.scope === 'personal' || rawType === 'own_event' || rawAudience === 'admin_private';
+  const metadata = {
+    ...(body.metadata || {}),
+    visibility: ownEvent ? 'private' : 'school',
+    ownerUserId: user.id || null
+  };
   return {
     schoolId: user.schoolCode || body.schoolId || 'default',
-    eventType: body.eventType || body.type || 'other',
+    eventType: rawType,
     eventName: body.eventName || body.title || 'Untitled Event',
     description: body.description || '',
     startDate,
     endDate,
     time: body.time || null,
     location: body.location || null,
-    audience: body.audience || 'whole_school',
+    audience: ownEvent ? 'admin' : rawAudience,
     term: body.term || null,
     year: body.year || (startDate ? new Date(startDate).getFullYear() : new Date().getFullYear()),
-    isPublic: body.isPublic !== false
+    classId: body.classId || null,
+    createdByUserId: user.id || null,
+    metadata,
+    isPublic: !ownEvent
   };
 }
 
@@ -92,7 +103,7 @@ exports.getCalendarEvents = async (req, res) => {
   try {
     const schoolId = getSchoolId(req);
     const role = String(req.user?.role || '').toLowerCase().replace('-', '_');
-    const where = { schoolId, isPublic: true };
+    const where = { schoolId, [Op.or]: [{ isPublic: true }, { isPublic: false, createdByUserId: req.user?.id || null }] };
     if (req.query.year) where.year = Number(req.query.year);
     if (req.query.term) where.term = req.query.term;
 
@@ -108,7 +119,10 @@ exports.getCalendarEvents = async (req, res) => {
     if (role === 'student') allowedAudiences.add('students');
     const calendarEvents = events
       .map(frontendEvent)
-      .filter(e => allowedAudiences.has(String(e.audience || e.broadcastTo || 'whole_school').toLowerCase()));
+      .filter(e => {
+        if (e.isPublic === false) return Number(e.createdByUserId || e.metadata?.ownerUserId || 0) === Number(req.user?.id || -1);
+        return allowedAudiences.has(String(e.audience || e.broadcastTo || 'whole_school').toLowerCase());
+      });
 
     const alertEvents = (await getAlertsForUser(req.user, {
       studentId: req.query.studentId || req.query.childId || null,
@@ -132,13 +146,18 @@ exports.createEvent = async (req, res) => {
 
     const event = await SchoolCalendar.create(payload);
     const out = frontendEvent(event);
-    const alertCount = await createCalendarBroadcastAlerts({ event: out, schoolId: payload.schoolId, actor: req.user || {} });
+    const alertCount = payload.isPublic === false ? 0 : await createCalendarBroadcastAlerts({ event: out, schoolId: payload.schoolId, actor: req.user || {} });
     if (global.io && payload.schoolId) {
-      global.io.to(`school-${payload.schoolId}`).emit('school-calendar:event-created', out);
-      global.io.to(`school-${payload.schoolId}`).emit('school-calendar:changed', { action: 'created', event: out });
-      global.io.to(`school-${payload.schoolId}`).emit('alerts:updated', { type: 'calendar:event-created', schoolCode: payload.schoolId, event: out });
+      if (payload.isPublic === false) {
+        global.io.to(`user-${req.user.id}`).emit('school-calendar:event-created', out);
+        global.io.to(`user-${req.user.id}`).emit('school-calendar:changed', { action: 'created', event: out });
+      } else {
+        global.io.to(`school-${payload.schoolId}`).emit('school-calendar:event-created', out);
+        global.io.to(`school-${payload.schoolId}`).emit('school-calendar:changed', { action: 'created', event: out });
+        global.io.to(`school-${payload.schoolId}`).emit('alerts:updated', { type: 'calendar:event-created', schoolCode: payload.schoolId, event: out });
+      }
     }
-    res.status(201).json({ success: true, data: out, events: [out], alertCount, message: `Academic calendar event saved and broadcasted to ${alertCount || 'the selected audience'} user(s)` });
+    res.status(201).json({ success: true, data: out, events: [out], alertCount, message: payload.isPublic === false ? 'Personal admin event saved privately' : `Academic calendar event saved and broadcasted to ${alertCount || 'the selected audience'} user(s)` });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
