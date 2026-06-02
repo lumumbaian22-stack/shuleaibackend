@@ -17,7 +17,7 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: 'admin'
     },
     type: {
-      type: DataTypes.ENUM('academic', 'attendance', 'fee', 'system', 'improvement', 'duty', 'approval', 'message', 'career'),
+      type: DataTypes.ENUM('academic', 'attendance', 'fee', 'system', 'improvement', 'duty', 'approval'),
       allowNull: false,
       defaultValue: 'system'
     },

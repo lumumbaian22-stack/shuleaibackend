@@ -33,16 +33,18 @@ module.exports = {
     await addColumnIfMissing(queryInterface, 'Classes', 'levelCode', { type: Sequelize.STRING });
     await addColumnIfMissing(queryInterface, 'Classes', 'levelLabel', { type: Sequelize.STRING });
     await addColumnIfMissing(queryInterface, 'Classes', 'curriculumLevel', { type: Sequelize.STRING });
-
     await addColumnIfMissing(queryInterface, 'TeacherSubjectAssignments', 'schoolSubjectId', { type: Sequelize.STRING });
     await addColumnIfMissing(queryInterface, 'TeacherSubjectAssignments', 'curriculum', { type: Sequelize.STRING });
     await addColumnIfMissing(queryInterface, 'TeacherSubjectAssignments', 'levelCode', { type: Sequelize.STRING });
 
+    await queryInterface.sequelize.query('ALTER TABLE IF EXISTS "Users" ALTER COLUMN "profileImage" TYPE TEXT').catch(() => null);
+    await queryInterface.sequelize.query('ALTER TABLE IF EXISTS "Teachers" ALTER COLUMN "signature" TYPE TEXT').catch(() => null);
+
     await queryInterface.createTable('SchoolPaymentRequests', {
       id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true },
       schoolCode: { type: Sequelize.STRING, allowNull: false },
-      submittedBy: { type: Sequelize.INTEGER, allowNull: true },
-      amount: { type: Sequelize.INTEGER, allowNull: false, defaultValue: 0 },
+      submittedBy: { type: Sequelize.INTEGER },
+      amount: { type: Sequelize.INTEGER, defaultValue: 0 },
       currency: { type: Sequelize.STRING, defaultValue: 'KES' },
       method: { type: Sequelize.STRING, defaultValue: 'mpesa' },
       reference: { type: Sequelize.STRING },
@@ -58,9 +60,8 @@ module.exports = {
       metadata: { type: Sequelize.JSONB, defaultValue: {} },
       createdAt: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') },
       updatedAt: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') }
-    }).catch(e => { if (!/already exists/i.test(e.message)) throw e; });
+    }).catch(e => { if (!/already exists/i.test(String(e.message))) throw e; });
     await addColumnIfMissing(queryInterface, 'SchoolPaymentRequests', 'billingCycle', { type: Sequelize.STRING, defaultValue: 'monthly' });
-    await queryInterface.addIndex('SchoolPaymentRequests', ['schoolCode', 'status'], { name: 'school_payment_requests_school_status_idx' }).catch(() => null);
 
     await queryInterface.createTable('StudentSubjectSelections', {
       id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true },
@@ -80,8 +81,7 @@ module.exports = {
       metadata: { type: Sequelize.JSONB, defaultValue: {} },
       createdAt: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') },
       updatedAt: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') }
-    }).catch(e => { if (!/already exists/i.test(e.message)) throw e; });
-    await queryInterface.addIndex('StudentSubjectSelections', ['schoolCode', 'studentId', 'classId'], { name: 'student_subject_selections_scope_idx' }).catch(() => null);
+    }).catch(e => { if (!/already exists/i.test(String(e.message))) throw e; });
 
     await queryInterface.createTable('PlatformAuditEvents', {
       id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true },
@@ -97,10 +97,7 @@ module.exports = {
       metadata: { type: Sequelize.JSONB, defaultValue: {} },
       createdAt: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') },
       updatedAt: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') }
-    }).catch(e => { if (!/already exists/i.test(e.message)) throw e; });
+    }).catch(e => { if (!/already exists/i.test(String(e.message))) throw e; });
   },
-
-  async down() {
-    // Non-destructive release: keep data/tables on rollback to protect pilot schools.
-  }
+  async down() {}
 };

@@ -55,7 +55,7 @@ async function enrichLinkedChildren(children) {
       classId: raw.classId || null,
       schoolCode,
       schoolName: school?.name || raw.User?.School?.name || schoolCode || 'School',
-      schoolLogo: school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null,
+      schoolLogo: school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.branding?.logoDataUrl || school?.settings?.logo || null,
       curriculum: raw.curriculum || school?.system || 'cbc'
     };
   });

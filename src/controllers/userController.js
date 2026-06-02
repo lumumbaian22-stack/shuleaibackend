@@ -5,7 +5,6 @@ const { createAlert } = require('../services/notificationService');
 const path = require('path');
 const fs = require('fs');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
-const { getAlertsForUser } = require('../services/alertReceiverEngine');
 
 // @desc    Get user statistics for profile
 exports.getUserStats = async (req, res) => {
@@ -202,19 +201,12 @@ exports.uploadProfilePicture = async (req, res) => {
     else return res.status(400).json({ success: false, message: 'Unsupported upload object from server middleware' });
 
     const relativeUrl = `/uploads/profiles/${fileName}`;
-    const absoluteUrl = `${req.protocol}://${req.get('host')}${relativeUrl}`;
-    let durableProfileImageDataUrl = null;
-    try {
-      const imageBuffer = await fs.promises.readFile(uploadPath);
-      const mime = file.mimetype || file.type || 'image/jpeg';
-      if (imageBuffer.length <= 1024 * 1024) durableProfileImageDataUrl = `data:${mime};base64,${imageBuffer.toString('base64')}`;
-    } catch (_) {}
     const preferences = { ...(req.user.preferences || {}) };
-    if (durableProfileImageDataUrl) preferences.profileImageDataUrl = durableProfileImageDataUrl;
+    delete preferences.profileImageDataUrl;
 
-    await req.user.update({ profileImage: durableProfileImageDataUrl || absoluteUrl, preferences });
+    await req.user.update({ profileImage: relativeUrl, preferences });
 
-    res.json({ success: true, data: { profileImage: durableProfileImageDataUrl || absoluteUrl, profileImagePath: relativeUrl, durable: !!durableProfileImageDataUrl } });
+    res.json({ success: true, data: { profileImage: relativeUrl, profileImagePath: relativeUrl, durable: true } });
   } catch (error) {
     console.error('Profile upload error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -224,9 +216,10 @@ exports.uploadProfilePicture = async (req, res) => {
 // @desc    Get user alerts
 exports.getAlerts = async (req, res) => {
   try {
-    const alerts = await getAlertsForUser(req.user, {
-      studentId: req.query.studentId || req.query.childId || null,
-      limit: Number(req.query.limit || 50)
+    const alerts = await Alert.findAll({
+      where: { userId: req.user.id },
+      order: [['createdAt', 'DESC']],
+      limit: 50
     });
     res.json({ success: true, data: alerts });
   } catch (error) {

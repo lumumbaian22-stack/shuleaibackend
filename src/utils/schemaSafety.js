@@ -248,12 +248,13 @@ async function ensureSchoolCalendarTable() {
   await addIndexIfMissing('idx_school_calendar_school_date', 'CREATE INDEX idx_school_calendar_school_date ON "SchoolCalendars" ("schoolId", "startDate")', { table: 'SchoolCalendars', columns: ['schoolId', 'startDate'] });
 }
 
-async function ensureRuntimeSchema() {
-  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') {
+async function ensureRuntimeSchema(options = {}) {
+  const force = !!options.force;
+  if (!force && process.env.NODE_ENV === 'production' && process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') {
     console.log('[schemaSafety] Production runtime schema mutation disabled; run migrations instead.');
     return;
   }
-  if (process.env.DISABLE_SCHEMA_SAFETY === 'true') {
+  if (!force && process.env.DISABLE_SCHEMA_SAFETY === 'true') {
     console.log('[schemaSafety] Disabled by DISABLE_SCHEMA_SAFETY=true');
     return;
   }
@@ -288,6 +289,102 @@ async function ensureRuntimeSchema() {
   await addColumnIfMissing('Students', 'parentPhone', 'VARCHAR(255)');
   await addColumnIfMissing('Students', 'parentRelationship', "VARCHAR(255) DEFAULT 'guardian'");
   await addColumnIfMissing('Students', 'isPrefect', 'BOOLEAN DEFAULT false');
+
+  // Final locked access/curriculum/schema fields. These are additive repairs only.
+  await addColumnIfMissing('Schools', 'pilotFullAccessEnabled', 'BOOLEAN DEFAULT false');
+  await addColumnIfMissing('Schools', 'pilotStartedAt', 'TIMESTAMP WITH TIME ZONE');
+  await addColumnIfMissing('Schools', 'pilotEndsAt', 'TIMESTAMP WITH TIME ZONE');
+  await addColumnIfMissing('Schools', 'pilotEnabledBy', 'INTEGER');
+  await addColumnIfMissing('Schools', 'trialAccessEnabled', 'BOOLEAN DEFAULT false');
+  await addColumnIfMissing('Schools', 'trialStartedAt', 'TIMESTAMP WITH TIME ZONE');
+  await addColumnIfMissing('Schools', 'trialEndsAt', 'TIMESTAMP WITH TIME ZONE');
+  await addColumnIfMissing('Schools', 'manualPaymentConfirmed', 'BOOLEAN DEFAULT false');
+  await addColumnIfMissing('Schools', 'manualPaymentAmount', 'INTEGER');
+  await addColumnIfMissing('Schools', 'manualPaymentReference', 'VARCHAR(255)');
+  await addColumnIfMissing('Schools', 'manualPaymentConfirmedBy', 'INTEGER');
+  await addColumnIfMissing('Schools', 'manualPaymentConfirmedAt', 'TIMESTAMP WITH TIME ZONE');
+  await addColumnIfMissing('Schools', 'subscriptionPlan', "VARCHAR(255) DEFAULT 'free'");
+  await addColumnIfMissing('Schools', 'subscriptionStatus', "VARCHAR(255) DEFAULT 'inactive'");
+  await addColumnIfMissing('Schools', 'subscriptionStartedAt', 'TIMESTAMP WITH TIME ZONE');
+  await addColumnIfMissing('Schools', 'subscriptionEndsAt', 'TIMESTAMP WITH TIME ZONE');
+  await addColumnIfMissing('Schools', 'accessMode', "VARCHAR(255) DEFAULT 'default'");
+  await addColumnIfMissing('Schools', 'accessStatus', "VARCHAR(255) DEFAULT 'limited'");
+  await addColumnIfMissing('Schools', 'schoolStructure', "VARCHAR(255) DEFAULT 'mixed'");
+  await addColumnIfMissing('Schools', 'enabledLevels', "JSONB DEFAULT '[]'::jsonb");
+  await addColumnIfMissing('Schools', 'curriculumVersion', 'VARCHAR(255)');
+  await addColumnIfMissing('Classes', 'curriculum', 'VARCHAR(255)');
+  await addColumnIfMissing('Classes', 'levelCode', 'VARCHAR(255)');
+  await addColumnIfMissing('Classes', 'levelLabel', 'VARCHAR(255)');
+  await addColumnIfMissing('Classes', 'curriculumLevel', 'VARCHAR(255)');
+  await addColumnIfMissing('TeacherSubjectAssignments', 'schoolSubjectId', 'VARCHAR(255)');
+  await addColumnIfMissing('TeacherSubjectAssignments', 'curriculum', 'VARCHAR(255)');
+  await addColumnIfMissing('TeacherSubjectAssignments', 'levelCode', 'VARCHAR(255)');
+  await sequelize.query('ALTER TABLE IF EXISTS "Users" ALTER COLUMN "profileImage" TYPE TEXT').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Teachers" ALTER COLUMN "signature" TYPE TEXT').catch(() => null);
+
+  await createTableIfMissing('SchoolPaymentRequests', `
+    CREATE TABLE IF NOT EXISTS "SchoolPaymentRequests" (
+      "id" SERIAL PRIMARY KEY,
+      "schoolCode" VARCHAR(255) NOT NULL,
+      "submittedBy" INTEGER,
+      "amount" INTEGER DEFAULT 0,
+      "currency" VARCHAR(255) DEFAULT 'KES',
+      "method" VARCHAR(255) DEFAULT 'mpesa',
+      "reference" VARCHAR(255),
+      "paidAt" TIMESTAMP WITH TIME ZONE,
+      "notes" TEXT,
+      "proofUrl" TEXT,
+      "requestedPlan" VARCHAR(255) DEFAULT 'growth',
+      "billingCycle" VARCHAR(255) DEFAULT 'monthly',
+      "status" VARCHAR(255) DEFAULT 'pending',
+      "reviewedBy" INTEGER,
+      "reviewedAt" TIMESTAMP WITH TIME ZONE,
+      "reviewNotes" TEXT,
+      "metadata" JSONB DEFAULT '{}'::jsonb,
+      "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    )`);
+  await addColumnIfMissing('SchoolPaymentRequests', 'billingCycle', "VARCHAR(255) DEFAULT 'monthly'");
+  await addIndexIfMissing('school_payment_requests_school_status_idx', 'CREATE INDEX school_payment_requests_school_status_idx ON "SchoolPaymentRequests" ("schoolCode", "status")', { table: 'SchoolPaymentRequests', columns: ['schoolCode', 'status'] });
+
+  await createTableIfMissing('StudentSubjectSelections', `
+    CREATE TABLE IF NOT EXISTS "StudentSubjectSelections" (
+      "id" SERIAL PRIMARY KEY,
+      "schoolCode" VARCHAR(255) NOT NULL,
+      "studentId" INTEGER NOT NULL,
+      "classId" INTEGER,
+      "subjectId" VARCHAR(255),
+      "subjectName" VARCHAR(255) NOT NULL,
+      "status" VARCHAR(255) DEFAULT 'taking',
+      "pathway" VARCHAR(255),
+      "track" VARCHAR(255),
+      "isCompulsory" BOOLEAN DEFAULT false,
+      "isElective" BOOLEAN DEFAULT true,
+      "requestedBy" INTEGER,
+      "approvedBy" INTEGER,
+      "approvedAt" TIMESTAMP WITH TIME ZONE,
+      "metadata" JSONB DEFAULT '{}'::jsonb,
+      "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    )`);
+  await addIndexIfMissing('student_subject_selections_scope_idx', 'CREATE INDEX student_subject_selections_scope_idx ON "StudentSubjectSelections" ("schoolCode", "studentId", "classId")', { table: 'StudentSubjectSelections', columns: ['schoolCode', 'studentId', 'classId'] });
+
+  await createTableIfMissing('PlatformAuditEvents', `
+    CREATE TABLE IF NOT EXISTS "PlatformAuditEvents" (
+      "id" SERIAL PRIMARY KEY,
+      "schoolCode" VARCHAR(255),
+      "actorUserId" INTEGER,
+      "actorRole" VARCHAR(255),
+      "module" VARCHAR(255),
+      "action" VARCHAR(255),
+      "entityType" VARCHAR(255),
+      "entityId" VARCHAR(255),
+      "before" JSONB DEFAULT '{}'::jsonb,
+      "after" JSONB DEFAULT '{}'::jsonb,
+      "metadata" JSONB DEFAULT '{}'::jsonb,
+      "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    )`);
 
   await ensureSchoolCalendarTable();
   await ensureTutorTables();

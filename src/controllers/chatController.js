@@ -328,14 +328,23 @@ exports.getPrivateMessages = async (req, res) => {
 // @access  Private/Teacher
 exports.getParentConversations = async (req, res) => {
   try {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher) return res.json({ success: true, data: [] });
-
+    const parents = await Parent.findAll({
+      include: [{ model: User, where: { schoolCode: req.user.schoolCode, role: 'parent', isActive: true }, attributes: ['id', 'name', 'role'] }]
+    });
+    const parentUserIds = parents.map(p => p.userId);
+    // Also fetch student for each parent
+    const studentsByParent = {};
+    for (const parent of parents) {
+      const students = await parent.getStudents({ include: [{ model: User, attributes: ['name'] }] });
+      if (students.length) {
+        studentsByParent[parent.userId] = students[0].User.name;
+      }
+    }
     const messages = await Message.findAll({
       where: {
         [Op.or]: [
-          { receiverId: req.user.id },
-          { senderId: req.user.id }
+          { senderId: req.user.id, receiverId: { [Op.in]: parentUserIds } },
+          { senderId: { [Op.in]: parentUserIds }, receiverId: req.user.id }
         ]
       },
       include: [
@@ -344,38 +353,25 @@ exports.getParentConversations = async (req, res) => {
       ],
       order: [['createdAt', 'DESC']]
     });
-
     const conversations = {};
-    for (const msg of messages) {
-      const md = msg.metadata || {};
-      if (md.schoolCode && String(md.schoolCode) !== String(req.user.schoolCode)) continue;
-      if (md.conversationType !== 'parent_class_teacher') continue;
-      if (Number(md.classTeacherUserId) !== Number(req.user.id)) continue;
-
-      const parentUserId = Number(md.parentUserId || (msg.senderId === req.user.id ? msg.receiverId : msg.senderId));
+    messages.forEach(msg => {
+      const parentUserId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
       const parentUser = msg.senderId === req.user.id ? msg.Receiver : msg.Sender;
-      const key = md.conversationKey || `${req.user.schoolCode}:parent_class_teacher:${parentUserId}:${md.studentId || ''}:${md.classId || ''}:${req.user.id}`;
-      if (!conversations[key]) {
-        conversations[key] = {
-          conversationKey: key,
+      if (!conversations[parentUserId]) {
+        conversations[parentUserId] = {
           userId: parentUserId,
-          userName: parentUser?.name || md.parentName || 'Parent',
+          userName: parentUser?.name || 'Parent',
           userRole: 'parent',
-          conversationType: 'parent_class_teacher',
-          studentId: md.studentId || null,
-          studentName: md.studentName || null,
-          studentGrade: md.studentGrade || null,
-          classId: md.classId || null,
-          className: md.className || null,
           lastMessage: msg.content,
           lastMessageTime: msg.createdAt,
-          unreadCount: 0
+          unreadCount: msg.receiverId === req.user.id && !msg.isRead ? 1 : 0,
+          studentName: studentsByParent[parentUserId] || null
         };
+      } else if (msg.receiverId === req.user.id && !msg.isRead) {
+        conversations[parentUserId].unreadCount++;
       }
-      if (Number(msg.receiverId) === Number(req.user.id) && !msg.isRead) conversations[key].unreadCount += 1;
-    }
-
-    res.json({ success: true, data: Object.values(conversations).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime)) });
+    });
+    res.json({ success: true, data: Object.values(conversations) });
   } catch (error) {
     console.error('Get parent conversations error:', error);
     res.status(500).json({ success: false, message: error.message });

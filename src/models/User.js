@@ -27,7 +27,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true
     },
-    profileImage: DataTypes.STRING,
+    profileImage: DataTypes.TEXT,
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true
@@ -80,7 +80,7 @@ module.exports = (sequelize, DataTypes) => {
       email: this.email,
       role: this.role,
       phone: this.phone,
-      profileImage: this.preferences?.profileImageDataUrl || this.profileImage,
+      profileImage: this.profileImage,
       schoolCode: this.schoolCode,
       isActive: this.isActive,
       firstLogin: this.firstLogin,

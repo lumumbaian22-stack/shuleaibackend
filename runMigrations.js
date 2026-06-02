@@ -119,7 +119,24 @@ async function runMigrations() {
         }
       },
       context: safeQueryInterface,
-      storage: new SequelizeStorage({ sequelize }),
+      storage: (() => {
+        const storage = new SequelizeStorage({ sequelize });
+        const originalLogMigration = storage.logMigration.bind(storage);
+        storage.logMigration = async (params) => {
+          try {
+            return await originalLogMigration(params);
+          } catch (err) {
+            const code = err?.parent?.code || err?.original?.code;
+            const msg = String(err?.parent?.message || err?.original?.message || err?.message || '');
+            if (code === '23505' || msg.includes('duplicate key value') || msg.includes('must be unique')) {
+              console.log(`[migration-safe] ${params?.name || 'migration'} is already logged in SequelizeMeta; continuing`);
+              return;
+            }
+            throw err;
+          }
+        };
+        return storage;
+      })(),
       logger: console,
     });
 

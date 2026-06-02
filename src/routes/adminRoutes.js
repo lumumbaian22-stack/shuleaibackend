@@ -7,7 +7,6 @@ const dutyController = require('../controllers/dutyController');
 const adminController = require('../controllers/adminController');
 const classController = require('../controllers/classController');
 const analyticsController = require('../controllers/analyticsController'); // Add import
-const parentMessageController = require('../controllers/parentMessageController');
 
 // ============ PUBLIC / SHARED ROUTES (any authenticated user) ============
 router.get('/settings', protect, adminController.getSchoolSettings);
@@ -81,12 +80,6 @@ router.get('/curriculum/classes/:classId/subjects', adminController.getEligibleS
 router.get('/students/:studentId/subject-selection', adminController.getStudentSubjectSelection);
 router.put('/students/:studentId/subject-selection', adminController.saveStudentSubjectSelection);
 router.post('/billing/payment-confirmation', adminController.submitSchoolPaymentConfirmation);
-
-
-// Parent/Admin Messaging
-router.get('/parent-conversations', parentMessageController.getAdminConversations);
-router.get('/messages/:parentId', parentMessageController.getAdminMessages);
-router.post('/reply-parent', parentMessageController.adminReplyToParent);
 
 // Analytics (NEW)
 router.get('/analytics', analyticsController.getAdminAnalytics);

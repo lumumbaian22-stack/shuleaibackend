@@ -1,6 +1,4 @@
 const { SchoolCalendar, User, Alert, Student } = require('../models');
-const { Op } = require('sequelize');
-const { getAlertsForUser, alertToCalendarEvent } = require('../services/alertReceiverEngine');
 
 function getSchoolId(req) {
   return req.user?.schoolCode || req.body?.schoolId || req.query?.schoolId || 'default';
@@ -91,7 +89,6 @@ function frontendEvent(event) {
 exports.getCalendarEvents = async (req, res) => {
   try {
     const schoolId = getSchoolId(req);
-    const role = String(req.user?.role || '').toLowerCase().replace('-', '_');
     const where = { schoolId, isPublic: true };
     if (req.query.year) where.year = Number(req.query.year);
     if (req.query.term) where.term = req.query.term;
@@ -100,24 +97,7 @@ exports.getCalendarEvents = async (req, res) => {
       where,
       order: [['startDate', 'ASC'], ['createdAt', 'ASC']]
     });
-
-    const allowedAudiences = new Set(['whole_school', 'all', role, `${role}s`]);
-    if (role === 'admin') allowedAudiences.add('admins');
-    if (role === 'teacher') allowedAudiences.add('teachers');
-    if (role === 'parent') allowedAudiences.add('parents');
-    if (role === 'student') allowedAudiences.add('students');
-    const calendarEvents = events
-      .map(frontendEvent)
-      .filter(e => allowedAudiences.has(String(e.audience || e.broadcastTo || 'whole_school').toLowerCase()));
-
-    const alertEvents = (await getAlertsForUser(req.user, {
-      studentId: req.query.studentId || req.query.childId || null,
-      limit: 200,
-      calendarOnly: req.query.upcomingOnly === 'true' ? false : true,
-      upcomingOnly: req.query.upcomingOnly === 'true'
-    })).map(alertToCalendarEvent);
-
-    const out = [...calendarEvents, ...alertEvents].sort((a, b) => new Date(a.startDate || a.date || 0) - new Date(b.startDate || b.date || 0));
+    const out = events.map(frontendEvent);
     res.json({ success: true, data: out, events: out });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
