@@ -34,6 +34,120 @@ function paymentAccountReference(student, fee, format='elimuid'){
   if (f.includes('term')) return `${studentElimuId(student)}-${fee?.term || ''}`.slice(0,12);
   return String(studentElimuId(student)).slice(0,12);
 }
+
+async function getPlatformPaymentConfig() {
+  const defaultValue = {
+    paymentMode: 'manual',
+    manualEnabled: true,
+    darajaEnabled: false,
+    accountName: 'Shule AI',
+    currency: 'KES',
+    parentSubscriptionsEnabled: true,
+    schoolSubscriptionsEnabled: true,
+    parentPlans: [{ code:'child_essential', name:'Essential', amount:100, days:30 }],
+    schoolPlans: [{ code:'school_growth', name:'School Growth', amount:100000, days:30 }],
+    darajaCredentials: {}
+  };
+  const [row] = await Settings.findOrCreate({
+    where: { key: 'platform_payment_settings' },
+    defaults: { category:'payments', description:'Shule AI platform payment settings', value: defaultValue }
+  });
+  return { row, value: { ...defaultValue, ...(row.value || {}) } };
+}
+function normalizePlatformPaymentMode(value) {
+  const mode = String(value?.paymentMode || value?.mode || value?.darajaMode || '').toLowerCase();
+  if (mode === 'daraja' || mode === 'stk') return 'daraja';
+  if (mode === 'both' || mode === 'manual+daraja' || mode === 'manual_daraja') return 'both';
+  if (value?.darajaEnabled && value?.manualEnabled) return 'both';
+  if (value?.darajaEnabled) return 'daraja';
+  return 'manual';
+}
+function normalizePlatformDarajaCredentials(value) {
+  const d = value?.darajaCredentials || value?.daraja || {};
+  return {
+    mode: d.environment || d.env || d.mode || value?.darajaMode || process.env.DARAJA_ENV || 'sandbox',
+    consumerKey: d.consumerKey || value?.consumerKey,
+    consumerSecret: d.consumerSecret || value?.consumerSecret,
+    shortcode: d.shortcode || d.businessShortCode || d.businessShortcode || value?.shortcode || value?.paybill,
+    passkey: d.passkey || value?.passkey,
+    callbackUrl: d.callbackUrl || value?.callbackUrl,
+    transactionType: d.transactionType || value?.transactionType || 'CustomerPayBillOnline'
+  };
+}
+async function requirePlatformStkAllowed(kind) {
+  const { value } = await getPlatformPaymentConfig();
+  const mode = normalizePlatformPaymentMode(value);
+  const enabled = kind === 'school' ? value.schoolSubscriptionsEnabled !== false : value.parentSubscriptionsEnabled !== false;
+  if (!enabled) {
+    const label = kind === 'school' ? 'School subscriptions' : 'Parent subscriptions';
+    const err = new Error(`${label} are disabled in Super Admin Platform Payments.`);
+    err.statusCode = 403;
+    throw err;
+  }
+  if (mode === 'manual') {
+    const err = new Error('Platform is currently in Manual Verification mode. Submit the M-Pesa code for super admin approval instead of STK.');
+    err.statusCode = 400;
+    err.data = { paymentMode: mode, paybill: value.paybill || value.shortcode || '', till: value.till || '', instructions: value.manualInstructions || '' };
+    throw err;
+  }
+  const credentials = normalizePlatformDarajaCredentials(value);
+  return { settings:value, mode, credentials };
+}
+function normalizePlanCode(raw, ownerType) {
+  const text = String(raw?.code || raw?.id || raw?.name || '').trim().toLowerCase().replace(/\s+/g, '_');
+  if (ownerType === 'school') {
+    if (!text || text === 'growth' || text === 'school_growth') return 'school_growth';
+    if (text.includes('starter')) return 'school_starter';
+    if (text.includes('enterprise')) return 'school_enterprise';
+    return text.startsWith('school_') ? text : `school_${text}`;
+  }
+  if (!text || text === 'basic' || text === 'essential' || text === 'child_basic' || text === 'child_essential') return 'child_essential';
+  if (text.includes('premium') || text.includes('smart')) return 'child_smart';
+  if (text.includes('ultimate') || text.includes('genius')) return 'child_genius';
+  return text.startsWith('child_') ? text : `child_${text}`;
+}
+function normalizePlanName(raw, fallback) {
+  return String(raw?.displayName || raw?.name || raw?.title || fallback || 'Plan').trim();
+}
+function normalizePlanAmount(raw) {
+  return Math.max(0, Math.round(Number(raw?.monthlyPriceKes ?? raw?.price_kes ?? raw?.price ?? raw?.amount ?? raw?.monthly ?? 0)) || 0);
+}
+async function syncPlatformSubscriptionPlans(value) {
+  const syncOne = async (raw, ownerType, index) => {
+    if (!raw || typeof raw !== 'object') return null;
+    const code = normalizePlanCode(raw, ownerType);
+    const name = code.replace(/^(school|child)_/, '');
+    const displayName = normalizePlanName(raw, name);
+    const monthly = normalizePlanAmount(raw);
+    const payload = {
+      code,
+      name,
+      displayName,
+      ownerType,
+      price_kes: monthly,
+      monthlyPriceKes: monthly,
+      termlyPriceKes: raw.termlyPriceKes ?? raw.termly ?? (ownerType === 'child' && monthly ? monthly * 3 : null),
+      yearlyPriceKes: raw.yearlyPriceKes ?? raw.yearly ?? (monthly ? monthly * 12 : null),
+      setupFeeMinKes: raw.setupFeeMinKes ?? raw.setupMin ?? null,
+      setupFeeMaxKes: raw.setupFeeMaxKes ?? raw.setupMax ?? null,
+      features: Array.isArray(raw.features) ? raw.features : [],
+      lockedFeatures: Array.isArray(raw.lockedFeatures) ? raw.lockedFeatures : [],
+      limits: raw.limits && typeof raw.limits === 'object' ? raw.limits : { days: Number(raw.days || 30) || 30 },
+      sortOrder: Number(raw.sortOrder ?? index ?? 0),
+      isActive: raw.isActive !== false
+    };
+    const [plan] = await SubscriptionPlan.findOrCreate({ where: { code }, defaults: payload });
+    await plan.update(payload);
+    return plan;
+  };
+  const parentPlans = Array.isArray(value.parentPlans) ? value.parentPlans : [];
+  const schoolPlans = Array.isArray(value.schoolPlans) ? value.schoolPlans : [];
+  const synced = [];
+  for (let i = 0; i < parentPlans.length; i++) synced.push(await syncOne(parentPlans[i], 'child', i + 10));
+  for (let i = 0; i < schoolPlans.length; i++) synced.push(await syncOne(schoolPlans[i], 'school', i + 10));
+  return synced.filter(Boolean);
+}
+
 async function getSchoolPaymentConfig(schoolCodeValue){
   const school = await School.findOne({ where:{ schoolId:schoolCodeValue } });
   const existingSettings = school?.settings?.paymentSettings || {};
@@ -293,25 +407,42 @@ exports.testAdminPaymentConnection = async (req, res) => {
 
 exports.getPlatformPaymentSettings = async (req, res) => {
   try {
-    const [row] = await Settings.findOrCreate({
-      where: { key: 'platform_payment_settings' },
-      defaults: { category:'payments', description:'Shule AI platform payment settings', value: {
-        accountName:'Shule AI', paybill:'', till:'', supportPhone:'', currency:'KES', parentPlans:[{id:'basic',name:'Basic',amount:150},{id:'premium',name:'Premium',amount:300},{id:'ultimate',name:'Ultimate',amount:800}], schoolPlans:[{id:'monthly',name:'Monthly',amount:3000},{id:'termly',name:'Termly',amount:8000},{id:'yearly',name:'Yearly',amount:30000}], fees:{ nameChange:500, maintenance:2500, registration:1000 }, darajaMode: process.env.DARAJA_ENV || 'sandbox'
-      }}
-    });
-    res.json({ success:true, data: row.value });
+    const { row, value } = await getPlatformPaymentConfig();
+    const mode = normalizePlatformPaymentMode(value);
+    const normalized = {
+      ...value,
+      paymentMode: mode,
+      manualEnabled: mode === 'manual' || mode === 'both',
+      darajaEnabled: mode === 'daraja' || mode === 'both',
+      darajaCredentials: normalizePlatformDarajaCredentials(value)
+    };
+    if (JSON.stringify(row.value || {}) !== JSON.stringify(normalized)) await row.update({ value: normalized }).catch(() => null);
+    res.json({ success:true, data: normalized });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
 
 exports.updatePlatformPaymentSettings = async (req, res) => {
   try {
-    const [row] = await Settings.findOrCreate({ where:{ key:'platform_payment_settings' }, defaults:{ category:'payments', description:'Shule AI platform payment settings', value:{} } });
-    const value = { ...(row.value || {}), ...(req.body || {}), updatedAt:new Date().toISOString(), updatedBy:req.user.id };
-    await row.update({ value });
-    await writeAudit(req, { schoolCode:'platform', module:'payments', action:'platform_payment_settings_updated', entityType:'Settings', entityId:'platform_payment_settings', after:value });
-    res.json({ success:true, message:'Platform payment settings saved', data:value });
+    const { row, value: current } = await getPlatformPaymentConfig();
+    const incoming = req.body || {};
+    const mode = normalizePlatformPaymentMode(incoming.paymentMode ? incoming : { ...current, ...incoming });
+    const next = {
+      ...current,
+      ...incoming,
+      paymentMode: mode,
+      manualEnabled: mode === 'manual' || mode === 'both',
+      darajaEnabled: mode === 'daraja' || mode === 'both',
+      darajaCredentials: normalizePlatformDarajaCredentials({ ...current, ...incoming }),
+      updatedAt:new Date().toISOString(),
+      updatedBy:req.user.id
+    };
+    await row.update({ value: next, category:'payments', description:'Shule AI platform payment settings' });
+    const syncedPlans = await syncPlatformSubscriptionPlans(next).catch((e) => { console.error('Platform plan sync failed:', e.message); return []; });
+    await writeAudit(req, { schoolCode:'platform', module:'payments', action:'platform_payment_settings_updated', entityType:'Settings', entityId:'platform_payment_settings', after:{ ...next, syncedPlanCount:syncedPlans.length } });
+    res.json({ success:true, message:'Platform payment settings saved and subscription plans synced', data:{ ...next, syncedPlanCount:syncedPlans.length } });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
+
 
 exports.parentFeeSTK = async (req, res) => {
   try {
@@ -466,17 +597,18 @@ exports.parentSubscriptionSTK = async (req, res) => {
     if(!student) return res.status(404).json({ success:false, message:'Student not found or not linked to this parent' });
     const parent = await currentParent(req);
     if(!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
+    const platform = await requirePlatformStkAllowed('child');
     const plan = await subscriptionController.getPlanByCode(planCode, 'child');
     if(!plan) return res.status(404).json({ success:false, message:'Child subscription plan not found' });
     const payAmount = cleanAmount(req.body.amount || subscriptionController.planAmount(plan, billingCycle));
     const subscription = await subscriptionController.findOrCreateChildSubscription(parent, student, plan, billingCycle);
     await subscription.update({ planId:plan.id, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle, status:'pending', features:plan.features || [], limits:plan.limits || {} });
     const reference = ref(`SUB-${student.id}`);
-    const stk = await daraja.initiateSTKPush({ phone, amount: payAmount, accountReference:reference, transactionDesc:`Shule AI ${plan.displayName || plan.name} subscription`, metadata:{ type:'subscription', ownerType:'child', schoolCode:schoolCode(req), studentId:student.id, parentId:parent.id, planCode:plan.code || plan.name, billingCycle, reference } });
+    const stk = await daraja.initiateSTKPush({ phone, amount: payAmount, accountReference:reference, transactionDesc:`Shule AI ${plan.displayName || plan.name} subscription`, credentials:platform.credentials, callbackUrl:platform.credentials.callbackUrl, metadata:{ type:'subscription', ownerType:'child', schoolCode:schoolCode(req), studentId:student.id, parentId:parent.id, planCode:plan.code || plan.name, billingCycle, reference, platformPaymentMode:platform.mode } });
     const subscriptionPayment = await SubscriptionPayment.create({ subscriptionId:subscription.id, ownerType:'child', schoolCode:schoolCode(req), parentId:parent.id, studentId:student.id, planId:plan.id, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle, amount:payAmount, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, status:'pending', metadata:{ reference, phone, source:'parent-child-subscription-stk' }, auditTrail:[auditEntry('child_subscription_stk_initiated', req.user, { reference, checkoutRequestId:stk.CheckoutRequestID })] });
     const payment = await createPendingPayment(req, { studentId:student.id, parentId:parent.id, amount:payAmount, reference, phone, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, accountReference:reference, schoolCode:schoolCode(req), paymentType:'subscription', paidTo:'platform', ownerType:'child', plan:plan.code || plan.name, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle, subscriptionPaymentId:subscriptionPayment.id, subscriptionId:subscription.id, gatewayResponse:stk, metadata:{ planCode:plan.code || plan.name, billingCycle, studentId:student.id, parentId:parent.id, ownerType:'child' } });
     res.json({ success:true, message:'M-PESA prompt sent. Subscription activates only after Daraja callback confirmation.', data:{ paymentId:payment.id, subscriptionPaymentId:subscriptionPayment.id, subscriptionId:subscription.id, reference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+  } catch(error){ res.status(error.statusCode || 500).json({ success:false, message:error.message, data:error.data || undefined }); }
 };
 
 
@@ -488,6 +620,7 @@ exports.schoolSubscriptionSTK = async (req, res) => {
     if (!phone) return res.status(400).json({ success:false, message:'phone is required' });
     const school = await currentSchool(req);
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const platform = await requirePlatformStkAllowed('school');
     const plan = await subscriptionController.getPlanByCode(planCode, 'school');
     if (!plan) return res.status(404).json({ success:false, message:'School subscription plan not found' });
     const amount = cleanAmount(req.body.amount || subscriptionController.planAmount(plan, billingCycle));
@@ -499,7 +632,9 @@ exports.schoolSubscriptionSTK = async (req, res) => {
       amount,
       accountReference: reference,
       transactionDesc: `Shule AI ${plan.displayName || plan.name} school subscription`,
-      metadata: { type:'school_subscription', ownerType:'school', schoolId:school.id, schoolCode:school.schoolId, planCode:plan.code || plan.name, billingCycle, reference }
+      credentials: platform.credentials,
+      callbackUrl: platform.credentials.callbackUrl,
+      metadata: { type:'school_subscription', ownerType:'school', schoolId:school.id, schoolCode:school.schoolId, planCode:plan.code || plan.name, billingCycle, reference, platformPaymentMode:platform.mode }
     });
     const subscriptionPayment = await SubscriptionPayment.create({
       subscriptionId: subscription.id,
@@ -540,7 +675,7 @@ exports.schoolSubscriptionSTK = async (req, res) => {
     res.json({ success:true, message:'M-PESA prompt sent. School subscription renews after Daraja callback confirmation.', data:{ paymentId:payment.id, subscriptionPaymentId:subscriptionPayment.id, subscriptionId:subscription.id, reference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
   } catch(error) {
     console.error('School subscription STK error:', error);
-    res.status(500).json({ success:false, message:error.message });
+    res.status(error.statusCode || 500).json({ success:false, message:error.message, data:error.data || undefined });
   }
 };
 
@@ -561,10 +696,11 @@ exports.genericPlatformSTK = async (req, res) => {
   try {
     const { phone, amount, accountReference='SHULEAI', description='Shule AI payment', metadata={} } = req.body;
     if(!phone || !amount) return res.status(400).json({ success:false, message:'phone and amount are required' });
-    const stk = await daraja.initiateSTKPush({ phone, amount: cleanAmount(amount), accountReference, transactionDesc: description, metadata:{ ...metadata, userId:req.user.id, role:req.user.role, schoolCode:req.user.schoolCode } });
+    const platform = await requirePlatformStkAllowed(metadata?.ownerType === 'school' ? 'school' : 'child');
+    const stk = await daraja.initiateSTKPush({ phone, amount: cleanAmount(amount), accountReference, transactionDesc: description, credentials:platform.credentials, callbackUrl:platform.credentials.callbackUrl, metadata:{ ...metadata, userId:req.user.id, role:req.user.role, schoolCode:req.user.schoolCode, platformPaymentMode:platform.mode } });
     await writeAudit(req, { module:'payments', action:'platform_stk_initiated', entityType:'STK', entityId:stk.CheckoutRequestID, after:{ accountReference, amount, description, checkoutRequestId:stk.CheckoutRequestID } });
     res.json({ success:true, message:'M-PESA prompt sent.', data:{ checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+  } catch(error){ res.status(error.statusCode || 500).json({ success:false, message:error.message, data:error.data || undefined }); }
 };
 
 exports.queryStatus = async (req, res) => { try { const data = await daraja.querySTKStatus(req.params.checkoutRequestId); res.json({ success:true, data }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };

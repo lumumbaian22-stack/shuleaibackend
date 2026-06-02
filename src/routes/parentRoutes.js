@@ -12,6 +12,7 @@ router.use(protect, authorize('parent'));
 router.get('/children', parentController.getChildren);
 router.post('/children/link', parentController.linkChildByElimuId);
 router.get('/child/:studentId/summary', parentController.getChildSummary);
+router.get('/child/:studentId/report-card-details', parentController.getChildReportCardDetails);
 router.post('/report-absence', parentController.reportAbsence);
 router.get('/fees/:studentId', parentController.getFees);
 router.post('/fees/pay', parentController.addPayment);

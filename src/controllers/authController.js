@@ -3,6 +3,7 @@ const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 const sequelize = require('../config/database');
+const { computeSchoolAccess } = require('../services/schoolAccessEngine');
 
 async function linkParentToStudentSafely(parentId, studentId) {
   const now = new Date();
@@ -448,10 +449,12 @@ const authController = {
       else if (role === 'admin') profile = await Admin.findOne({ where: { userId: user.id } });
 
       const school = user.schoolCode ? await School.findOne({ where: { schoolId: user.schoolCode } }) : null;
+      const schoolJson = school?.toJSON ? school.toJSON() : school;
+      const schoolAccess = school ? computeSchoolAccess(school) : null;
 
       res.json({
         success: true,
-        data: { token, user: user.getPublicProfile(), profile, school }
+        data: { token, user: user.getPublicProfile(), profile, school: schoolJson ? { ...schoolJson, access: schoolAccess } : null }
       });
     } catch (error) {
       console.error('Login error:', error);
@@ -495,10 +498,12 @@ const authController = {
       else if (user.role === 'admin') profile = await Admin.findOne({ where: { userId: user.id } });
 
       const school = user.schoolCode ? await School.findOne({ where: { schoolId: user.schoolCode } }) : null;
+      const schoolJson = school?.toJSON ? school.toJSON() : school;
+      const schoolAccess = school ? computeSchoolAccess(school) : null;
 
       res.json({
         success: true,
-        data: { user: user.getPublicProfile(), profile, school }
+        data: { user: user.getPublicProfile(), profile, school: schoolJson ? { ...schoolJson, access: schoolAccess } : null }
       });
     } catch (error) {
       console.error('Get me error:', error);

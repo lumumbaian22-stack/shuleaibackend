@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
-const { User } = require('../models');
+const { User, School } = require('../models');
+const { computeSchoolAccess } = require('../services/schoolAccessEngine');
 const { setTenantUser } = require('./requestContext');
 
 const protect = async (req, res, next) => {
@@ -24,6 +25,22 @@ const protect = async (req, res, next) => {
     setTenantUser(user);
     if (user.role !== 'super_admin' && !user.schoolCode) {
       return res.status(403).json({ success: false, message: 'User is not attached to a school tenant' });
+    }
+    if (user.role !== 'super_admin' && user.schoolCode) {
+      const school = await School.findOne({ where: { schoolId: user.schoolCode } }).catch(() => null);
+      if (school) {
+        const access = computeSchoolAccess(school);
+        req.schoolAccess = access;
+        const path = String(req.originalUrl || req.url || '').toLowerCase();
+        const allowedWhenExpired = path.includes('/api/auth/me') ||
+          path.includes('/api/admin/billing/payment-confirmation') ||
+          path.includes('/api/payments/school/subscription/stk') ||
+          path.includes('/api/super-admin/payment-requests') ||
+          path.includes('/api/user/alerts');
+        if (access.accessMode === 'expired_subscription' && !allowedWhenExpired) {
+          return res.status(402).json({ success: false, code: 'SCHOOL_SUBSCRIPTION_EXPIRED', message: access.reason || 'School subscription has expired', data: access });
+        }
+      }
     }
     next();
   } catch (error) {

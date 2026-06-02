@@ -1,4 +1,4 @@
-const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, Class, sequelize } = require('../models');
+const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, Class, Settings, SubscriptionPlan, sequelize } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
@@ -212,6 +212,75 @@ exports.getChildSummary = async (req, res) => {
   }
 };
 
+
+// @desc    Parent-safe report card details for a linked child
+// @route   GET /api/parent/child/:studentId/report-card-details
+// @access  Private/Parent
+exports.getChildReportCardDetails = async (req, res) => {
+  try {
+    await ensureRuntimeSchema().catch(() => null);
+    const { studentId } = req.params;
+    const parent = await Parent.findOne({ where: { userId: req.user.id } });
+    if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
+    const student = await Student.findOne({
+      where: { [Op.or]: [{ id: Number(studentId) || 0 }, { userId: Number(studentId) || 0 }] },
+      attributes: { include: ['classId'] },
+      include: [{ model: User, attributes: ['id','name','email','phone','schoolCode','profileImage'] }]
+    });
+    if (!student) return res.status(404).json({ success:false, message:'Student not found' });
+    let linked = false;
+    if (typeof parent.hasStudent === 'function') linked = await parent.hasStudent(student).catch(() => false);
+    if (!linked) linked = await parentHasStudent(parent.id, student.id).catch(() => false);
+    if (!linked || student.User?.schoolCode !== req.user.schoolCode) return res.status(403).json({ success:false, message:'Not your child' });
+
+    const schoolCode = student.User?.schoolCode || req.user.schoolCode;
+    const school = await School.findOne({ where: { schoolId: schoolCode }, attributes: ['name','schoolId','system','settings'] }).catch(() => null);
+    const curriculum = school?.system || school?.settings?.curriculum || student.curriculum || 'cbc';
+    const schoolLevel = school?.settings?.schoolLevel || 'secondary';
+    const classTeacher = await Teacher.findOne({
+      where: student.classId ? { [Op.or]: [{ classTeacher: student.grade }, { classId: student.classId }] } : { classTeacher: student.grade },
+      include: [{ model: User, attributes: ['id','name','email','phone'] }]
+    }).catch(() => null);
+    const records = await AcademicRecord.findAll({
+      where: { studentId: student.id, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
+      order: [['year','DESC'], ['term','DESC'], ['date','DESC']]
+    }).catch(() => []);
+    const subjectMap = {};
+    records.forEach(r => {
+      const subject = r.subject || 'Subject';
+      if (!subjectMap[subject]) subjectMap[subject] = { total:0, count:0 };
+      subjectMap[subject].total += Number(r.score || 0);
+      subjectMap[subject].count += 1;
+    });
+    const gradeFromScore = (score) => {
+      const n = Number(score || 0);
+      if (n >= 80) return 'A'; if (n >= 70) return 'B'; if (n >= 60) return 'C'; if (n >= 50) return 'D'; return n > 0 ? 'E' : '-';
+    };
+    const subjects = Object.entries(subjectMap).map(([subject, d]) => {
+      const average = Math.round(d.total / Math.max(1, d.count));
+      return { subject, average, grade: gradeFromScore(average) };
+    });
+    const attendance = await Attendance.findAll({ where: { studentId: student.id, schoolCode }, order: [['date','DESC']] }).catch(() => []);
+    const present = attendance.filter(a => a.status === 'present').length;
+    const absent = attendance.filter(a => a.status === 'absent').length;
+    const late = attendance.filter(a => a.status === 'late').length;
+    const rate = attendance.length ? Math.round((present / attendance.length) * 100) : 0;
+
+    res.json({ success:true, data:{
+      student: { id:student.id, elimuid:student.elimuid, grade:student.grade, status:student.status, classId:student.classId, photo:student.User?.profileImage },
+      user: { name:student.User?.name, email:student.User?.email, phone:student.User?.phone },
+      classTeacher: classTeacher?.User ? { name:classTeacher.User.name, email:classTeacher.User.email, phone:classTeacher.User.phone } : null,
+      academicSummary: { overallAverage: records.length ? Math.round(records.reduce((sum, r) => sum + Number(r.score || 0), 0) / records.length) : 0, subjects },
+      attendanceSummary: { rate, present, absent, late },
+      recentAssessments: records.slice(0, 5).map(r => ({ subject:r.subject, assessment:r.assessmentName, score:r.score, grade:gradeFromScore(r.score), term:r.term, year:r.year, date:r.date })),
+      school: { name:school?.name || null, schoolName:school?.name || null, schoolCode, curriculum, system:curriculum, schoolLevel, logo:school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null, branding:school?.settings?.branding || {} }
+    }});
+  } catch (error) {
+    console.error('Get child report card details error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
+};
+
 // @desc    Report child's absence with notification to class teacher
 // @route   POST /api/parent/report-absence
 // @access  Private/Parent
@@ -327,13 +396,57 @@ exports.reportAbsence = async (req, res) => {
 // @access  Private/Parent
 exports.getSubscriptionPlans = async (req, res) => {
   try {
-    const plans = [
-      { id: 'basic', name: 'Basic', price: 150, currency: 'KES', interval: 'month', features: ['View attendance records', 'View basic grades', 'Report absence', 'Email notifications'] },
-      { id: 'premium', name: 'Premium', price: 300, currency: 'KES', interval: 'month', features: ['Everything in Basic', 'Detailed academic progress', 'Teacher comments and feedback', 'Payment history', 'SMS notifications'] },
-      { id: 'ultimate', name: 'Ultimate', price: 800, currency: 'KES', interval: 'month', features: ['Everything in Premium', 'Live chat with teachers', 'Video conference access', 'Priority support', 'Downloadable reports', 'Multi-child discount'] }
-    ];
-
-    res.json({ success: true, data: plans });
+    const settings = await Settings.findOne({ where: { key: 'platform_payment_settings' } }).catch(() => null);
+    const cfgPlans = Array.isArray(settings?.value?.parentPlans) ? settings.value.parentPlans : [];
+    if (cfgPlans.length) {
+      const plans = cfgPlans.filter(p => p && p.isActive !== false).map((p, idx) => {
+        const code = String(p.code || p.id || p.name || `plan_${idx + 1}`).trim();
+        const amount = Number(p.amount ?? p.price ?? p.monthlyPriceKes ?? p.price_kes ?? 0) || 0;
+        return {
+          id: code,
+          code: code === 'basic' ? 'child_essential' : code === 'premium' ? 'child_smart' : code === 'ultimate' ? 'child_genius' : (code.startsWith('child_') ? code : `child_${code}`),
+          name: p.displayName || p.name || code,
+          displayName: p.displayName || p.name || code,
+          price: amount,
+          monthlyPriceKes: Number(p.monthlyPriceKes ?? amount) || amount,
+          termlyPriceKes: p.termlyPriceKes ?? p.termly ?? (amount ? amount * 3 : null),
+          yearlyPriceKes: p.yearlyPriceKes ?? p.yearly ?? (amount ? amount * 12 : null),
+          currency: settings.value.currency || 'KES',
+          interval: p.interval || 'month',
+          ownerType: 'child',
+          features: Array.isArray(p.features) ? p.features : [],
+          lockedFeatures: Array.isArray(p.lockedFeatures) ? p.lockedFeatures : [],
+          limits: p.limits || { days: Number(p.days || 30) || 30 },
+          sortOrder: p.sortOrder ?? idx
+        };
+      });
+      return res.json({ success: true, data: plans });
+    }
+    const dbPlans = await SubscriptionPlan.findAll({ where: { ownerType: 'child', isActive: true }, order: [['sortOrder', 'ASC'], ['price_kes', 'ASC']] }).catch(() => []);
+    if (dbPlans.length) {
+      return res.json({ success:true, data: dbPlans.map(p => ({
+        id: p.code || p.name,
+        code: p.code || p.name,
+        name: p.displayName || p.name,
+        displayName: p.displayName || p.name,
+        price: p.price_kes,
+        monthlyPriceKes: p.monthlyPriceKes || p.price_kes,
+        termlyPriceKes: p.termlyPriceKes,
+        yearlyPriceKes: p.yearlyPriceKes,
+        currency: 'KES',
+        interval: 'month',
+        ownerType: 'child',
+        features: p.features || [],
+        lockedFeatures: p.lockedFeatures || [],
+        limits: p.limits || {},
+        sortOrder: p.sortOrder || 0
+      })) });
+    }
+    res.json({ success: true, data: [
+      { id: 'child_essential', code:'child_essential', name: 'Essential', price: 100, currency: 'KES', interval: 'month', features: ['Report cards', 'Attendance', 'Homework tracking', 'Teacher communication'] },
+      { id: 'child_smart', code:'child_smart', name: 'Smart', price: 300, currency: 'KES', interval: 'month', features: ['Everything in Essential', 'Progress analytics', 'Study insights'] },
+      { id: 'child_genius', code:'child_genius', name: 'Genius', price: 500, currency: 'KES', interval: 'month', features: ['Everything in Smart', 'AI tutor', 'Full analytics'] }
+    ] });
   } catch (error) {
     console.error('Get plans error:', error);
     res.status(500).json({ success: false, message: error.message });
