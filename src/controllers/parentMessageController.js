@@ -1,7 +1,6 @@
 const { Parent, Teacher, User, Message, Student, Class, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
-const ownership = require('../services/parentOwnershipService');
 
 function meta(message) {
   const raw = message?.toJSON ? message.toJSON() : (message || {});
@@ -29,17 +28,36 @@ async function healParentStudentLink(parent, student) {
   ).catch(() => null);
 }
 
-
 async function verifyParentChild(parent, student, user = null) {
-  try {
-    if (!parent || !student || !user) return false;
-    return await ownership.ownsStudentId({
-      parentUserId: user.id || parent.userId,
-      parentId: parent.id,
-      studentId: student.id,
-      schoolCode: user.schoolCode
-    });
-  } catch (_) { return false; }
+  if (!parent || !student) return false;
+  const parentProfileId = Number(parent.id || 0);
+  const parentUserId = Number(user?.id || parent.userId || 0);
+  const studentId = Number(student.id || 0);
+  const studentUserId = Number(student.userId || student.User?.id || 0);
+  const studentIds = [...new Set([studentId, studentUserId].filter(Boolean))];
+  if (!studentIds.length || !parentUserId) return false;
+
+  const rows = await sequelize.query(`
+    SELECT sp."studentId", sp."parentId", p."userId" AS "linkedParentUserId"
+      FROM "StudentParents" sp
+      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
+     WHERE sp."studentId" IN (:studentIds)
+       AND (
+         sp."parentId" = :parentProfileId
+         OR sp."parentId" = :parentUserId
+         OR p."userId" = :parentUserId
+       )
+     LIMIT 1`,
+    { replacements: { parentProfileId, parentUserId, studentIds }, type: sequelize.QueryTypes.SELECT }
+  ).catch(() => []);
+  if (rows.length) { await healParentStudentLink(parent, student); return true; }
+
+  const directParentId = Number(student.parentId || student.parentUserId || student.guardianId || student.guardianUserId || 0);
+  if (directParentId && (directParentId === parentProfileId || directParentId === parentUserId)) {
+    await healParentStudentLink(parent, student); return true;
+  }
+
+  return false;
 }
 
 async function findStudentForParent({ parent, studentId, schoolCode, user }) {
@@ -141,7 +159,7 @@ exports.sendMessage = async (req, res) => {
     const newMessage = await Message.create({
       senderId: req.user.id,
       receiverId: recipientId,
-      content: cleanMessage,
+      content: cleanMessage || (attachmentMeta?.originalName || attachmentMeta?.filename || 'Attachment'),
       metadata: {
         schoolCode: req.user.schoolCode,
         conversationType,
@@ -172,7 +190,7 @@ exports.sendMessage = async (req, res) => {
     });
 
     if (global.io) {
-      global.io.to(`user-${recipientId}`).emit('new-parent-message', { messageId: newMessage.id, from: req.user.id, fromName: req.user.name, fromRole: 'parent', studentName: student.User?.name, studentGrade: student.grade, content: cleanMessage, attachment: attachmentMeta, conversationType, conversationKey, timestamp: new Date() });
+      global.io.to(`user-${recipientId}`).emit('new-parent-message', { messageId: newMessage.id, from: req.user.id, fromName: req.user.name, fromRole: 'parent', studentName: student.User?.name, studentGrade: student.grade, content: cleanMessage || (attachmentMeta?.originalName || attachmentMeta?.filename || 'Attachment'), attachment: attachmentMeta, conversationType, conversationKey, timestamp: new Date() });
     }
 
     res.status(201).json({ success: true, message: 'Message sent successfully', data: { id: newMessage.id, conversationKey, recipient: recipientName, recipientType: recipientRole, requestedRecipientType: recipientType, recipientId, sentAt: newMessage.createdAt } });
@@ -255,7 +273,7 @@ exports.replyToParent = async (req, res) => {
     const reply = await Message.create({
       senderId: req.user.id,
       receiverId: parentId,
-      content: cleanMessage,
+      content: cleanMessage || (attachmentMeta?.originalName || attachmentMeta?.filename || 'Attachment'),
       metadata: { ...originalMeta, schoolCode: req.user.schoolCode, inReplyTo: originalMessageId || null, senderRole: req.user.role, type: `${req.user.role}_reply` }
     });
     await createAlert({ userId: parentId, role: 'parent', type: 'message', severity: 'info', title: `Reply from ${req.user.name}`, message: cleanMessage.substring(0, 100), data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: originalMeta.conversationType || 'parent_reply', conversationKey: originalMeta.conversationKey || null, messageId: reply.id } });

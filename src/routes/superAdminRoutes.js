@@ -45,11 +45,6 @@ router.get('/system/status', superAdminController.getSystemStatus);
 router.get('/system/metrics', superAdminController.getSystemMetrics);
 router.get('/system/events', superAdminController.getRecentEvents);
 
-
-// v124 parent-child link audit / cleanup
-router.get('/student-parent-links/audit', superAdminController.auditStudentParentLinks);
-router.post('/student-parent-links/cleanup', superAdminController.cleanupStudentParentLinks);
-
 // Platform settings
 router.get('/platform-settings', superAdminController.getPlatformSettings);
 router.put('/platform-settings', superAdminController.updatePlatformSettings);

@@ -51,7 +51,6 @@ const { routeAwareApiLimiter } = require('./middleware/productionRateLimits');
 const { requestContext, productionErrorHandler } = require('./middleware/requestContext');
 const { ensureRuntimeSchema } = require('./utils/schemaSafety');
 const { accessSchemaMiddleware, ensureSchoolAccessSchema } = require('./utils/accessSchemaGuard');
-const { requireFeature } = require('./middleware/featureGate');
 
 const app = express();
 
@@ -290,7 +289,7 @@ app.post('/api/system/repair-schema', (req, res, next) => {
 // ============ MOUNT ROUTES ============
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/duty', requireFeature('duty'), dutyRoutes);
+app.use('/api/duty', dutyRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/teacher', teacherRoutes);
@@ -298,8 +297,6 @@ app.use('/api/parent', parentRoutes);
 app.use('/api/student', studentRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/subscription', subscriptionRoutes);
-// v126: backwards-compatible plural alias used by consolidated frontend fallback paths.
-app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/school', schoolRoutes);
 app.use('/api/parent-messages', parentMessageRoutes);
@@ -312,12 +309,12 @@ app.use('/api/home-tasks', homeTaskRoutes);
 app.use('/api/consent', consentRoutes);   // <-- ADDED
 app.use('/api/search', searchRoutes);
 app.use('/api/reports', reportRoutes);
-app.use('/api/sms', requireFeature('bulk_sms'), smsRoutes);
+app.use('/api/sms', smsRoutes);
 // V27 compatibility routes fix old frontend/test endpoints and role-safe aliases.
 app.use('/api', compatibilityRoutes);
-app.use('/api/calendar', requireFeature('calendar'), calendarRoutes);
-app.use('/api/timetable', requireFeature('timetable'), timetableRoutes);
-app.use('/api/homework', requireFeature('homework'), homeworkRoutes);
+app.use('/api/calendar', calendarRoutes);
+app.use('/api/timetable', timetableRoutes);
+app.use('/api/homework', homeworkRoutes);
 app.use('/api/gamification', gamificationRoutes);
 app.use('/api/chat-v9', chatV9Routes);
 app.use('/api/scale', scaleRoutes);
