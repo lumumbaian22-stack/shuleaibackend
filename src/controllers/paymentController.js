@@ -49,11 +49,11 @@ async function getPlatformPaymentConfig() {
     currency: 'KES',
     parentSubscriptionsEnabled: true,
     schoolSubscriptionsEnabled: true,
-    parentPlans: [{ code:'child_essential', name:'Essential', amount:100, days:30 }],
+    parentPlans: [{ code:'child_basic', name:'Basic', amount:100, days:30, features:['report_cards','attendance','progress'], limits:{aiQuestionsPerDay:0,aiQuestionsPerMonth:0} }, { code:'child_premium', name:'Premium', amount:250, days:30, features:['report_cards','attendance','progress','ai_tutor_limited','child_timetable'], limits:{aiQuestionsPerDay:6,aiQuestionsPerMonth:180} }, { code:'child_ultimate', name:'Ultimate', amount:500, days:30, features:['report_cards','attendance','progress','ai_tutor_extended','child_timetable','live_child_analytics','advanced_alerts','child_recommendations'], limits:{aiQuestionsPerDay:50,aiQuestionsPerMonth:1500} }],
     schoolPlans: [
       { code:'starter', name:'Starter', amount:0, days:30, minStudents:50, maxStudents:400, features:['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards'] },
-      { code:'growth', name:'Growth', amount:0, days:30, minStudents:401, maxStudents:500, features:['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards','calendar','school_branding','timetable'] },
-      { code:'enterprise', name:'Enterprise', amount:0, days:30, minStudents:501, maxStudents:null, features:['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards','calendar','school_branding','timetable','duty','fairness_report','departments','bulk_sms','senior_subject_choice'] }
+      { code:'growth', name:'Growth', amount:0, days:30, minStudents:401, maxStudents:500, features:['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards','calendar','school_branding','timetable','homework'] },
+      { code:'enterprise', name:'Enterprise', amount:0, days:30, minStudents:501, maxStudents:null, features:['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards','calendar','school_branding','timetable','homework','duty','fairness_report','departments','bulk_sms','senior_subject_choice'] }
     ],
     darajaCredentials: {}
   };
@@ -111,9 +111,9 @@ function normalizePlanCode(raw, ownerType) {
     if (text.includes('starter')) return 'starter';
     return text.replace(/^school_/, '');
   }
-  if (!text || text === 'basic' || text === 'essential' || text === 'child_basic' || text === 'child_essential') return 'child_essential';
-  if (text.includes('premium') || text.includes('smart')) return 'child_smart';
-  if (text.includes('ultimate') || text.includes('genius')) return 'child_genius';
+  if (!text || text === 'basic' || text === 'essential' || text === 'child_basic' || text === 'child_essential') return 'child_basic';
+  if (text.includes('premium') || text.includes('smart')) return 'child_premium';
+  if (text.includes('ultimate') || text.includes('genius')) return 'child_ultimate';
   return text.startsWith('child_') ? text : `child_${text}`;
 }
 function normalizePlanName(raw, fallback) {
@@ -231,9 +231,9 @@ function normalizePlanInput(plan, ownerType){
     if (raw.includes('starter') || raw === 'school_starter') return 'starter';
     return raw.startsWith('school_') ? raw : `school_${raw}`;
   }
-  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_essential';
-  if (raw.includes('genius') || raw.includes('ultimate') || raw === 'child_genius') return 'child_genius';
-  if (raw.includes('smart') || raw.includes('premium') || raw === 'child_smart') return 'child_smart';
+  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_basic';
+  if (raw.includes('genius') || raw.includes('ultimate') || raw === 'child_genius' || raw === 'child_ultimate') return 'child_ultimate';
+  if (raw.includes('smart') || raw.includes('premium') || raw === 'child_smart' || raw === 'child_premium') return 'child_premium';
   return raw.startsWith('child_') ? raw : `child_${raw}`;
 }
 
@@ -601,7 +601,7 @@ exports.parentSubscriptionSTK = async (req, res) => {
   try {
     const { studentId, phone } = req.body || {};
     const billingCycle = billingCycleFromBody(req.body || {});
-    const planCode = normalizePlanInput(req.body?.planCode || req.body?.plan || 'child_essential', 'child');
+    const planCode = normalizePlanInput(req.body?.planCode || req.body?.plan || 'child_basic', 'child');
     if(!studentId || !phone) return res.status(400).json({ success:false, message:'studentId and phone are required' });
     const student = await findStudentForParent(req, studentId);
     if(!student) return res.status(404).json({ success:false, message:'Student not found or not linked to this parent' });
@@ -626,7 +626,7 @@ exports.parentSubscriptionSTK = async (req, res) => {
 exports.parentSubscriptionManual = async (req, res) => {
   try {
     const { studentId, planCode, plan, amount, phone, mpesaCode, reference, billingCycle='monthly', notes } = req.body || {};
-    const code = normalizePlanInput(planCode || plan || 'child_essential', 'child');
+    const code = normalizePlanInput(planCode || plan || 'child_basic', 'child');
     if (!studentId || !(mpesaCode || reference)) return res.status(400).json({ success:false, message:'studentId and M-Pesa code/reference are required' });
     const parent = await currentParent(req);
     if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });

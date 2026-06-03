@@ -36,7 +36,7 @@ async function resolveClassTeacherParentContext(req, parentUserId) {
        FROM "Students" s
        JOIN "Users" su ON su."id" = s."userId"
        JOIN "StudentParents" sp ON sp."studentId" = s."id"
-       JOIN "Parents" p ON p."id" = sp."parentId"
+       LEFT JOIN "Parents" p ON (p."id" = sp."parentId" OR p."userId" = sp."parentId")
        JOIN "Users" pu ON pu."id" = p."userId"
        LEFT JOIN "Classes" c ON c."id" = s."classId"
       WHERE su."schoolCode" = :schoolCode
@@ -45,6 +45,7 @@ async function resolveClassTeacherParentContext(req, parentUserId) {
         AND pu."isActive" = true
         AND pu."id" = :parentUserId
         AND s."classId" IN (:classIds)
+        AND COALESCE(sp."status", 'active') IN ('active','approved','verified','linked')
       ORDER BY s."id" ASC
       LIMIT 1`,
     { replacements: { schoolCode: req.user.schoolCode, parentUserId, classIds }, type: sequelize.QueryTypes.SELECT }
@@ -74,75 +75,47 @@ async function resolveClassTeacherParentContext(req, parentUserId) {
 // @route   GET /api/teacher/conversations
 // @access  Private/Teacher
 exports.getConversations = async (req, res) => {
-    try {
-        const messages = await Message.findAll({
-            where: {
-                [Op.or]: [
-                    { receiverId: req.user.id },
-                    { senderId: req.user.id }
-                ]
-            },
-            include: [
-                { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
-                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
-            ],
-            order: [['createdAt', 'DESC']]
-        });
-        
-        // Group by conversation
-        const conversations = {};
-        
-        for (const msg of messages) {
-            const otherUserId = msg.senderId === req.user.id ? msg.receiverId : msg.senderId;
-            const otherUser = msg.senderId === req.user.id ? msg.Receiver : msg.Sender;
-            
-            if (!conversations[otherUserId]) {
-                // Try to get student info if this is a parent
-                let studentName = null;
-                let studentGrade = null;
-                
-                if (otherUser?.role === 'parent') {
-                    try {
-                        const parent = await Parent.findOne({ where: { userId: otherUserId } });
-                        if (parent) {
-                            const students = await parent.getStudents({ 
-                                include: [{ model: User, attributes: ['name'] }]
-                            });
-                            if (students.length > 0) {
-                                studentName = students[0].User?.name;
-                                studentGrade = students[0].grade;
-                            }
-                        }
-                    } catch (err) {
-                        console.error('Error fetching parent students:', err);
-                    }
-                }
-                
-                conversations[otherUserId] = {
-                    userId: otherUserId,
-                    userName: otherUser?.name || 'Unknown',
-                    userRole: otherUser?.role || 'unknown',
-                    lastMessage: msg.content,
-                    lastMessageTime: msg.createdAt,
-                    unreadCount: msg.receiverId === req.user.id && !msg.isRead ? 1 : 0,
-                    studentName,
-                    studentGrade,
-                    messages: []
-                };
-            } else {
-                if (msg.receiverId === req.user.id && !msg.isRead) {
-                    conversations[otherUserId].unreadCount++;
-                }
-            }
-            
-            conversations[otherUserId].messages.push(msg);
-        }
-        
-        res.json({ success: true, data: Object.values(conversations) });
-    } catch (error) {
-        console.error('Get conversations error:', error);
-        res.status(500).json({ success: false, message: error.message });
+  try {
+    const messages = await Message.findAll({
+      where: { [Op.or]: [{ receiverId: req.user.id }, { senderId: req.user.id }] },
+      include: [
+        { model: User, as: 'Sender', attributes: ['id', 'name', 'role', 'email'] },
+        { model: User, as: 'Receiver', attributes: ['id', 'name', 'role', 'email'] }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
+
+    const conversations = {};
+    for (const msg of messages) {
+      const md = messageMeta(msg);
+      if (md.schoolCode && String(md.schoolCode) !== String(req.user.schoolCode)) continue;
+      const otherUserId = Number(msg.senderId) === Number(req.user.id) ? msg.receiverId : msg.senderId;
+      const otherUser = Number(msg.senderId) === Number(req.user.id) ? msg.Receiver : msg.Sender;
+      if (!otherUser) continue;
+
+      // v119: teacher private chats are fellow teachers only; parent chats live in the Parents tab.
+      if (otherUser.role !== 'teacher') continue;
+      const key = String(otherUserId);
+      if (!conversations[key]) {
+        conversations[key] = {
+          userId: otherUserId,
+          userName: otherUser.name || 'Teacher',
+          userRole: 'teacher',
+          lastMessage: msg.content,
+          lastMessageTime: msg.createdAt,
+          unreadCount: Number(msg.receiverId) === Number(req.user.id) && !msg.isRead ? 1 : 0,
+          messages: []
+        };
+      } else if (Number(msg.receiverId) === Number(req.user.id) && !msg.isRead) {
+        conversations[key].unreadCount += 1;
+      }
+      conversations[key].messages.push(msg);
     }
+    res.json({ success: true, data: Object.values(conversations) });
+  } catch (error) {
+    console.error('Get conversations error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 
 // @desc    Get messages with specific parent

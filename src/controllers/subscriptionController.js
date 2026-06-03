@@ -16,6 +16,21 @@ const {
 const SCHOOL_CORE_FEATURES = ['attendance', 'marks', 'students', 'teachers', 'basic_reports', 'fees'];
 const SCHOOL_PREMIUM_FEATURES = ['school_branding', 'ai_analytics', 'advanced_reports', 'advanced_timetable', 'smart_alerts', 'premium_dashboards', 'full_ai_tutor'];
 
+const DEFAULT_PARENT_PLANS = [
+  {
+    id:'child_basic', code:'child_basic', name:'Basic', displayName:'Basic', ownerType:'child', price:100, monthlyPriceKes:100,
+    features:['report_cards','attendance','progress'], limits:{ days:30, aiQuestionsPerDay:0, aiQuestionsPerMonth:0 }, sortOrder:1, isActive:true, source:'default_parent_tiers'
+  },
+  {
+    id:'child_premium', code:'child_premium', name:'Premium', displayName:'Premium', ownerType:'child', price:250, monthlyPriceKes:250,
+    features:['report_cards','attendance','progress','ai_tutor_limited','child_timetable'], limits:{ days:30, aiQuestionsPerDay:6, aiQuestionsPerMonth:180 }, sortOrder:2, isActive:true, source:'default_parent_tiers'
+  },
+  {
+    id:'child_ultimate', code:'child_ultimate', name:'Ultimate', displayName:'Ultimate', ownerType:'child', price:500, monthlyPriceKes:500,
+    features:['report_cards','attendance','progress','ai_tutor_extended','child_timetable','live_child_analytics','advanced_alerts','child_recommendations'], limits:{ days:30, aiQuestionsPerDay:50, aiQuestionsPerMonth:1500 }, sortOrder:3, isActive:true, source:'default_parent_tiers'
+  }
+];
+
 function normalizeCycle(cycle) {
   const value = String(cycle || 'monthly').toLowerCase();
   return ['monthly', 'termly', 'yearly', 'custom'].includes(value) ? value : 'monthly';
@@ -133,9 +148,9 @@ function normalizeLookupCode(code, ownerType) {
     if (raw.includes('starter')) return 'starter';
     return raw.replace(/^school_/, '');
   }
-  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_essential';
-  if (raw.includes('genius') || raw.includes('ultimate')) return 'child_genius';
-  if (raw.includes('smart') || raw.includes('premium')) return 'child_smart';
+  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_basic';
+  if (raw.includes('genius') || raw.includes('ultimate')) return 'child_ultimate';
+  if (raw.includes('smart') || raw.includes('premium')) return 'child_premium';
   return raw.startsWith('child_') ? raw : `child_${raw}`;
 }
 
@@ -143,7 +158,7 @@ async function getPlanByCode(code, ownerType) {
   const canonical = normalizeLookupCode(code, ownerType);
   const aliases = ownerType === 'school'
     ? { starter: ['starter','school_starter'], growth: ['growth','school_growth'], enterprise: ['enterprise','school_enterprise'] }
-    : { child_essential: ['child_essential','child_basic','essential','basic'], child_smart: ['child_smart','child_premium','smart','premium'], child_genius: ['child_genius','child_ultimate','genius','ultimate'] };
+    : { child_basic: ['child_basic','child_essential','basic','essential'], child_premium: ['child_premium','child_smart','premium','smart'], child_ultimate: ['child_ultimate','child_genius','ultimate','genius'] };
   const values = aliases[canonical] || [canonical, String(code || '').toLowerCase()];
   return SubscriptionPlan.findOne({
     where: {
@@ -187,8 +202,8 @@ async function findOrCreateChildSubscription(parent, student, plan, cycle) {
       parentId: parent.id,
       studentId: student.id,
       planId: plan?.id || null,
-      planCode: plan?.code || 'child_essential',
-      planName: plan?.displayName || plan?.name || 'Essential',
+      planCode: plan?.code || 'child_basic',
+      planName: plan?.displayName || plan?.name || 'Basic',
       billingCycle: normalizeCycle(cycle),
       status: 'pending',
       features: plan?.features || [],
@@ -220,7 +235,7 @@ async function renewSubscription(subscription, plan, cycle, paymentId) {
     if (student) {
       const childPlanName = String(plan.name || '').replace(/^child_/, '').replace(/^school_/, '') || 'essential';
       await student.update({
-        subscriptionPlan: ['basic','premium','ultimate'].includes(childPlanName) ? childPlanName : (childPlanName === 'genius' ? 'ultimate' : childPlanName === 'smart' ? 'premium' : 'basic'),
+        subscriptionPlan: ['basic','premium','ultimate'].includes(childPlanName) ? childPlanName : (childPlanName === 'genius' || childPlanName === 'ultimate' ? 'ultimate' : childPlanName === 'smart' || childPlanName === 'premium' ? 'premium' : 'basic'),
         subscriptionStatus: 'active',
         subscriptionStartDate: period.startDate,
         subscriptionExpiry: period.endDate,
@@ -248,7 +263,13 @@ exports.getPlans = async (req, res) => {
     }
     if (ownerType === 'child') {
       const configured = await getPlatformConfiguredPlans(ownerType);
-      if (configured && configured.length) return res.json({ success: true, data: configured });
+      const source = configured && configured.length ? configured : DEFAULT_PARENT_PLANS;
+      const normalized = source.map((plan, idx) => {
+        const code = normalizeLookupCode(plan.code || plan.name, 'child');
+        const base = DEFAULT_PARENT_PLANS.find(p => p.code === code) || plan;
+        return { ...base, ...plan, code, id: plan.id || code, ownerType:'child', sortOrder: plan.sortOrder ?? idx + 1, isActive: plan.isActive !== false };
+      }).filter(p => ['child_basic','child_premium','child_ultimate'].includes(p.code));
+      return res.json({ success: true, data: normalized });
     }
     const where = { isActive: true };
     if (ownerType) where.ownerType = ownerType;
@@ -333,7 +354,7 @@ exports.getChildStatus = async (req, res) => {
 
 exports.createChildSubscriptionRequest = async (req, res) => {
   try {
-    const { studentId, planCode='child_essential', billingCycle='monthly' } = req.body || {};
+    const { studentId, planCode='child_basic', billingCycle='monthly' } = req.body || {};
     const owned = await ownership.assertParentOwnsStudent({ parentUserId:req.user.id, studentId, schoolCode:req.user.schoolCode });
     const parent = owned.parent;
     const child = owned.student;
@@ -341,7 +362,7 @@ exports.createChildSubscriptionRequest = async (req, res) => {
     if (!plan) return res.status(404).json({ success:false, message:'Child subscription plan not found' });
     const subscription = await findOrCreateChildSubscription(parent, child, plan, billingCycle);
     await subscription.update({ planId:plan.id, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle:normalizeCycle(billingCycle), status:'pending', features:plan.features || [], limits:plan.limits || {} });
-    res.json({ success:true, message:'Child subscription request prepared. Complete STK payment to activate.', data:{ subscription, amount:planAmount(plan, billingCycle), plan:planPayload(plan) } });
+    res.json({ success:true, message:'Child subscription request prepared. Complete payment/manual verification to activate.', data:{ subscription, amount:planAmount(plan, billingCycle), plan:planPayload(plan) } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };
 

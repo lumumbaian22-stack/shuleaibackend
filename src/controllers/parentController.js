@@ -1,4 +1,4 @@
-const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, Class, Settings, SubscriptionPlan, sequelize } = require('../models');
+const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, Admin, School, Message, Class, Settings, SubscriptionPlan, sequelize } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
@@ -176,7 +176,7 @@ exports.getChildSummary = async (req, res) => {
     // Get child's class teacher
     const classTeacher = await Teacher.findOne({
       where: { classTeacher: student.grade },
-      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'preferences'] }]
     });
 
     // Fetch only PUBLISHED academic records
@@ -249,12 +249,18 @@ exports.getChildReportCardDetails = async (req, res) => {
     const schoolLevel = school?.settings?.schoolLevel || 'secondary';
     const classTeacher = await Teacher.findOne({
       where: student.classId ? { [Op.or]: [{ classTeacher: student.grade }, { classId: student.classId }] } : { classTeacher: student.grade },
-      include: [{ model: User, attributes: ['id','name','email','phone'] }]
+      include: [{ model: User, attributes: ['id','name','email','phone','preferences'] }]
     }).catch(() => null);
     const records = await AcademicRecord.findAll({
       where: { studentId: student.id, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
       order: [['year','DESC'], ['term','DESC'], ['date','DESC']]
     }).catch(() => []);
+    const adminSigner = await Admin.findOne({
+      where: {},
+      include: [{ model: User, attributes: ['id','name','email','phone','preferences'], where: { schoolCode, role: 'admin' }, required: true }],
+      order: [['updatedAt','DESC']]
+    }).catch(() => null);
+    const safeSig = (model, user) => model?.signatureUrl || model?.signature || user?.preferences?.signatureUrl || user?.preferences?.signatureAbsoluteUrl || '';
     const assessmentSettings = await sequelize.query(`
       SELECT * FROM "SchoolAssessmentSettings" WHERE "schoolCode" = :schoolCode ORDER BY "displayOrder" ASC, "id" ASC
     `, { replacements:{ schoolCode }, type:sequelize.QueryTypes.SELECT }).catch(() => []);
@@ -299,12 +305,49 @@ exports.getChildReportCardDetails = async (req, res) => {
     const late = attendance.filter(a => a.status === 'late').length;
     const rate = attendance.length ? Math.round((present / attendance.length) * 100) : 0;
 
+    // Optional class/stream position support for schools that enable ranking, including 8-4-4.
+    // This is calculated from published records in the same school/class and returned separately
+    // so the report template can show it only when available/enabled.
+    let ranking = { classPosition: null, classSize: null, streamPosition: null, streamSize: null, showClassPosition: false, showStreamPosition: false };
+    try {
+      const reportSettings = school?.settings?.reportCardSettings || school?.reportCardSettings || {};
+      const showClassPosition = reportSettings.showClassPosition === true || reportSettings.showPositions === true || ['844','8-4-4'].includes(String(curriculum).toLowerCase());
+      const showStreamPosition = reportSettings.showStreamPosition === true;
+      if ((showClassPosition || showStreamPosition) && student.classId) {
+        const peers = await sequelize.query(`
+          SELECT ar."studentId", AVG(COALESCE(ar."score",0)) AS avg_score
+          FROM "AcademicRecords" ar
+          JOIN "Students" st ON st."id" = ar."studentId"
+          JOIN "Users" u ON u."id" = st."userId"
+          WHERE u."schoolCode" = :schoolCode
+            AND st."classId" = :classId
+            AND (ar."isPublished" = true OR ar."status" = 'published')
+          GROUP BY ar."studentId"
+          ORDER BY avg_score DESC
+        `, { replacements:{ schoolCode, classId: student.classId }, type:sequelize.QueryTypes.SELECT }).catch(() => []);
+        const ordered = peers.map((p, idx) => ({ studentId:Number(p.studentId), avg:Number(p.avg_score || 0), rank:idx + 1 }));
+        const mine = ordered.find(p => p.studentId === Number(student.id));
+        ranking = {
+          classPosition: mine?.rank || null,
+          classSize: ordered.length || null,
+          streamPosition: mine?.rank || null,
+          streamSize: ordered.length || null,
+          showClassPosition,
+          showStreamPosition
+        };
+      }
+    } catch (rankErr) { console.warn('Report position calculation skipped:', rankErr.message); }
+
     res.json({ success:true, data:{
       student: { id:student.id, elimuid:student.elimuid, grade:student.grade, status:student.status, classId:student.classId, photo:student.User?.profileImage || student.profileImage || student.photo || student.passportPhoto },
       user: { name:student.User?.name, email:student.User?.email, phone:student.User?.phone },
-      classTeacher: classTeacher?.User ? { name:classTeacher.User.name, email:classTeacher.User.email, phone:classTeacher.User.phone } : null,
+      classTeacher: classTeacher?.User ? { name:classTeacher.User.name, email:classTeacher.User.email, phone:classTeacher.User.phone, signature:safeSig(classTeacher, classTeacher.User), signatureUrl:safeSig(classTeacher, classTeacher.User) } : null,
+      headteacher: adminSigner?.User ? { name:adminSigner.User.name, email:adminSigner.User.email, phone:adminSigner.User.phone, signature:safeSig(adminSigner, adminSigner.User), signatureUrl:safeSig(adminSigner, adminSigner.User) } : null,
+      principal: adminSigner?.User ? { name:adminSigner.User.name, email:adminSigner.User.email, phone:adminSigner.User.phone, signature:safeSig(adminSigner, adminSigner.User), signatureUrl:safeSig(adminSigner, adminSigner.User) } : null,
+      reportSignatures: { classTeacher:safeSig(classTeacher, classTeacher?.User), headteacher:safeSig(adminSigner, adminSigner?.User), principal:safeSig(adminSigner, adminSigner?.User) },
       academicSummary: { overallAverage: records.length ? Math.round(records.reduce((sum, r) => sum + Number(r.score || 0), 0) / records.length) : 0, subjects },
       attendanceSummary: { rate, present, absent, late },
+      ranking,
       recentAssessments: records.slice(0, 5).map(r => ({ subject:r.subject, assessment:r.assessmentName, score:r.score, grade:gradeFromScore(r.score), term:r.term, year:r.year, date:r.date })),
       school: { name:school?.name || null, schoolName:school?.name || null, schoolCode, curriculum, system:curriculum, schoolLevel, logo:school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null, branding:school?.settings?.branding || {} }
     }});
@@ -439,7 +482,7 @@ exports.getSubscriptionPlans = async (req, res) => {
         const amount = Number(p.amount ?? p.price ?? p.monthlyPriceKes ?? p.price_kes ?? 0) || 0;
         return {
           id: code,
-          code: code === 'basic' ? 'child_essential' : code === 'premium' ? 'child_smart' : code === 'ultimate' ? 'child_genius' : (code.startsWith('child_') ? code : `child_${code}`),
+          code: code === 'basic' || code === 'child_essential' ? 'child_basic' : code === 'premium' || code === 'child_smart' ? 'child_premium' : code === 'ultimate' || code === 'child_genius' ? 'child_ultimate' : (code.startsWith('child_') ? code : `child_${code}`),
           name: p.displayName || p.name || code,
           displayName: p.displayName || p.name || code,
           price: amount,
@@ -478,9 +521,9 @@ exports.getSubscriptionPlans = async (req, res) => {
       })) });
     }
     res.json({ success: true, data: [
-      { id: 'child_essential', code:'child_essential', name: 'Essential', price: 100, currency: 'KES', interval: 'month', features: ['Report cards', 'Attendance', 'Homework tracking', 'Teacher communication'] },
-      { id: 'child_smart', code:'child_smart', name: 'Smart', price: 300, currency: 'KES', interval: 'month', features: ['Everything in Essential', 'Progress analytics', 'Study insights'] },
-      { id: 'child_genius', code:'child_genius', name: 'Genius', price: 500, currency: 'KES', interval: 'month', features: ['Everything in Smart', 'AI tutor', 'Full analytics'] }
+      { id: 'child_basic', code:'child_basic', name: 'Basic', displayName:'Basic', price: 100, monthlyPriceKes:100, currency: 'KES', interval: 'month', features: ['Report cards', 'Attendance', 'Progress'], limits:{ aiQuestionsPerDay:0, aiQuestionsPerMonth:0, days:30 } },
+      { id: 'child_premium', code:'child_premium', name: 'Premium', displayName:'Premium', price: 250, monthlyPriceKes:250, currency: 'KES', interval: 'month', features: ['Everything in Basic', 'AI Tutor: 6 messages/day', 'Child timetable if school has timetable'], limits:{ aiQuestionsPerDay:6, aiQuestionsPerMonth:180, days:30 } },
+      { id: 'child_ultimate', code:'child_ultimate', name: 'Ultimate', displayName:'Ultimate', price: 500, monthlyPriceKes:500, currency: 'KES', interval: 'month', features: ['Everything in Premium', 'Extended AI Tutor', 'Live child analytics', 'Stronger alerts', 'Child recommendations'], limits:{ aiQuestionsPerDay:50, aiQuestionsPerMonth:1500, days:30 } }
     ] });
   } catch (error) {
     console.error('Get plans error:', error);

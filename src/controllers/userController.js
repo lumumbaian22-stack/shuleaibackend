@@ -1,5 +1,5 @@
 // src/controllers/userController.js
-const { User, Student, Teacher, Parent, AcademicRecord, Attendance, Alert } = require('../models');
+const { User, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, Alert } = require('../models');
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 const path = require('path');
@@ -251,17 +251,29 @@ exports.uploadSignature = async (req, res) => {
         await file.mv(uploadPath);
         
         const signatureUrl = `/uploads/signatures/${fileName}`;
-        
-        // For teachers, store signature in Teacher model
+        const absoluteSignatureUrl = `${req.protocol}://${req.get('host')}${signatureUrl}`;
+
+        // Keep a role-agnostic copy on the User preferences so report cards can still
+        // show signatures even if an older database has not added role-specific fields yet.
+        const preferences = { ...(req.user.preferences || {}) };
+        preferences.signatureUrl = signatureUrl;
+        preferences.signatureAbsoluteUrl = absoluteSignatureUrl;
+        await req.user.update({ preferences }).catch(() => null);
+
+        // Store role-specific signature too. These are used by report-card generation.
         if (req.user.role === 'teacher') {
-            const Teacher = require('../models').Teacher;
             await Teacher.update(
-                { signature: signatureUrl },
+                { signature: signatureUrl, signatureUrl },
                 { where: { userId: req.user.id } }
-            );
+            ).catch((err) => console.warn('Teacher signature field update skipped:', err.message));
+        } else if (req.user.role === 'admin') {
+            await Admin.update(
+                { signature: signatureUrl, signatureUrl },
+                { where: { userId: req.user.id } }
+            ).catch((err) => console.warn('Admin signature field update skipped:', err.message));
         }
         
-        res.json({ success: true, data: { signatureUrl } });
+        res.json({ success: true, data: { signatureUrl, signature: signatureUrl, absoluteSignatureUrl } });
     } catch (error) {
         console.error('Signature upload error:', error);
         res.status(500).json({ success: false, message: error.message });

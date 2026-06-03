@@ -356,7 +356,7 @@ exports.getParentConversations = async (req, res) => {
          FROM "Students" s
          JOIN "Users" su ON su."id" = s."userId"
          JOIN "StudentParents" sp ON sp."studentId" = s."id"
-         JOIN "Parents" p ON p."id" = sp."parentId"
+         LEFT JOIN "Parents" p ON (p."id" = sp."parentId" OR p."userId" = sp."parentId")
          JOIN "Users" pu ON pu."id" = p."userId"
          LEFT JOIN "Classes" c ON c."id" = s."classId"
         WHERE su."schoolCode" = :schoolCode
@@ -364,6 +364,7 @@ exports.getParentConversations = async (req, res) => {
           AND pu."role" = 'parent'
           AND pu."isActive" = true
           AND s."classId" IN (:classIds)
+          AND COALESCE(sp."status", 'active') IN ('active','approved','verified','linked')
         ORDER BY pu."name" ASC, "studentName" ASC`,
       { replacements: { schoolCode: req.user.schoolCode, classIds }, type: sequelize.QueryTypes.SELECT }
     ).catch(() => []);

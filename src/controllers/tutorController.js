@@ -6,15 +6,18 @@ const { detectTopic, buildTutorAnswer } = require('../services/tutor/tutorKnowle
 const { callStudentTutorAI, getAIProviderConfig } = require('../services/aiProviderService');
 
 const CHILD_AI_PLAN_LIMITS = {
-  child_essential: { daily: 20, monthly: 600, label: 'Essential' },
-  essential: { daily: 20, monthly: 600, label: 'Essential' },
-  basic: { daily: 20, monthly: 600, label: 'Essential' },
-  child_smart: { daily: 75, monthly: 2250, label: 'Smart' },
-  smart: { daily: 75, monthly: 2250, label: 'Smart' },
-  premium: { daily: 75, monthly: 2250, label: 'Smart' },
-  child_genius: { daily: 200, monthly: 6000, label: 'Genius' },
-  genius: { daily: 200, monthly: 6000, label: 'Genius' },
-  ultimate: { daily: 200, monthly: 6000, label: 'Genius' }
+  child_basic: { daily: 0, monthly: 0, label: 'Basic' },
+  child_essential: { daily: 0, monthly: 0, label: 'Basic' },
+  essential: { daily: 0, monthly: 0, label: 'Basic' },
+  basic: { daily: 0, monthly: 0, label: 'Basic' },
+  child_premium: { daily: 6, monthly: 180, label: 'Premium' },
+  child_smart: { daily: 6, monthly: 180, label: 'Premium' },
+  smart: { daily: 6, monthly: 180, label: 'Premium' },
+  premium: { daily: 6, monthly: 180, label: 'Premium' },
+  child_ultimate: { daily: 50, monthly: 1500, label: 'Ultimate' },
+  child_genius: { daily: 50, monthly: 1500, label: 'Ultimate' },
+  genius: { daily: 50, monthly: 1500, label: 'Ultimate' },
+  ultimate: { daily: 50, monthly: 1500, label: 'Ultimate' }
 };
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
@@ -23,15 +26,15 @@ function monthKey(date = new Date()) { return date.toISOString().slice(0, 7); }
 function normalizePlanCode(value) {
   const raw = String(value || '').toLowerCase().trim();
   if (!raw) return '';
-  if (raw.includes('genius') || raw === 'ultimate') return 'child_genius';
-  if (raw.includes('smart') || raw === 'premium') return 'child_smart';
-  if (raw.includes('essential') || raw === 'basic') return 'child_essential';
+  if (raw.includes('genius') || raw.includes('ultimate')) return 'child_ultimate';
+  if (raw.includes('smart') || raw.includes('premium')) return 'child_premium';
+  if (raw.includes('essential') || raw.includes('basic')) return 'child_basic';
   return raw.startsWith('child_') ? raw : `child_${raw}`;
 }
 
 function planLimitsFrom(subscription, plan) {
   const planCode = normalizePlanCode(subscription?.planCode || plan?.code || plan?.name || subscription?.planName);
-  const defaults = CHILD_AI_PLAN_LIMITS[planCode] || CHILD_AI_PLAN_LIMITS.child_essential;
+  const defaults = CHILD_AI_PLAN_LIMITS[planCode] || CHILD_AI_PLAN_LIMITS.child_basic;
   const limits = { ...(plan?.limits || {}), ...(subscription?.limits || {}) };
   const daily = Number(limits.aiQuestionsPerDay || limits.dailyAiTutorQuestions || limits.dailyQuestions || defaults.daily);
   const monthly = Number(limits.aiQuestionsPerMonth || limits.monthlyAiTutorQuestions || limits.monthlyQuestions || defaults.monthly || (daily * 30));
@@ -130,9 +133,9 @@ exports.getTutorConfig = async (req, res) => {
       provider: providerConfig.provider,
       model: providerConfig.provider === 'anthropic' ? providerConfig.anthropic.model : providerConfig.deepseek.model,
       plans: [
-        { code: 'child_essential', name: 'Essential', dailyLimit: 20, monthlyLimit: 600, priceKes: 100 },
-        { code: 'child_smart', name: 'Smart', dailyLimit: 75, monthlyLimit: 2250, priceKes: 250 },
-        { code: 'child_genius', name: 'Genius', dailyLimit: 200, monthlyLimit: 6000, priceKes: 500 }
+        { code: 'child_basic', name: 'Basic', dailyLimit: 0, monthlyLimit: 0, priceKes: 100, features:['Report cards','Attendance','Progress'] },
+        { code: 'child_premium', name: 'Premium', dailyLimit: 6, monthlyLimit: 180, priceKes: 250, features:['Basic features','Limited AI Tutor','Child timetable where school has timetable'] },
+        { code: 'child_ultimate', name: 'Ultimate', dailyLimit: 50, monthlyLimit: 1500, priceKes: 500, features:['Premium features','Extended AI Tutor','Live child analytics','Recommendations'] }
       ]
     }
   });
@@ -156,13 +159,17 @@ exports.askTutor = async (req, res) => {
     if (!subscription) {
       return res.status(403).json({
         success: false,
-        message: 'AI Tutor is locked. Ask your parent to activate an Essential, Smart, or Genius plan for this child.',
-        data: { locked: true, subscriptionRequired: true, freeTier: false, plans: ['Essential', 'Smart', 'Genius'] }
+        message: 'AI Tutor is locked. Ask your parent to activate Premium or Ultimate for this child.',
+        data: { locked: true, subscriptionRequired: true, freeTier: false, plans: ['Premium', 'Ultimate'] }
       });
     }
 
     const plan = subscription.SubscriptionPlan || await SubscriptionPlan.findByPk(subscription.planId).catch(() => null);
     const planLimit = planLimitsFrom(subscription, plan);
+    if (planLimit.dailyLimit <= 0) {
+      return res.status(403).json({ success: false, message: 'AI Tutor is available on Premium and Ultimate. Basic includes report cards, attendance, and progress only.', data: { locked: true, plan: planLimit.planName, dailyLimit: 0 } });
+    }
+
     const usageDate = todayISO();
     const usageMonth = monthKey();
     let usage = await TutorUsage.findOne({ where: { schoolId, studentId: realStudentId, usageDate } });

@@ -66,6 +66,14 @@ module.exports = (sequelize, DataTypes) => {
         saturday: []
       }
     },
+    signature: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    signatureUrl: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
     reminders: { 
       type: DataTypes.JSONB, 
       defaultValue: [] 

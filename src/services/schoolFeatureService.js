@@ -3,16 +3,29 @@ const { School, Settings, Subscription, SubscriptionPlan, sequelize } = require(
 
 const PLAN_CODES = ['starter', 'growth', 'enterprise'];
 const FEATURE_KEYS = {
-  dashboard: 'dashboard', teachers: 'teachers', teacher_approvals: 'teacher_approvals', students: 'students', analytics: 'analytics', alerts: 'alerts', finance_fees: 'finance_fees', parent_messages: 'parent_messages', school_settings: 'school_settings', billing: 'billing', classes: 'classes', report_cards: 'report_cards', calendar: 'calendar', school_branding: 'school_branding', timetable: 'timetable', duty: 'duty', fairness_report: 'fairness_report', departments: 'departments', bulk_sms: 'bulk_sms', senior_subject_choice: 'senior_subject_choice'
+  dashboard: 'dashboard', teachers: 'teachers', teacher_approvals: 'teacher_approvals', students: 'students', analytics: 'analytics', alerts: 'alerts', finance_fees: 'finance_fees', parent_messages: 'parent_messages', school_settings: 'school_settings', billing: 'billing', classes: 'classes', report_cards: 'report_cards', calendar: 'calendar', school_branding: 'school_branding', timetable: 'timetable', homework: 'homework', duty: 'duty', fairness_report: 'fairness_report', departments: 'departments', bulk_sms: 'bulk_sms', senior_subject_choice: 'senior_subject_choice'
 };
 const STARTER = ['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards'];
-const GROWTH = [...STARTER, 'calendar','school_branding','timetable'];
+const GROWTH = [...STARTER, 'calendar','school_branding','timetable','homework'];
 const ENTERPRISE = [...GROWTH, 'duty','fairness_report','departments','bulk_sms','senior_subject_choice'];
 const DEFAULT_PLANS = {
   starter: { code:'starter', name:'Starter', minStudents:50, maxStudents:400, features:STARTER, branding:'shule_ai_default' },
   growth: { code:'growth', name:'Growth', minStudents:401, maxStudents:500, features:GROWTH, branding:'school_custom_allowed' },
   enterprise: { code:'enterprise', name:'Enterprise', minStudents:501, maxStudents:null, features:ENTERPRISE, branding:'school_custom_allowed' }
 };
+
+function schoolHasFullAccessOverride(school) {
+  const settings = school?.settings || {};
+  const accessMode = String(school?.accessMode || settings.accessMode || '').toLowerCase();
+  const plan = String(school?.subscriptionPlan || settings.subscriptionPlan || '').toLowerCase();
+  return school?.pilotFullAccessEnabled === true
+    || settings.demoMode === true
+    || settings.freeFullAccess === true
+    || settings.fullAccess === true
+    || ['pilot_full_access','demo','demo_full_access','free_full_access','manual_full_access'].includes(accessMode)
+    || ['demo','demo_free','free_full_access','pilot_full','pilot_full_access'].includes(plan);
+}
+
 function normalizePlanCode(code) {
   const raw = String(code || '').toLowerCase().trim().replace(/^school_/, '');
   if (raw.includes('enterprise')) return 'enterprise';
@@ -54,6 +67,12 @@ async function getSchoolPlanCode(schoolCode) {
 }
 async function getSchoolFeatures(schoolCode) {
   const defs = await getPlanDefinitions();
+  const school = schoolCode ? await School.findOne({ where:{ schoolId:schoolCode } }).catch(() => null) : null;
+  if (schoolHasFullAccessOverride(school)) {
+    const plan = { ...defs.enterprise, code: 'enterprise', name: 'Enterprise / Full Access', override: true, features: ENTERPRISE };
+    const set = new Set(plan.features);
+    return { planCode: 'enterprise', plan, features: set, featureList: [...set], override: true };
+  }
   const code = await getSchoolPlanCode(schoolCode);
   const plan = defs[code] || defs.starter;
   const set = new Set(normalizeFeatures(plan));
@@ -77,4 +96,4 @@ async function getSchoolStructure(schoolCode) {
   const school = await School.findOne({ where:{ schoolId:schoolCode } }).catch(() => null);
   return { school, seniorEnabled: schoolHasSeniorEnabled(school) };
 }
-module.exports = { DEFAULT_PLANS, FEATURE_KEYS, getPlanDefinitions, getSchoolPlanCode, getSchoolFeatures, hasFeature, getSchoolStructure, schoolHasSeniorEnabled, normalizePlanCode };
+module.exports = { DEFAULT_PLANS, FEATURE_KEYS, getPlanDefinitions, getSchoolPlanCode, getSchoolFeatures, hasFeature, getSchoolStructure, schoolHasSeniorEnabled, schoolHasFullAccessOverride, normalizePlanCode };
