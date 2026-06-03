@@ -294,7 +294,8 @@ exports.getSchoolStatus = async (req, res) => {
     const studentCount = await User.count({ where: { schoolCode: school.schoolId, role: 'student' } }).catch(() => 0);
     const featureInfo = await schoolFeatureService.getSchoolFeatures(school.schoolId);
     const expiresAt = subscription?.endDate || school.subscriptionEndsAt || null;
-    const active = (subscription?.status === 'active' || school.subscriptionStatus === 'active') && (!expiresAt || new Date(expiresAt) > new Date());
+    const paidActive = (subscription?.status === 'active' || school.subscriptionStatus === 'active') && (!expiresAt || new Date(expiresAt) > new Date());
+    const active = !!(featureInfo.override || featureInfo.fullAccess || paidActive);
     res.json({
       success: true,
       data: {
@@ -303,6 +304,9 @@ exports.getSchoolStatus = async (req, res) => {
         schoolName: school.name,
         currentPlan: featureInfo.plan.name,
         planCode: featureInfo.planCode,
+        fullAccess: !!(featureInfo.override || featureInfo.fullAccess),
+        override: !!featureInfo.override,
+        accessMode: featureInfo.accessMode || (featureInfo.override ? 'pilot_full_access' : undefined),
         status: active ? 'active' : (subscription?.status || school.subscriptionStatus || 'pending'),
         billingCycle: subscription?.billingCycle || 'monthly',
         expiresAt,
@@ -310,8 +314,9 @@ exports.getSchoolStatus = async (req, res) => {
         studentCount,
         schoolTier: featureInfo.plan.name,
         features: featureInfo.featureList,
+        featureList: featureInfo.featureList,
         hiddenFeatures: [],
-        gracefulMode: !active,
+        gracefulMode: !active && !(featureInfo.override || featureInfo.fullAccess),
         subscription
       }
     });

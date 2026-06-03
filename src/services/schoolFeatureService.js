@@ -8,22 +8,62 @@ const FEATURE_KEYS = {
 const STARTER = ['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards'];
 const GROWTH = [...STARTER, 'calendar','school_branding','timetable','homework'];
 const ENTERPRISE = [...GROWTH, 'duty','fairness_report','departments','bulk_sms','senior_subject_choice'];
+const ALL_FEATURES = [...new Set([...ENTERPRISE, '*', 'ai_tutor', 'ai_tutor_limited', 'ai_tutor_extended', 'live_child_analytics', 'advanced_alerts', 'child_recommendations', 'advanced_report_cards'])];
 const DEFAULT_PLANS = {
   starter: { code:'starter', name:'Starter', minStudents:50, maxStudents:400, features:STARTER, branding:'shule_ai_default' },
   growth: { code:'growth', name:'Growth', minStudents:401, maxStudents:500, features:GROWTH, branding:'school_custom_allowed' },
   enterprise: { code:'enterprise', name:'Enterprise', minStudents:501, maxStudents:null, features:ENTERPRISE, branding:'school_custom_allowed' }
 };
 
+function truthy(value) {
+  if (value === true || value === 1) return true;
+  const text = String(value || '').trim().toLowerCase();
+  return ['true','1','yes','on','enabled','active','full','full_access','pilot','demo','free'].includes(text);
+}
+
 function schoolHasFullAccessOverride(school) {
-  const settings = school?.settings || {};
-  const accessMode = String(school?.accessMode || settings.accessMode || '').toLowerCase();
-  const plan = String(school?.subscriptionPlan || settings.subscriptionPlan || '').toLowerCase();
-  return school?.pilotFullAccessEnabled === true
-    || settings.demoMode === true
-    || settings.freeFullAccess === true
-    || settings.fullAccess === true
-    || ['pilot_full_access','demo','demo_full_access','free_full_access','manual_full_access'].includes(accessMode)
-    || ['demo','demo_free','free_full_access','pilot_full','pilot_full_access'].includes(plan);
+  const s = school?.toJSON ? school.toJSON() : (school || {});
+  const settings = s.settings || {};
+  const billing = settings.billing || {};
+  const access = settings.access || settings.schoolAccess || {};
+  const modeText = [
+    s.accessMode,
+    s.accessStatus,
+    s.subscriptionStatus,
+    s.subscriptionPlan,
+    s.plan,
+    s.tier,
+    s.status,
+    settings.accessMode,
+    settings.accessStatus,
+    settings.subscriptionPlan,
+    settings.currentPlan,
+    settings.plan,
+    billing.accessMode,
+    billing.subscriptionPlan,
+    billing.subscriptionStatus,
+    access.mode,
+    access.accessMode,
+    access.type
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  return truthy(s.pilotFullAccessEnabled)
+    || truthy(settings.pilotFullAccessEnabled)
+    || truthy(billing.pilotFullAccessEnabled)
+    || truthy(access.pilotFullAccessEnabled)
+    || truthy(s.demoMode)
+    || truthy(settings.demoMode)
+    || truthy(billing.demoMode)
+    || truthy(access.demoMode)
+    || truthy(s.freeFullAccess)
+    || truthy(settings.freeFullAccess)
+    || truthy(billing.freeFullAccess)
+    || truthy(access.freeFullAccess)
+    || truthy(s.fullAccess)
+    || truthy(settings.fullAccess)
+    || truthy(billing.fullAccess)
+    || truthy(access.fullAccess)
+    || /pilot[_\s-]*full|full[_\s-]*pilot|demo[_\s-]*full|free[_\s-]*full|full[_\s-]*access|manual[_\s-]*full/.test(modeText);
 }
 
 function normalizePlanCode(code) {
@@ -69,9 +109,9 @@ async function getSchoolFeatures(schoolCode) {
   const defs = await getPlanDefinitions();
   const school = schoolCode ? await School.findOne({ where:{ schoolId:schoolCode } }).catch(() => null) : null;
   if (schoolHasFullAccessOverride(school)) {
-    const plan = { ...defs.enterprise, code: 'enterprise', name: 'Enterprise / Full Access', override: true, features: ENTERPRISE };
+    const plan = { ...defs.enterprise, code: 'enterprise', name: 'Enterprise / Full Access', override: true, fullAccess: true, features: ALL_FEATURES };
     const set = new Set(plan.features);
-    return { planCode: 'enterprise', plan, features: set, featureList: [...set], override: true };
+    return { planCode: 'enterprise', plan, features: set, featureList: [...set], override: true, fullAccess: true, accessMode: 'pilot_full_access' };
   }
   const code = await getSchoolPlanCode(schoolCode);
   const plan = defs[code] || defs.starter;
@@ -82,7 +122,8 @@ async function hasFeature(schoolCode, feature) {
   const key = String(feature || '').trim();
   if (!key) return false;
   const { features, planCode } = await getSchoolFeatures(schoolCode);
-  if (planCode === 'enterprise' && (features.has('*') || DEFAULT_PLANS.enterprise.features.includes(key))) return true;
+  if (features.has('*')) return true;
+  if (planCode === 'enterprise' && DEFAULT_PLANS.enterprise.features.includes(key)) return true;
   return features.has(key);
 }
 function schoolHasSeniorEnabled(school) {
@@ -96,4 +137,4 @@ async function getSchoolStructure(schoolCode) {
   const school = await School.findOne({ where:{ schoolId:schoolCode } }).catch(() => null);
   return { school, seniorEnabled: schoolHasSeniorEnabled(school) };
 }
-module.exports = { DEFAULT_PLANS, FEATURE_KEYS, getPlanDefinitions, getSchoolPlanCode, getSchoolFeatures, hasFeature, getSchoolStructure, schoolHasSeniorEnabled, schoolHasFullAccessOverride, normalizePlanCode };
+module.exports = { DEFAULT_PLANS, FEATURE_KEYS, ALL_FEATURES, getPlanDefinitions, getSchoolPlanCode, getSchoolFeatures, hasFeature, getSchoolStructure, schoolHasSeniorEnabled, schoolHasFullAccessOverride, normalizePlanCode };

@@ -5,7 +5,7 @@ function requireFeature(featureKey) {
     try {
       const role = String(req.user?.role || '').toLowerCase();
       if (role === 'super_admin' || role === 'superadmin') return next();
-      const schoolCode = req.user?.schoolCode || req.body?.schoolCode || req.query?.schoolCode;
+      const schoolCode = req.user?.schoolCode || req.params?.schoolCode || req.body?.schoolCode || req.query?.schoolCode || req.schoolCode;
       const allowed = await features.hasFeature(schoolCode, featureKey);
       if (!allowed) return res.status(403).json({ success:false, code:'FEATURE_NOT_AVAILABLE_FOR_PLAN', message:'Feature is not available for this school plan.' });
       return next();
