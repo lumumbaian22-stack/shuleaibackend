@@ -1,5 +1,5 @@
 // src/controllers/studentController.js
-const { sequelize, Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Admin, Parent, School, Alert, TeacherSubjectAssignment } = require('../models');
+const { sequelize, Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School, Alert, TeacherSubjectAssignment } = require('../models');
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
@@ -608,7 +608,7 @@ exports.getStudentFullDetails = async (req, res) => {
 
         // Parents
         const parents = await student.getParents({
-            include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'preferences'] }]
+            include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
         });
         const parentList = parents.map(p => ({
             id: p.id,
@@ -622,21 +622,14 @@ exports.getStudentFullDetails = async (req, res) => {
         let classTeacher = null;
         const studentClass = await Class.findOne({ where: { schoolCode: student.User?.schoolCode || user.schoolCode, [Op.or]: [{ id: student.classId || 0 }, { name: student.grade }, { grade: student.grade }] } });
         if (studentClass?.teacherId) {
-            classTeacher = await Teacher.findByPk(studentClass.teacherId, { include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'preferences'] }] });
+            classTeacher = await Teacher.findByPk(studentClass.teacherId, { include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }] });
         }
         if (!classTeacher) {
             classTeacher = await Teacher.findOne({
                 where: { classTeacher: student.grade },
-                include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'preferences'] }]
+                include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
             });
         }
-
-        const adminSigner = await Admin.findOne({
-            where: {},
-            include: [{ model: User, attributes: ['id','name','email','phone','preferences'], where: { schoolCode: student.User?.schoolCode || user.schoolCode, role: 'admin' }, required: true }],
-            order: [['updatedAt','DESC']]
-        }).catch(() => null);
-        const safeSig = (model, linkedUser) => model?.signatureUrl || model?.signature || linkedUser?.preferences?.signatureUrl || linkedUser?.preferences?.signatureAbsoluteUrl || '';
 
         // Academic records (only published)
         const records = await AcademicRecord.findAll({
@@ -720,29 +713,8 @@ exports.getStudentFullDetails = async (req, res) => {
                 classTeacher: classTeacher ? {
                     name: classTeacher.User.name,
                     email: classTeacher.User.email,
-                    phone: classTeacher.User.phone,
-                    signature: safeSig(classTeacher, classTeacher.User),
-                    signatureUrl: safeSig(classTeacher, classTeacher.User)
+                    phone: classTeacher.User.phone
                 } : null,
-                headteacher: adminSigner?.User ? {
-                    name: adminSigner.User.name,
-                    email: adminSigner.User.email,
-                    phone: adminSigner.User.phone,
-                    signature: safeSig(adminSigner, adminSigner.User),
-                    signatureUrl: safeSig(adminSigner, adminSigner.User)
-                } : null,
-                principal: adminSigner?.User ? {
-                    name: adminSigner.User.name,
-                    email: adminSigner.User.email,
-                    phone: adminSigner.User.phone,
-                    signature: safeSig(adminSigner, adminSigner.User),
-                    signatureUrl: safeSig(adminSigner, adminSigner.User)
-                } : null,
-                reportSignatures: {
-                    classTeacher: safeSig(classTeacher, classTeacher?.User),
-                    headteacher: safeSig(adminSigner, adminSigner?.User),
-                    principal: safeSig(adminSigner, adminSigner?.User)
-                },
                 academicSummary: {
                     overallAverage,
                     termAverages,

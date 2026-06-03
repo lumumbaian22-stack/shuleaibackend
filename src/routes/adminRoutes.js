@@ -9,7 +9,6 @@ const classController = require('../controllers/classController');
 const analyticsController = require('../controllers/analyticsController'); // Add import
 const parentMessageController = require('../controllers/parentMessageController');
 const subjectSelectionController = require('../controllers/subjectSelectionController');
-const { requireFeature } = require('../middleware/featureGate');
 
 // ============ PUBLIC / SHARED ROUTES (any authenticated user) ============
 router.get('/settings', protect, adminController.getSchoolSettings);
@@ -62,18 +61,15 @@ router.get('/grades/stats', adminController.getStudentGrades);
 router.get('/attendance/stats', adminController.getAttendanceStats);
 
 // Duty Management
-router.post('/duty/generate', requireFeature('duty'), dutyController.generateDutyRoster);
+router.post('/duty/generate', dutyController.generateDutyRoster);
 router.get('/duty/stats', dutyController.getDutyStats);
-router.get('/duty/fairness-report', requireFeature('fairness_report'), dutyController.getFairnessReport);
+router.get('/duty/fairness-report', dutyController.getFairnessReport);
 router.get('/duty/understaffed', dutyController.getUnderstaffedAreas);
 router.get('/duty/teacher-workload', dutyController.getTeacherWorkload);
 router.post('/duty/adjust', dutyController.manualAdjustDuty);
 
 // School Settings (write – admin only)
 router.put('/settings', adminController.updateSchoolSettings);
-router.get('/assessment-settings', adminController.getAssessmentSettings);
-router.put('/assessment-settings', adminController.saveAssessmentSettings);
-
 
 // V102 locked curriculum + structure engine
 router.get('/curriculum/setup', adminController.getCurriculumSetup);

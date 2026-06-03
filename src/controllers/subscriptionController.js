@@ -1,6 +1,4 @@
 const { Op } = require('sequelize');
-const schoolFeatureService = require('../services/schoolFeatureService');
-const ownership = require('../services/parentOwnershipService');
 const {
   SubscriptionPlan,
   Subscription,
@@ -15,21 +13,6 @@ const {
 
 const SCHOOL_CORE_FEATURES = ['attendance', 'marks', 'students', 'teachers', 'basic_reports', 'fees'];
 const SCHOOL_PREMIUM_FEATURES = ['school_branding', 'ai_analytics', 'advanced_reports', 'advanced_timetable', 'smart_alerts', 'premium_dashboards', 'full_ai_tutor'];
-
-const DEFAULT_PARENT_PLANS = [
-  {
-    id:'child_basic', code:'child_basic', name:'Basic', displayName:'Basic', ownerType:'child', price:100, monthlyPriceKes:100,
-    features:['report_cards','attendance','progress'], limits:{ days:30, aiQuestionsPerDay:0, aiQuestionsPerMonth:0 }, sortOrder:1, isActive:true, source:'default_parent_tiers'
-  },
-  {
-    id:'child_premium', code:'child_premium', name:'Premium', displayName:'Premium', ownerType:'child', price:250, monthlyPriceKes:250,
-    features:['report_cards','attendance','progress','ai_tutor_limited','child_timetable'], limits:{ days:30, aiQuestionsPerDay:6, aiQuestionsPerMonth:180 }, sortOrder:2, isActive:true, source:'default_parent_tiers'
-  },
-  {
-    id:'child_ultimate', code:'child_ultimate', name:'Ultimate', displayName:'Ultimate', ownerType:'child', price:500, monthlyPriceKes:500,
-    features:['report_cards','attendance','progress','ai_tutor_extended','child_timetable','live_child_analytics','advanced_alerts','child_recommendations'], limits:{ days:30, aiQuestionsPerDay:50, aiQuestionsPerMonth:1500 }, sortOrder:3, isActive:true, source:'default_parent_tiers'
-  }
-];
 
 function normalizeCycle(cycle) {
   const value = String(cycle || 'monthly').toLowerCase();
@@ -142,23 +125,22 @@ async function getSchoolForUser(user) {
 function normalizeLookupCode(code, ownerType) {
   const raw = String(code || '').trim().toLowerCase().replace(/\s+/g, '_');
   if (ownerType === 'school') {
-    if (!raw || raw === 'starter' || raw === 'school_starter') return 'starter';
-    if (raw.includes('enterprise')) return 'enterprise';
-    if (raw.includes('growth')) return 'growth';
-    if (raw.includes('starter')) return 'starter';
-    return raw.replace(/^school_/, '');
+    if (!raw || raw === 'growth' || raw === 'school_growth') return 'school_growth';
+    if (raw.includes('enterprise')) return 'school_enterprise';
+    if (raw.includes('starter')) return 'school_starter';
+    return raw.startsWith('school_') ? raw : `school_${raw}`;
   }
-  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_basic';
-  if (raw.includes('genius') || raw.includes('ultimate')) return 'child_ultimate';
-  if (raw.includes('smart') || raw.includes('premium')) return 'child_premium';
+  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_essential';
+  if (raw.includes('genius') || raw.includes('ultimate')) return 'child_genius';
+  if (raw.includes('smart') || raw.includes('premium')) return 'child_smart';
   return raw.startsWith('child_') ? raw : `child_${raw}`;
 }
 
 async function getPlanByCode(code, ownerType) {
   const canonical = normalizeLookupCode(code, ownerType);
   const aliases = ownerType === 'school'
-    ? { starter: ['starter','school_starter'], growth: ['growth','school_growth'], enterprise: ['enterprise','school_enterprise'] }
-    : { child_basic: ['child_basic','child_essential','basic','essential'], child_premium: ['child_premium','child_smart','premium','smart'], child_ultimate: ['child_ultimate','child_genius','ultimate','genius'] };
+    ? { school_starter: ['school_starter','starter'], school_growth: ['school_growth','growth'], school_enterprise: ['school_enterprise','enterprise'] }
+    : { child_essential: ['child_essential','child_basic','essential','basic'], child_smart: ['child_smart','child_premium','smart','premium'], child_genius: ['child_genius','child_ultimate','genius','ultimate'] };
   const values = aliases[canonical] || [canonical, String(code || '').toLowerCase()];
   return SubscriptionPlan.findOne({
     where: {
@@ -182,7 +164,7 @@ async function findOrCreateSchoolSubscription(school, plan, cycle) {
       schoolId: school.id,
       schoolCode: school.schoolId,
       planId: plan?.id || null,
-      planCode: plan?.code || 'starter',
+      planCode: plan?.code || 'school_starter',
       planName: plan?.displayName || plan?.name || 'Starter',
       billingCycle: normalizeCycle(cycle),
       status: 'pending',
@@ -202,8 +184,8 @@ async function findOrCreateChildSubscription(parent, student, plan, cycle) {
       parentId: parent.id,
       studentId: student.id,
       planId: plan?.id || null,
-      planCode: plan?.code || 'child_basic',
-      planName: plan?.displayName || plan?.name || 'Basic',
+      planCode: plan?.code || 'child_essential',
+      planName: plan?.displayName || plan?.name || 'Essential',
       billingCycle: normalizeCycle(cycle),
       status: 'pending',
       features: plan?.features || [],
@@ -235,7 +217,7 @@ async function renewSubscription(subscription, plan, cycle, paymentId) {
     if (student) {
       const childPlanName = String(plan.name || '').replace(/^child_/, '').replace(/^school_/, '') || 'essential';
       await student.update({
-        subscriptionPlan: ['basic','premium','ultimate'].includes(childPlanName) ? childPlanName : (childPlanName === 'genius' || childPlanName === 'ultimate' ? 'ultimate' : childPlanName === 'smart' || childPlanName === 'premium' ? 'premium' : 'basic'),
+        subscriptionPlan: ['basic','premium','ultimate'].includes(childPlanName) ? childPlanName : (childPlanName === 'genius' ? 'ultimate' : childPlanName === 'smart' ? 'premium' : 'basic'),
         subscriptionStatus: 'active',
         subscriptionStartDate: period.startDate,
         subscriptionExpiry: period.endDate,
@@ -256,20 +238,11 @@ exports.daysRemaining = daysRemaining;
 exports.getPlans = async (req, res) => {
   try {
     const ownerType = req.query.ownerType;
-    // v118: Super Admin platform plan settings are the only source of truth for school plans.
-    if (ownerType === 'school') {
-      const defs = await schoolFeatureService.getPlanDefinitions();
-      return res.json({ success:true, data:Object.values(defs).map(p => ({ id:p.code, code:p.code, name:p.name, displayName:p.name, ownerType:'school', price:p.amount || 0, monthlyPriceKes:p.amount || 0, features:p.features, minStudents:p.minStudents, maxStudents:p.maxStudents, branding:p.branding, isActive:true, source:'super_admin_platform_settings' })) });
-    }
-    if (ownerType === 'child') {
+    // v117: if Super Admin has saved platform plan JSON, that is the source of truth.
+    // This prevents the admin/parent dashboards from showing old seeded Monthly/Termly/Yearly or Starter/Growth/Enterprise cards beside the new live cards.
+    if (ownerType === 'school' || ownerType === 'child') {
       const configured = await getPlatformConfiguredPlans(ownerType);
-      const source = configured && configured.length ? configured : DEFAULT_PARENT_PLANS;
-      const normalized = source.map((plan, idx) => {
-        const code = normalizeLookupCode(plan.code || plan.name, 'child');
-        const base = DEFAULT_PARENT_PLANS.find(p => p.code === code) || plan;
-        return { ...base, ...plan, code, id: plan.id || code, ownerType:'child', sortOrder: plan.sortOrder ?? idx + 1, isActive: plan.isActive !== false };
-      }).filter(p => ['child_basic','child_premium','child_ultimate'].includes(p.code));
-      return res.json({ success: true, data: normalized });
+      if (configured && configured.length) return res.json({ success: true, data: configured });
     }
     const where = { isActive: true };
     if (ownerType) where.ownerType = ownerType;
@@ -290,33 +263,28 @@ exports.getSchoolStatus = async (req, res) => {
   try {
     const school = await getSchoolForUser(req.user);
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
-    const subscription = await Subscription.findOne({ where: { ownerType: 'school', schoolCode: school.schoolId }, include: [{ model: SubscriptionPlan }], order:[['updatedAt','DESC']] });
+    const subscription = await Subscription.findOne({ where: { ownerType: 'school', schoolCode: school.schoolId }, include: [{ model: SubscriptionPlan }] });
     const studentCount = await User.count({ where: { schoolCode: school.schoolId, role: 'student' } }).catch(() => 0);
-    const featureInfo = await schoolFeatureService.getSchoolFeatures(school.schoolId);
-    const expiresAt = subscription?.endDate || school.subscriptionEndsAt || null;
-    const paidActive = (subscription?.status === 'active' || school.subscriptionStatus === 'active') && (!expiresAt || new Date(expiresAt) > new Date());
-    const active = !!(featureInfo.override || featureInfo.fullAccess || paidActive);
+    const active = subscription?.status === 'active' && subscription.endDate && new Date(subscription.endDate) > new Date();
+    const tier = subscription?.planName || 'Starter';
     res.json({
       success: true,
       data: {
         schoolId: school.id,
         schoolCode: school.schoolId,
         schoolName: school.name,
-        currentPlan: featureInfo.plan.name,
-        planCode: featureInfo.planCode,
-        fullAccess: !!(featureInfo.override || featureInfo.fullAccess),
-        override: !!featureInfo.override,
-        accessMode: featureInfo.accessMode || (featureInfo.override ? 'pilot_full_access' : undefined),
-        status: active ? 'active' : (subscription?.status || school.subscriptionStatus || 'pending'),
+        currentPlan: tier,
+        planCode: subscription?.planCode || 'school_starter',
+        status: active ? 'active' : (subscription?.status || 'pending'),
         billingCycle: subscription?.billingCycle || 'monthly',
-        expiresAt,
-        daysRemaining: daysRemaining(expiresAt, active ? 'active' : (subscription?.status || school.subscriptionStatus)),
+        expiresAt: subscription?.endDate || null,
+        daysRemaining: daysRemaining(subscription?.endDate, active ? 'active' : subscription?.status),
         studentCount,
-        schoolTier: featureInfo.plan.name,
-        features: featureInfo.featureList,
-        featureList: featureInfo.featureList,
-        hiddenFeatures: [],
-        gracefulMode: !active && !(featureInfo.override || featureInfo.fullAccess),
+        schoolTier: tier,
+        coreFeatures: SCHOOL_CORE_FEATURES,
+        premiumLocked: !active,
+        lockedFeatures: active ? [] : SCHOOL_PREMIUM_FEATURES,
+        gracefulMode: !active,
         subscription
       }
     });
@@ -324,7 +292,6 @@ exports.getSchoolStatus = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
 
 exports.getMyStatus = async (req, res) => {
   try {
@@ -336,11 +303,10 @@ exports.getMyStatus = async (req, res) => {
       return res.json({ success:true, data:{ studentId:student.id, subscription: sub, status: sub?.status || student.subscriptionStatus, plan: sub?.planName || student.subscriptionPlan, daysRemaining: daysRemaining(sub?.endDate, sub?.status) } });
     }
     if (req.user.role !== 'parent') return res.json({ success:true, data:{ role:req.user.role } });
-    const parent = await Parent.findOne({ where:{ userId:req.user.id } });
+    const parent = await getParentWithStudents(req.user.id);
     if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-    const ownedChildren = await ownership.listOwnedStudents({ parentUserId:req.user.id, schoolCode:req.user.schoolCode });
     const students = [];
-    for (const child of ownedChildren || []) {
+    for (const child of parent.students || []) {
       const sub = await Subscription.findOne({ where:{ ownerType:'child', studentId:child.id }, include:[{ model:SubscriptionPlan }] });
       students.push({ id:child.id, name:child.User?.name || child.elimuid, subscription:sub, plan:sub?.planName || child.subscriptionPlan, status:sub?.status || child.subscriptionStatus, expiry:sub?.endDate || child.subscriptionExpiry, remainingDays: daysRemaining(sub?.endDate || child.subscriptionExpiry, sub?.status || child.subscriptionStatus) });
     }
@@ -350,8 +316,9 @@ exports.getMyStatus = async (req, res) => {
 
 exports.getChildStatus = async (req, res) => {
   try {
-    const owned = await ownership.assertParentOwnsStudent({ parentUserId:req.user.id, studentId:req.params.studentId, schoolCode:req.user.schoolCode });
-    const child = owned.student;
+    const parent = await getParentWithStudents(req.user.id);
+    const child = (parent?.students || []).find(s => String(s.id) === String(req.params.studentId));
+    if (!child) return res.status(404).json({ success:false, message:'Child not found or not linked to this parent' });
     const sub = await Subscription.findOne({ where:{ ownerType:'child', studentId:child.id }, include:[{ model:SubscriptionPlan }] });
     res.json({ success:true, data:{ studentId:child.id, childName:child.User?.name || child.elimuid, subscription:sub, status:sub?.status || child.subscriptionStatus, plan:sub?.planName || child.subscriptionPlan, daysRemaining:daysRemaining(sub?.endDate || child.subscriptionExpiry, sub?.status || child.subscriptionStatus) } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
@@ -359,21 +326,22 @@ exports.getChildStatus = async (req, res) => {
 
 exports.createChildSubscriptionRequest = async (req, res) => {
   try {
-    const { studentId, planCode='child_basic', billingCycle='monthly' } = req.body || {};
-    const owned = await ownership.assertParentOwnsStudent({ parentUserId:req.user.id, studentId, schoolCode:req.user.schoolCode });
-    const parent = owned.parent;
-    const child = owned.student;
+    const { studentId, planCode='child_essential', billingCycle='monthly' } = req.body || {};
+    const parent = await getParentWithStudents(req.user.id);
+    if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
+    const child = (parent.students || []).find(s => String(s.id) === String(studentId)) || parent.students?.[0];
+    if (!child) return res.status(404).json({ success:false, message:'Child not found' });
     const plan = await getPlanByCode(planCode, 'child');
     if (!plan) return res.status(404).json({ success:false, message:'Child subscription plan not found' });
     const subscription = await findOrCreateChildSubscription(parent, child, plan, billingCycle);
     await subscription.update({ planId:plan.id, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle:normalizeCycle(billingCycle), status:'pending', features:plan.features || [], limits:plan.limits || {} });
-    res.json({ success:true, message:'Child subscription request prepared. Complete payment/manual verification to activate.', data:{ subscription, amount:planAmount(plan, billingCycle), plan:planPayload(plan) } });
+    res.json({ success:true, message:'Child subscription request prepared. Complete STK payment to activate.', data:{ subscription, amount:planAmount(plan, billingCycle), plan:planPayload(plan) } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };
 
 exports.createSchoolSubscriptionRequest = async (req, res) => {
   try {
-    const { planCode='growth', billingCycle='monthly' } = req.body || {};
+    const { planCode='school_growth', billingCycle='monthly' } = req.body || {};
     const school = await getSchoolForUser(req.user);
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
     const plan = await getPlanByCode(planCode, 'school');

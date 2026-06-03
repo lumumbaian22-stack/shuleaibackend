@@ -1,6 +1,5 @@
 const { Op } = require('sequelize');
 const { Alert, User, Student, Parent, Teacher, Class, SchoolCalendar, sequelize } = require('../models');
-const ownership = require('./parentOwnershipService');
 
 function normalizeRole(role) {
   const r = String(role || '').toLowerCase().replace('-', '_');
@@ -48,22 +47,22 @@ function dataDate(data, alert, ...keys) {
   return null;
 }
 
-
-async function getStudentClassId(studentId, schoolCode) {
-  if (!studentId) return null;
-  const row = await Student.findOne({
-    where: { id: Number(studentId) },
-    include: [{ model: User, required: true, attributes: ['id','schoolCode'], where: { schoolCode } }],
-    attributes: ['id','classId']
-  }).catch(() => null);
-  return row?.classId || null;
-}
-
 async function parentCanViewStudent(userId, studentId, schoolCode) {
   if (!studentId) return true;
-  return await ownership.ownsStudentId({ parentUserId:userId, studentId, schoolCode });
+  const rows = await sequelize.query(
+    `SELECT 1
+       FROM "StudentParents" sp
+       LEFT JOIN "Parents" p ON p."id" = sp."parentId"
+       JOIN "Students" s ON s."id" = sp."studentId"
+       JOIN "Users" su ON su."id" = s."userId"
+      WHERE sp."studentId" = :studentId
+        AND (p."userId" = :userId OR (p."id" IS NULL AND sp."parentId" = :userId))
+        AND su."schoolCode" = :schoolCode
+      LIMIT 1`,
+    { replacements: { userId, studentId, schoolCode }, type: sequelize.QueryTypes.SELECT }
+  ).catch(() => []);
+  return rows.length > 0;
 }
-
 
 async function teacherCanViewStudent(userId, studentId, schoolCode) {
   if (!studentId) return true;
@@ -120,14 +119,6 @@ async function userMatchesAlert(user, alert, options = {}) {
   const studentId = Number(raw.studentId || data.studentId || data.student_id || 0) || null;
   if (requestedStudentId && studentId && Number(studentId) !== requestedStudentId) return false;
 
-  // v119: when a parent has selected a child, child-specific alerts must not leak from siblings.
-  // We still allow school-wide/system/parent-account alerts, and class alerts only when they match the selected child's class.
-  let requestedStudentClassId = null;
-  if (requestedStudentId && role === 'parent') {
-    if (!(await parentCanViewStudent(user.id, requestedStudentId, schoolCode))) return false;
-    requestedStudentClassId = await getStudentClassId(requestedStudentId, schoolCode);
-  }
-
   if (studentId) {
     if (role === 'student') {
       const student = await Student.findOne({ where: { id: studentId, userId: user.id } }).catch(() => null);
@@ -140,17 +131,6 @@ async function userMatchesAlert(user, alert, options = {}) {
   const classIds = dataArray(data, 'targetClassIds', 'classIds');
   const classId = raw.classId || data.classId;
   const effectiveClassIds = new Set([...classIds, ...(classId ? [String(classId)] : [])]);
-  if (requestedStudentId && role === 'parent' && effectiveClassIds.size) {
-    if (!requestedStudentClassId || !effectiveClassIds.has(String(requestedStudentClassId))) return false;
-  }
-  if (requestedStudentId && role === 'parent' && !studentId && !effectiveClassIds.size) {
-    const explicitOtherStudent = dataArray(data, 'studentIds', 'targetStudentIds').filter(Boolean);
-    if (explicitOtherStudent.length && !explicitOtherStudent.includes(String(requestedStudentId))) return false;
-    const scopeText = normalizeScope(data.scope || raw.scope || (data.platformAlert ? 'platform' : 'user'));
-    const targetUsers = dataArray(data, 'targetUserIds', 'receiverUserIds', 'userIds');
-    const safeGeneral = ['school','platform','user'].includes(scopeText) || targetUsers.includes(String(user.id)) || Number(raw.userId || raw.targetUserId || 0) === Number(user.id);
-    if (!safeGeneral) return false;
-  }
   if (effectiveClassIds.size) {
     if (role === 'student') {
       const student = await Student.findOne({ where: { userId: user.id } }).catch(() => null);
