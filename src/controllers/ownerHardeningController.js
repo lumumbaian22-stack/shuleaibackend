@@ -2,6 +2,7 @@ const { sequelize, School, User, Student, Teacher, Parent, Class, Alert } = requ
 const path = require('path');
 const { getRoleAnalytics } = require('../services/ownerAnalyticsEngine');
 const { generateTemporaryPassword } = require('../utils/passwords');
+const schoolFeatureService = require('../services/schoolFeatureService');
 
 
 const BRAND_COLOR_PRESETS = {
@@ -30,18 +31,18 @@ function resolveColors(colorName, primaryColor, accentColor) {
   };
 }
 
-function publicBrandingPayload(school) {
-  const branding = school?.settings?.branding || {};
+function publicBrandingPayload(school, forceDefault = false) {
+  const branding = forceDefault ? {} : (school?.settings?.branding || {});
   const colors = resolveColors(branding.colorName, branding.primaryColor, branding.accentColor);
   const logo = branding.logoDataUrl || branding.logoUrl || branding.logo || null;
   return {
     schoolId: school.schoolId,
     name: school.name,
-    schoolName: branding.schoolName || school.name,
-    displayName: branding.schoolName || school.name,
-    logo,
-    logoUrl: branding.logoUrl || null,
-    logoDataUrl: branding.logoDataUrl || null,
+    schoolName: forceDefault ? 'Shule AI' : (branding.schoolName || school.name),
+    displayName: forceDefault ? 'Shule AI' : (branding.schoolName || school.name),
+    logo: forceDefault ? null : logo,
+    logoUrl: forceDefault ? null : (branding.logoUrl || null),
+    logoDataUrl: forceDefault ? null : (branding.logoDataUrl || null),
     logoSource: branding.logoDataUrl ? 'upload' : (branding.logoUrl ? 'url' : 'fallback'),
     colorName: colors.colorName,
     primaryColor: colors.primaryColor,
@@ -101,7 +102,8 @@ exports.getSchoolBranding = async (req, res) => {
     if (req.user.role !== 'super_admin' && schoolCode !== req.user.schoolCode) return res.status(403).json({ success: false, message: 'Cross-school branding access blocked' });
     const school = await School.findOne({ where: { schoolId: schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
-    return res.json({ success: true, data: publicBrandingPayload(school) });
+    const canBrand = req.user.role === 'super_admin' || await schoolFeatureService.hasFeature(schoolCode, 'school_branding');
+    return res.json({ success: true, data: publicBrandingPayload(school, !canBrand) });
   } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
 };
 
@@ -112,6 +114,7 @@ exports.updateSchoolBranding = async (req, res) => {
     if (req.user.role !== 'super_admin' && schoolCode !== req.user.schoolCode) return res.status(403).json({ success: false, message: 'Cross-school branding update blocked' });
     const school = await School.findOne({ where: { schoolId: schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    if (req.user.role !== 'super_admin' && !(await schoolFeatureService.hasFeature(schoolCode, 'school_branding'))) return res.status(403).json({ success:false, code:'FEATURE_NOT_AVAILABLE_FOR_PLAN', message:'School branding is not included in this school plan.' });
     const current = school.settings || {};
     const branding = { ...(current.branding || {}) };
     const requestedName = String(req.body.schoolName || req.body.name || req.body.displayName || '').trim();
@@ -153,6 +156,7 @@ exports.uploadSchoolLogo = async (req, res) => {
     if (req.user.role !== 'super_admin' && schoolCode !== req.user.schoolCode) return res.status(403).json({ success: false, message: 'Cross-school logo upload blocked' });
     const school = await School.findOne({ where: { schoolId: schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    if (req.user.role !== 'super_admin' && !(await schoolFeatureService.hasFeature(schoolCode, 'school_branding'))) return res.status(403).json({ success:false, code:'FEATURE_NOT_AVAILABLE_FOR_PLAN', message:'School branding is not included in this school plan.' });
     const file = extractUploadedFile(req);
     if (!file) return res.status(400).json({ success: false, message: 'No logo file uploaded. Use form field: logo' });
     const dataUrl = await fileToDataUrl(file);

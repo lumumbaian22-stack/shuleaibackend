@@ -40,6 +40,11 @@ router.get('/schools/:schoolId/teachers', superAdminController.getSchoolTeachers
 router.get('/schools/:schoolId/students', superAdminController.getSchoolStudents);
 router.get('/schools/:schoolId/parents', superAdminController.getSchoolParents);
 
+
+// V118 parent-child link audit and cleanup
+router.get('/parent-links/audit', superAdminController.auditParentLinks);
+router.post('/parent-links/cleanup', superAdminController.cleanupParentLinks);
+
 // System health
 router.get('/system/status', superAdminController.getSystemStatus);
 router.get('/system/metrics', superAdminController.getSystemMetrics);

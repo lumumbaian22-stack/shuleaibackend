@@ -1173,3 +1173,55 @@ exports.submitSchoolPaymentConfirmation = async (req, res) => {
     res.status(201).json({ success:true, message:'Payment confirmation submitted for super admin review', data:rows[0] });
   } catch(error) { console.error('V102 payment confirmation error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
+
+// V118 curriculum assessment settings: admin controls which tests appear/count on final report forms.
+exports.getAssessmentSettings = async (req, res) => {
+  try {
+    const defaults = [
+      { assessmentType:'cat', label:'CAT', showOnReport:true, countInFinal:true, weight:20, displayOrder:1 },
+      { assessmentType:'midterm', label:'Midterm', showOnReport:true, countInFinal:true, weight:30, displayOrder:2 },
+      { assessmentType:'end_term', label:'End Term', showOnReport:true, countInFinal:true, weight:50, displayOrder:3 },
+      { assessmentType:'sba', label:'SBA', showOnReport:false, countInFinal:false, weight:0, displayOrder:4 },
+      { assessmentType:'project', label:'Project', showOnReport:false, countInFinal:false, weight:0, displayOrder:5 },
+      { assessmentType:'practical', label:'Practical', showOnReport:false, countInFinal:false, weight:0, displayOrder:6 }
+    ];
+    const rows = await sequelize.query('SELECT * FROM "SchoolAssessmentSettings" WHERE "schoolCode"=:schoolCode ORDER BY "displayOrder" ASC, "id" ASC', { replacements:{ schoolCode:req.user.schoolCode }, type:sequelize.QueryTypes.SELECT }).catch(() => []);
+    res.json({ success:true, data: rows.length ? rows : defaults });
+  } catch (error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.saveAssessmentSettings = async (req, res) => {
+  try {
+    const incoming = Array.isArray(req.body?.settings) ? req.body.settings : [];
+    const allowed = new Set(['cat','midterm','end_term','sba','project','practical']);
+    const rows = [];
+    for (const item of incoming) {
+      const assessmentType = String(item.assessmentType || item.type || '').toLowerCase().replace(/\s+/g, '_');
+      if (!allowed.has(assessmentType)) continue;
+      const payload = {
+        schoolCode:req.user.schoolCode,
+        assessmentType,
+        label:String(item.label || assessmentType).trim(),
+        showOnReport:item.showOnReport !== false,
+        countInFinal:item.countInFinal !== false,
+        weight:Math.max(0, Number(item.weight || 0)),
+        displayOrder:Number(item.displayOrder || 0),
+        metadata:JSON.stringify(item.metadata || {})
+      };
+      const [saved] = await sequelize.query(`
+        INSERT INTO "SchoolAssessmentSettings" ("schoolCode","assessmentType","label","showOnReport","countInFinal","weight","displayOrder","metadata","createdAt","updatedAt")
+        VALUES (:schoolCode,:assessmentType,:label,:showOnReport,:countInFinal,:weight,:displayOrder,:metadata::jsonb,NOW(),NOW())
+        ON CONFLICT ("schoolCode","assessmentType") DO UPDATE SET
+          "label"=EXCLUDED."label",
+          "showOnReport"=EXCLUDED."showOnReport",
+          "countInFinal"=EXCLUDED."countInFinal",
+          "weight"=EXCLUDED."weight",
+          "displayOrder"=EXCLUDED."displayOrder",
+          "metadata"=EXCLUDED."metadata",
+          "updatedAt"=NOW()
+        RETURNING *`, { replacements:payload, type:sequelize.QueryTypes.SELECT });
+      rows.push(saved);
+    }
+    res.json({ success:true, message:'Assessment/report settings saved', data:rows });
+  } catch (error) { res.status(500).json({ success:false, message:error.message }); }
+};

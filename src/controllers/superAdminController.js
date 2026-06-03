@@ -1545,3 +1545,23 @@ exports.getSchools = async (req, res) => {
     res.status(500).json({ success:false, message:error.message });
   }
 };
+
+// V118 final isolation audit: inspect and clean bad StudentParents links left by old fallback logic.
+exports.auditParentLinks = async (req, res) => {
+  try {
+    const audit = await require('../services/parentLinkAuditService').findBadLinks();
+    res.json({ success:true, count:audit.length, data:audit });
+  } catch (error) {
+    res.status(500).json({ success:false, message:error.message });
+  }
+};
+
+exports.cleanupParentLinks = async (req, res) => {
+  try {
+    const dryRun = req.body?.dryRun !== false;
+    const result = await require('../services/parentLinkAuditService').cleanupBadLinks({ dryRun });
+    res.json({ success:true, message: dryRun ? 'Audit completed. No records were deleted.' : 'Bad parent-child links cleaned up.', data:result });
+  } catch (error) {
+    res.status(500).json({ success:false, message:error.message });
+  }
+};

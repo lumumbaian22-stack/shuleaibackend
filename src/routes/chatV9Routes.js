@@ -2,13 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth');
 const chat = require('../controllers/chatV9Controller');
+const { requireFeature } = require('../middleware/featureGate');
 router.use(protect);
 
-router.get('/departments', chat.listDepartments);
-router.get('/departments/:departmentId/group', chat.getDepartmentGroup);
-router.post('/departments', chat.createDepartment);
-router.put('/departments/:departmentId', chat.updateDepartment);
-router.delete('/departments/:departmentId', chat.deleteDepartment);
+router.get('/departments', requireFeature('departments'), chat.listDepartments);
+router.get('/departments/:departmentId/group', requireFeature('departments'), chat.getDepartmentGroup);
+router.post('/departments', requireFeature('departments'), chat.createDepartment);
+router.put('/departments/:departmentId', requireFeature('departments'), chat.updateDepartment);
+router.delete('/departments/:departmentId', requireFeature('departments'), chat.deleteDepartment);
 
 router.get('/teachers', chat.listTeacherDirectory);
 

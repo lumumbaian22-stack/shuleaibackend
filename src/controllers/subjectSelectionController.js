@@ -6,6 +6,8 @@ const {
 } = require('../models');
 const curriculumEngine = require('../services/curriculumStructureEngine');
 const { listStudentSubjectSelections, replaceStudentSubjectSelections } = require('../services/studentSubjectSelectionService');
+const ownership = require('../services/parentOwnershipService');
+const schoolFeatureService = require('../services/schoolFeatureService');
 
 function schoolCodeOf(user) { return user?.schoolCode || user?.schoolId || null; }
 function norm(v) { return String(v || '').trim().toLowerCase(); }
@@ -28,7 +30,9 @@ async function getContext(student, schoolCode) {
   const school = await getSchool(schoolCode);
   const classItem = await getStudentClass(student, schoolCode);
   const eligibleSubjects = classItem ? curriculumEngine.getEligibleSubjectsForClass(school, classItem) : [];
-  return { school, classItem, eligibleSubjects, senior: isSeniorClass(classItem, student) };
+  const structure = await schoolFeatureService.getSchoolStructure(schoolCode).catch(() => ({ seniorEnabled:false }));
+  const senior = !!structure.seniorEnabled && isSeniorClass(classItem, student);
+  return { school, classItem, eligibleSubjects, senior, seniorEnabled: !!structure.seniorEnabled };
 }
 function validateSubjects(rawSubjects, eligibleSubjects) {
   const eligibleByName = new Map((eligibleSubjects || []).map(s => [norm(subjectName(s)), s]));
@@ -53,8 +57,10 @@ async function findStudentForCurrentUser(user) {
   return Student.findOne({ where: { userId: user.id }, include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
 }
 async function assertParentChild(user, studentId) {
-  const parent = await Parent.findOne({ where: { userId: user.id }, include: [{ model: Student, as: 'students', where: { id: studentId }, required: true, include: [{ model: User, attributes: ['id','name','schoolCode'] }] }] });
-  return parent?.students?.[0] || null;
+  try {
+    const result = await ownership.assertParentOwnsStudent({ parentUserId:user.id, studentId, schoolCode:schoolCodeOf(user) });
+    return result.student || null;
+  } catch (_) { return null; }
 }
 async function notify({ schoolCode, student, classItem, selections, actor, source = 'student' }) {
   try {

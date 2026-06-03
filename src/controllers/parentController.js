@@ -2,6 +2,7 @@ const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, 
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
+const ownership = require('../services/parentOwnershipService');
 
 
 async function countLinkedParents(studentId) {
@@ -39,87 +40,21 @@ function normalizePhone(value) {
 }
 
 
+
 async function parentOwnsStudentStrict(parent, student, user) {
-  if (!parent || !student || !user) return false;
-  const studentId = Number(student.id || 0);
-  const studentUserId = Number(student.userId || student.User?.id || 0);
-  const parentProfileId = Number(parent.id || 0);
-  const parentUserId = Number(user.id || parent.userId || 0);
-  if (!studentId || !parentUserId) return false;
-  const studentIds = [...new Set([studentId, studentUserId].filter(Boolean))];
-  const parentIds = [...new Set([parentProfileId, parentUserId].filter(Boolean))];
-  const rows = await sequelize.query(`
-    SELECT sp."studentId", sp."parentId", p."id" AS "realParentId", p."userId" AS "linkedParentUserId"
-      FROM "StudentParents" sp
-      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-     WHERE sp."studentId" IN (:studentIds)
-       AND (sp."parentId" IN (:parentIds) OR p."userId" = :parentUserId)
-     LIMIT 1`,
-    { replacements: { studentIds, parentIds, parentUserId }, type: sequelize.QueryTypes.SELECT }
-  ).catch(() => []);
-  if (rows.length) {
-    if (parentProfileId && Number(rows[0].studentId) !== studentId || parentProfileId && Number(rows[0].parentId) !== parentProfileId) {
-      await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
-    }
-    return true;
-  }
-  const directParentId = Number(student.parentId || student.parentUserId || student.guardianId || student.guardianUserId || 0);
-  if (directParentId && (directParentId === parentProfileId || directParentId === parentUserId)) {
-    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
-    return true;
-  }
-  return false;
+  try {
+    if (!parent || !student || !user) return false;
+    return await ownership.ownsStudentId({
+      parentUserId: user.id || parent.userId,
+      parentId: parent.id,
+      studentId: student.id,
+      schoolCode: user.schoolCode
+    });
+  } catch (_) { return false; }
 }
 
 async function parentOwnsStudent(parent, student, user) {
-  if (!parent || !student || !user) return false;
-  const studentId = Number(student.id || student.studentId || 0);
-  const studentUserId = Number(student.userId || student.User?.id || 0);
-  const parentProfileId = Number(parent.id || 0);
-  const parentUserId = Number(user.id || parent.userId || 0);
-  if (!studentId || !parentUserId) return false;
-
-  const studentIds = [...new Set([studentId, studentUserId].filter(Boolean))];
-  const rows = await sequelize.query(`
-    SELECT sp."studentId", sp."parentId", p."userId" AS "linkedParentUserId"
-      FROM "StudentParents" sp
-      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-     WHERE sp."studentId" IN (:studentIds)
-       AND (
-         sp."parentId" = :parentProfileId
-         OR sp."parentId" = :parentUserId
-         OR p."userId" = :parentUserId
-       )
-     LIMIT 1`,
-    { replacements: { studentIds, parentProfileId, parentUserId }, type: sequelize.QueryTypes.SELECT }
-  ).catch(() => []);
-
-  if (rows.length) {
-    // Heal old links that used User.id instead of Student.id, or parent User.id instead of Parent.id.
-    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
-    return true;
-  }
-
-  // Direct student fields used by some legacy imports/manual links.
-  const directParentId = Number(student.parentId || student.parentUserId || student.guardianId || student.guardianUserId || 0);
-  if (directParentId && (directParentId === parentProfileId || directParentId === parentUserId)) {
-    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
-    return true;
-  }
-
-  // Safe fallback for schools that imported students with parent contact details before StudentParents existed.
-  const userEmail = String(user.email || '').trim().toLowerCase();
-  const userPhone = normalizePhone(user.phone || user.phoneNumber || user.mobile || '');
-  const studentEmail = String(student.parentEmail || student.guardianEmail || '').trim().toLowerCase();
-  const studentPhone = normalizePhone(student.parentPhone || student.guardianPhone || student.emergencyContact || '');
-  const emailMatches = userEmail && studentEmail && userEmail === studentEmail;
-  const phoneMatches = userPhone && studentPhone && userPhone === studentPhone;
-  if (emailMatches || phoneMatches) {
-    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
-    return true;
-  }
-
-  return false;
+  return parentOwnsStudentStrict(parent, student, user);
 }
 
 async function enrichLinkedChildren(children) {
@@ -160,25 +95,7 @@ exports.getChildren = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Parent profile not found' });
     }
 
-    const linkedRows = await sequelize.query(`
-      SELECT DISTINCT s."id"
-        FROM "Students" s
-        JOIN "StudentParents" sp ON sp."studentId" IN (s."id", s."userId")
-        LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-        JOIN "Users" u ON u."id" = s."userId"
-       WHERE u."schoolCode" = :schoolCode
-         AND (sp."parentId" = :parentProfileId OR sp."parentId" = :parentUserId OR p."userId" = :parentUserId)
-       ORDER BY s."id" ASC`,
-      { replacements: { schoolCode: req.user.schoolCode, parentProfileId: parent.id, parentUserId: req.user.id }, type: sequelize.QueryTypes.SELECT }
-    ).catch(() => []);
-    const ids = linkedRows.map(r => Number(r.id)).filter(Boolean);
-    const children = ids.length ? await Student.findAll({
-      where: { id: { [Op.in]: ids } },
-      attributes: { include: ['classId'] },
-      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode', 'profileImage'] }],
-      order: [[User, 'name', 'ASC']]
-    }) : [];
-    for (const child of children) await linkParentToStudentSafely(parent.id, child.id).catch(() => null);
+    const children = await ownership.listOwnedStudents({ parentUserId: req.user.id, schoolCode: req.user.schoolCode });
 
     const enrichedChildren = await enrichLinkedChildren(children);
     res.json({ success: true, data: enrichedChildren });
@@ -209,7 +126,7 @@ exports.linkChildByElimuId = async (req, res) => {
     });
 
     // Do not expose other learners through search-like responses.
-    if (!student) {
+    if (!student || student.User?.schoolCode !== req.user.schoolCode) {
       return res.status(404).json({ success: false, message: 'Unable to link child with this Elimu ID' });
     }
 
@@ -323,14 +240,8 @@ exports.getChildReportCardDetails = async (req, res) => {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-    const student = await Student.findOne({
-      where: { [Op.or]: [{ id: Number(studentId) || 0 }, { userId: Number(studentId) || 0 }] },
-      attributes: { include: ['classId'] },
-      include: [{ model: User, attributes: ['id','name','email','phone','schoolCode','profileImage'] }]
-    });
-    if (!student) return res.status(404).json({ success:false, message:'Student not found' });
-    const linked = await parentOwnsStudentStrict(parent, student, req.user);
-    if (!linked || student.User?.schoolCode !== req.user.schoolCode) return res.status(403).json({ success:false, message:'Not your child' });
+    const owned = await ownership.assertParentOwnsStudent({ parentUserId: req.user.id, parentId: parent.id, studentId, schoolCode: req.user.schoolCode });
+    const student = owned.student;
 
     const schoolCode = student.User?.schoolCode || req.user.schoolCode;
     const school = await School.findOne({ where: { schoolId: schoolCode }, attributes: ['name','schoolId','system','settings'] }).catch(() => null);
@@ -344,20 +255,43 @@ exports.getChildReportCardDetails = async (req, res) => {
       where: { studentId: student.id, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
       order: [['year','DESC'], ['term','DESC'], ['date','DESC']]
     }).catch(() => []);
+    const assessmentSettings = await sequelize.query(`
+      SELECT * FROM "SchoolAssessmentSettings" WHERE "schoolCode" = :schoolCode ORDER BY "displayOrder" ASC, "id" ASC
+    `, { replacements:{ schoolCode }, type:sequelize.QueryTypes.SELECT }).catch(() => []);
+    const defaultTests = [
+      { assessmentType:'cat', label:'CAT', showOnReport:true, countInFinal:true, weight:20, displayOrder:1 },
+      { assessmentType:'midterm', label:'Midterm', showOnReport:true, countInFinal:true, weight:30, displayOrder:2 },
+      { assessmentType:'end_term', label:'End Term', showOnReport:true, countInFinal:true, weight:50, displayOrder:3 },
+      { assessmentType:'sba', label:'SBA', showOnReport:false, countInFinal:false, weight:0, displayOrder:4 },
+      { assessmentType:'project', label:'Project', showOnReport:false, countInFinal:false, weight:0, displayOrder:5 },
+      { assessmentType:'practical', label:'Practical', showOnReport:false, countInFinal:false, weight:0, displayOrder:6 }
+    ];
+    const testSettings = assessmentSettings.length ? assessmentSettings : defaultTests;
+    const settingMap = new Map(testSettings.map(t => [String(t.assessmentType || t.type || '').toLowerCase(), t]));
+    const normalizedType = (r) => String(r.assessmentType || r.testType || r.examType || r.assessmentName || r.assessment || 'end_term').toLowerCase().replace(/\s+/g, '_');
+    const gradeFromScore = (score) => {
+      const n = Number(score || 0);
+      if (curriculum === 'cbc' || curriculum === 'cbe') { if (n >= 80) return 'EE'; if (n >= 60) return 'ME'; if (n >= 40) return 'AE'; return n > 0 ? 'BE' : '-'; }
+      if (n >= 80) return 'A'; if (n >= 70) return 'B'; if (n >= 60) return 'C'; if (n >= 50) return 'D'; return n > 0 ? 'E' : '-';
+    };
     const subjectMap = {};
     records.forEach(r => {
       const subject = r.subject || 'Subject';
-      if (!subjectMap[subject]) subjectMap[subject] = { total:0, count:0 };
-      subjectMap[subject].total += Number(r.score || 0);
-      subjectMap[subject].count += 1;
+      const type = normalizedType(r);
+      const setting = settingMap.get(type) || settingMap.get(type.replace(/_?exam$/, '')) || { label:r.assessmentName || r.assessment || type, showOnReport:true, countInFinal:true, weight:0, displayOrder:99 };
+      if (setting.showOnReport === false || r.showOnReport === false) return;
+      if (!subjectMap[subject]) subjectMap[subject] = { subject, weighted:0, weight:0, rawTotal:0, rawCount:0, components:[] };
+      const score = Number(r.score || 0);
+      const weight = Number(r.assessmentWeight ?? setting.weight ?? 0);
+      if (setting.countInFinal !== false && r.countInFinal !== false) {
+        if (weight > 0) { subjectMap[subject].weighted += score * weight; subjectMap[subject].weight += weight; }
+        else { subjectMap[subject].rawTotal += score; subjectMap[subject].rawCount += 1; }
+      }
+      subjectMap[subject].components.push({ type, label:setting.label || r.assessmentName || r.assessment || type, score, weight, countInFinal:setting.countInFinal !== false && r.countInFinal !== false, displayOrder:Number(setting.displayOrder || 99), date:r.date, term:r.term, year:r.year });
     });
-    const gradeFromScore = (score) => {
-      const n = Number(score || 0);
-      if (n >= 80) return 'A'; if (n >= 70) return 'B'; if (n >= 60) return 'C'; if (n >= 50) return 'D'; return n > 0 ? 'E' : '-';
-    };
-    const subjects = Object.entries(subjectMap).map(([subject, d]) => {
-      const average = Math.round(d.total / Math.max(1, d.count));
-      return { subject, average, grade: gradeFromScore(average) };
+    const subjects = Object.values(subjectMap).map((d) => {
+      const average = d.weight > 0 ? Math.round(d.weighted / d.weight) : Math.round(d.rawTotal / Math.max(1, d.rawCount));
+      return { subject:d.subject, average, grade:gradeFromScore(average), components:d.components.sort((a,b)=>a.displayOrder-b.displayOrder) };
     });
     const attendance = await Attendance.findAll({ where: { studentId: student.id, schoolCode }, order: [['date','DESC']] }).catch(() => []);
     const present = attendance.filter(a => a.status === 'present').length;
@@ -366,7 +300,7 @@ exports.getChildReportCardDetails = async (req, res) => {
     const rate = attendance.length ? Math.round((present / attendance.length) * 100) : 0;
 
     res.json({ success:true, data:{
-      student: { id:student.id, elimuid:student.elimuid, grade:student.grade, status:student.status, classId:student.classId, photo:student.User?.profileImage },
+      student: { id:student.id, elimuid:student.elimuid, grade:student.grade, status:student.status, classId:student.classId, photo:student.User?.profileImage || student.profileImage || student.photo || student.passportPhoto },
       user: { name:student.User?.name, email:student.User?.email, phone:student.User?.phone },
       classTeacher: classTeacher?.User ? { name:classTeacher.User.name, email:classTeacher.User.email, phone:classTeacher.User.phone } : null,
       academicSummary: { overallAverage: records.length ? Math.round(records.reduce((sum, r) => sum + Number(r.score || 0), 0) / records.length) : 0, subjects },
@@ -453,6 +387,8 @@ exports.reportAbsence = async (req, res) => {
         severity: 'info',
         title: '🚨 Student Absence Reported',
         message: `${student.User.name} will be absent on ${dateRangeText}. Reason: ${reason}`,
+        sourceType: 'parent_reported_absence',
+        sourceLabel: 'Parent Absence Report',
         data: {
           studentId: student.id,
           studentName: student.User.name,

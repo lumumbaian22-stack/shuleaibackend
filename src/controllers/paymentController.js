@@ -3,6 +3,7 @@ const daraja = require('../services/darajaService');
 const subscriptionController = require('./subscriptionController');
 const realtimeSync = require('../services/realtimeSyncService');
 const financeLedger = require('../services/financeLedgerService');
+const ownership = require('../services/parentOwnershipService');
 
 function ref(prefix){ return `${prefix}-${Date.now()}-${Math.floor(Math.random()*100000).toString().padStart(5,'0')}`; }
 function cleanAmount(v){ const n = Math.round(Number(v)); if(!Number.isFinite(n) || n < 1) throw new Error('Payment amount must be at least KES 1'); return n; }
@@ -10,32 +11,18 @@ function schoolCode(req){ return req.user?.schoolCode || req.body?.schoolCode ||
 function auditEntry(action, actor, extra={}){ return { action, actorUserId: actor?.id || null, actorRole: actor?.role || null, at: new Date().toISOString(), ...extra }; }
 async function writeAudit(req, data){ try { await AuditLog?.create({ schoolCode: schoolCode(req) || data.schoolCode || 'platform', actorUserId:req.user?.id, actorRole:req.user?.role, ipAddress:req.ip, userAgent:req.get?.('user-agent'), ...data }); } catch(e){ console.error('Payment audit failed:', e.message); } }
 async function currentParent(req){ return Parent.findOne({ where:{ userId:req.user.id } }); }
+
 async function findStudentForParent(req, studentId){
   const rawId = Number(studentId) || 0;
-  const student = await Student.findOne({ where: { [require('sequelize').Op.or]: [{ id: rawId }, { userId: rawId }] }, include:[{model:User, attributes:['id','name','schoolCode']}] });
-  if(!student) return null;
-  if(req.user.role !== 'parent') return student;
-  const parent = await currentParent(req);
-  if(!parent) return null;
-  const parentProfileId = Number(parent.id || 0);
-  const parentUserId = Number(req.user.id || parent.userId || 0);
-  const studentIds = [...new Set([Number(student.id || 0), Number(student.userId || student.User?.id || 0)].filter(Boolean))];
-  const parentIds = [...new Set([parentProfileId, parentUserId].filter(Boolean))];
-  const rows = await require('../models').sequelize.query(`
-    SELECT sp."studentId", sp."parentId", p."userId" AS "linkedParentUserId"
-      FROM "StudentParents" sp
-      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-     WHERE sp."studentId" IN (:studentIds)
-       AND (sp."parentId" IN (:parentIds) OR p."userId" = :parentUserId)
-     LIMIT 1`,
-    { replacements:{ studentIds, parentIds, parentUserId }, type:require('../models').sequelize.QueryTypes.SELECT }
-  ).catch(() => []);
-  if(!rows.length) return null;
-  if(parentProfileId && (Number(rows[0].studentId) !== Number(student.id) || Number(rows[0].parentId) !== parentProfileId)) {
-    await require('../models').sequelize.query(`INSERT INTO "StudentParents" ("studentId", "parentId") VALUES (:studentId, :parentId) ON CONFLICT ("studentId", "parentId") DO NOTHING`, { replacements:{ studentId:student.id, parentId:parentProfileId } }).catch(() => null);
+  if(req.user.role !== 'parent') {
+    return Student.findOne({ where: { id: rawId }, include:[{model:User, attributes:['id','name','schoolCode']}] });
   }
-  return student;
+  try {
+    const { student } = await ownership.assertParentOwnsStudent({ parentUserId:req.user.id, studentId: rawId, schoolCode:req.user.schoolCode });
+    return student;
+  } catch (_) { return null; }
 }
+
 
 async function currentSchool(req){
   return School.findOne({ where:{ schoolId:req.user.schoolCode } });
@@ -63,7 +50,11 @@ async function getPlatformPaymentConfig() {
     parentSubscriptionsEnabled: true,
     schoolSubscriptionsEnabled: true,
     parentPlans: [{ code:'child_essential', name:'Essential', amount:100, days:30 }],
-    schoolPlans: [{ code:'school_growth', name:'School Growth', amount:100000, days:30 }],
+    schoolPlans: [
+      { code:'starter', name:'Starter', amount:0, days:30, minStudents:50, maxStudents:400, features:['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards'] },
+      { code:'growth', name:'Growth', amount:0, days:30, minStudents:401, maxStudents:500, features:['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards','calendar','school_branding','timetable'] },
+      { code:'enterprise', name:'Enterprise', amount:0, days:30, minStudents:501, maxStudents:null, features:['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards','calendar','school_branding','timetable','duty','fairness_report','departments','bulk_sms','senior_subject_choice'] }
+    ],
     darajaCredentials: {}
   };
   const [row] = await Settings.findOrCreate({
@@ -114,10 +105,11 @@ async function requirePlatformStkAllowed(kind) {
 function normalizePlanCode(raw, ownerType) {
   const text = String(raw?.code || raw?.id || raw?.name || '').trim().toLowerCase().replace(/\s+/g, '_');
   if (ownerType === 'school') {
-    if (!text || text === 'growth' || text === 'school_growth') return 'school_growth';
-    if (text.includes('starter')) return 'school_starter';
-    if (text.includes('enterprise')) return 'school_enterprise';
-    return text.startsWith('school_') ? text : `school_${text}`;
+    if (!text || text === 'starter' || text === 'school_starter') return 'starter';
+    if (text.includes('growth')) return 'growth';
+    if (text.includes('enterprise')) return 'enterprise';
+    if (text.includes('starter')) return 'starter';
+    return text.replace(/^school_/, '');
   }
   if (!text || text === 'basic' || text === 'essential' || text === 'child_basic' || text === 'child_essential') return 'child_essential';
   if (text.includes('premium') || text.includes('smart')) return 'child_smart';
@@ -234,9 +226,9 @@ async function createManualPayment(req, { student, parent, fee, amount, mpesaCod
 function normalizePlanInput(plan, ownerType){
   const raw = String(plan || '').trim().toLowerCase().replace(/\s+/g, '_');
   if (ownerType === 'school') {
-    if (!raw || raw === 'growth' || raw === 'school_growth') return 'school_growth';
-    if (raw.includes('enterprise') || raw === 'school_enterprise') return 'school_enterprise';
-    if (raw.includes('starter') || raw === 'school_starter') return 'school_starter';
+    if (!raw || raw === 'growth' || raw === 'school_growth') return 'growth';
+    if (raw.includes('enterprise') || raw === 'school_enterprise') return 'enterprise';
+    if (raw.includes('starter') || raw === 'school_starter') return 'starter';
     return raw.startsWith('school_') ? raw : `school_${raw}`;
   }
   if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_essential';
@@ -747,7 +739,7 @@ exports.schoolSubscriptionSTK = async (req, res) => {
   try {
     const { phone } = req.body || {};
     const billingCycle = billingCycleFromBody(req.body || {});
-    const planCode = normalizePlanInput(req.body?.planCode || req.body?.plan || 'school_growth', 'school');
+    const planCode = normalizePlanInput(req.body?.planCode || req.body?.plan || 'growth', 'school');
     if (!phone) return res.status(400).json({ success:false, message:'phone is required' });
     const school = await currentSchool(req);
     if (!school) return res.status(404).json({ success:false, message:'School not found' });

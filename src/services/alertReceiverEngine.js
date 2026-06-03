@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { Alert, User, Student, Parent, Teacher, Class, SchoolCalendar, sequelize } = require('../models');
+const ownership = require('./parentOwnershipService');
 
 function normalizeRole(role) {
   const r = String(role || '').toLowerCase().replace('-', '_');
@@ -49,20 +50,9 @@ function dataDate(data, alert, ...keys) {
 
 async function parentCanViewStudent(userId, studentId, schoolCode) {
   if (!studentId) return true;
-  const rows = await sequelize.query(
-    `SELECT 1
-       FROM "StudentParents" sp
-       LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-       JOIN "Students" s ON s."id" = sp."studentId"
-       JOIN "Users" su ON su."id" = s."userId"
-      WHERE sp."studentId" = :studentId
-        AND (p."userId" = :userId OR (p."id" IS NULL AND sp."parentId" = :userId))
-        AND su."schoolCode" = :schoolCode
-      LIMIT 1`,
-    { replacements: { userId, studentId, schoolCode }, type: sequelize.QueryTypes.SELECT }
-  ).catch(() => []);
-  return rows.length > 0;
+  return await ownership.ownsStudentId({ parentUserId:userId, studentId, schoolCode });
 }
+
 
 async function teacherCanViewStudent(userId, studentId, schoolCode) {
   if (!studentId) return true;

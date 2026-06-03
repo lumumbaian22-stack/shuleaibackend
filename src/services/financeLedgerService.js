@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { sequelize, Payment, Fee, Student, Parent, User, Class, Alert, AuditLog } = require('../models');
 const realtimeSync = require('./realtimeSyncService');
+const ownership = require('./parentOwnershipService');
 
 const APPROVED = new Set(['completed', 'success', 'successful', 'approved', 'paid']);
 const PENDING = new Set(['pending', 'processing', 'pending_verification']);
@@ -134,17 +135,15 @@ async function findStudentInSchool({ schoolCode, studentId, transaction }) {
   });
 }
 
+
 async function assertParentOwnsStudent({ parentUserId, studentId, schoolCode, transaction }) {
-  const parent = await Parent.findOne({ where: { userId: parentUserId }, transaction });
-  if (!parent) throw new Error('Parent profile not found');
-  const student = await findStudentInSchool({ schoolCode, studentId, transaction });
-  if (!student) throw new Error('Student not found');
-  if (parent.hasStudent) {
-    const ok = await parent.hasStudent(student, { transaction }).catch(() => false);
-    if (!ok) throw new Error('Student is not linked to this parent');
+  try {
+    return await ownership.assertParentOwnsStudent({ parentUserId, studentId, schoolCode, transaction });
+  } catch (error) {
+    throw new Error(error.message || 'Student is not linked to this parent');
   }
-  return { parent, student };
 }
+
 
 async function recalculateFeeAccount(feeId, { transaction } = {}) {
   if (!feeId) return null;

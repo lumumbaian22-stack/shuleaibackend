@@ -1,4 +1,6 @@
 const { Op } = require('sequelize');
+const schoolFeatureService = require('../services/schoolFeatureService');
+const ownership = require('../services/parentOwnershipService');
 const {
   SubscriptionPlan,
   Subscription,
@@ -125,10 +127,11 @@ async function getSchoolForUser(user) {
 function normalizeLookupCode(code, ownerType) {
   const raw = String(code || '').trim().toLowerCase().replace(/\s+/g, '_');
   if (ownerType === 'school') {
-    if (!raw || raw === 'growth' || raw === 'school_growth') return 'school_growth';
-    if (raw.includes('enterprise')) return 'school_enterprise';
-    if (raw.includes('starter')) return 'school_starter';
-    return raw.startsWith('school_') ? raw : `school_${raw}`;
+    if (!raw || raw === 'starter' || raw === 'school_starter') return 'starter';
+    if (raw.includes('enterprise')) return 'enterprise';
+    if (raw.includes('growth')) return 'growth';
+    if (raw.includes('starter')) return 'starter';
+    return raw.replace(/^school_/, '');
   }
   if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_essential';
   if (raw.includes('genius') || raw.includes('ultimate')) return 'child_genius';
@@ -139,7 +142,7 @@ function normalizeLookupCode(code, ownerType) {
 async function getPlanByCode(code, ownerType) {
   const canonical = normalizeLookupCode(code, ownerType);
   const aliases = ownerType === 'school'
-    ? { school_starter: ['school_starter','starter'], school_growth: ['school_growth','growth'], school_enterprise: ['school_enterprise','enterprise'] }
+    ? { starter: ['starter','school_starter'], growth: ['growth','school_growth'], enterprise: ['enterprise','school_enterprise'] }
     : { child_essential: ['child_essential','child_basic','essential','basic'], child_smart: ['child_smart','child_premium','smart','premium'], child_genius: ['child_genius','child_ultimate','genius','ultimate'] };
   const values = aliases[canonical] || [canonical, String(code || '').toLowerCase()];
   return SubscriptionPlan.findOne({
@@ -164,7 +167,7 @@ async function findOrCreateSchoolSubscription(school, plan, cycle) {
       schoolId: school.id,
       schoolCode: school.schoolId,
       planId: plan?.id || null,
-      planCode: plan?.code || 'school_starter',
+      planCode: plan?.code || 'starter',
       planName: plan?.displayName || plan?.name || 'Starter',
       billingCycle: normalizeCycle(cycle),
       status: 'pending',
@@ -238,9 +241,12 @@ exports.daysRemaining = daysRemaining;
 exports.getPlans = async (req, res) => {
   try {
     const ownerType = req.query.ownerType;
-    // v117: if Super Admin has saved platform plan JSON, that is the source of truth.
-    // This prevents the admin/parent dashboards from showing old seeded Monthly/Termly/Yearly or Starter/Growth/Enterprise cards beside the new live cards.
-    if (ownerType === 'school' || ownerType === 'child') {
+    // v118: Super Admin platform plan settings are the only source of truth for school plans.
+    if (ownerType === 'school') {
+      const defs = await schoolFeatureService.getPlanDefinitions();
+      return res.json({ success:true, data:Object.values(defs).map(p => ({ id:p.code, code:p.code, name:p.name, displayName:p.name, ownerType:'school', price:p.amount || 0, monthlyPriceKes:p.amount || 0, features:p.features, minStudents:p.minStudents, maxStudents:p.maxStudents, branding:p.branding, isActive:true, source:'super_admin_platform_settings' })) });
+    }
+    if (ownerType === 'child') {
       const configured = await getPlatformConfiguredPlans(ownerType);
       if (configured && configured.length) return res.json({ success: true, data: configured });
     }
@@ -263,27 +269,27 @@ exports.getSchoolStatus = async (req, res) => {
   try {
     const school = await getSchoolForUser(req.user);
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
-    const subscription = await Subscription.findOne({ where: { ownerType: 'school', schoolCode: school.schoolId }, include: [{ model: SubscriptionPlan }] });
+    const subscription = await Subscription.findOne({ where: { ownerType: 'school', schoolCode: school.schoolId }, include: [{ model: SubscriptionPlan }], order:[['updatedAt','DESC']] });
     const studentCount = await User.count({ where: { schoolCode: school.schoolId, role: 'student' } }).catch(() => 0);
-    const active = subscription?.status === 'active' && subscription.endDate && new Date(subscription.endDate) > new Date();
-    const tier = subscription?.planName || 'Starter';
+    const featureInfo = await schoolFeatureService.getSchoolFeatures(school.schoolId);
+    const expiresAt = subscription?.endDate || school.subscriptionEndsAt || null;
+    const active = (subscription?.status === 'active' || school.subscriptionStatus === 'active') && (!expiresAt || new Date(expiresAt) > new Date());
     res.json({
       success: true,
       data: {
         schoolId: school.id,
         schoolCode: school.schoolId,
         schoolName: school.name,
-        currentPlan: tier,
-        planCode: subscription?.planCode || 'school_starter',
-        status: active ? 'active' : (subscription?.status || 'pending'),
+        currentPlan: featureInfo.plan.name,
+        planCode: featureInfo.planCode,
+        status: active ? 'active' : (subscription?.status || school.subscriptionStatus || 'pending'),
         billingCycle: subscription?.billingCycle || 'monthly',
-        expiresAt: subscription?.endDate || null,
-        daysRemaining: daysRemaining(subscription?.endDate, active ? 'active' : subscription?.status),
+        expiresAt,
+        daysRemaining: daysRemaining(expiresAt, active ? 'active' : (subscription?.status || school.subscriptionStatus)),
         studentCount,
-        schoolTier: tier,
-        coreFeatures: SCHOOL_CORE_FEATURES,
-        premiumLocked: !active,
-        lockedFeatures: active ? [] : SCHOOL_PREMIUM_FEATURES,
+        schoolTier: featureInfo.plan.name,
+        features: featureInfo.featureList,
+        hiddenFeatures: [],
         gracefulMode: !active,
         subscription
       }
@@ -292,6 +298,7 @@ exports.getSchoolStatus = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
 
 exports.getMyStatus = async (req, res) => {
   try {
@@ -303,10 +310,11 @@ exports.getMyStatus = async (req, res) => {
       return res.json({ success:true, data:{ studentId:student.id, subscription: sub, status: sub?.status || student.subscriptionStatus, plan: sub?.planName || student.subscriptionPlan, daysRemaining: daysRemaining(sub?.endDate, sub?.status) } });
     }
     if (req.user.role !== 'parent') return res.json({ success:true, data:{ role:req.user.role } });
-    const parent = await getParentWithStudents(req.user.id);
+    const parent = await Parent.findOne({ where:{ userId:req.user.id } });
     if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
+    const ownedChildren = await ownership.listOwnedStudents({ parentUserId:req.user.id, schoolCode:req.user.schoolCode });
     const students = [];
-    for (const child of parent.students || []) {
+    for (const child of ownedChildren || []) {
       const sub = await Subscription.findOne({ where:{ ownerType:'child', studentId:child.id }, include:[{ model:SubscriptionPlan }] });
       students.push({ id:child.id, name:child.User?.name || child.elimuid, subscription:sub, plan:sub?.planName || child.subscriptionPlan, status:sub?.status || child.subscriptionStatus, expiry:sub?.endDate || child.subscriptionExpiry, remainingDays: daysRemaining(sub?.endDate || child.subscriptionExpiry, sub?.status || child.subscriptionStatus) });
     }
@@ -316,9 +324,8 @@ exports.getMyStatus = async (req, res) => {
 
 exports.getChildStatus = async (req, res) => {
   try {
-    const parent = await getParentWithStudents(req.user.id);
-    const child = (parent?.students || []).find(s => String(s.id) === String(req.params.studentId));
-    if (!child) return res.status(404).json({ success:false, message:'Child not found or not linked to this parent' });
+    const owned = await ownership.assertParentOwnsStudent({ parentUserId:req.user.id, studentId:req.params.studentId, schoolCode:req.user.schoolCode });
+    const child = owned.student;
     const sub = await Subscription.findOne({ where:{ ownerType:'child', studentId:child.id }, include:[{ model:SubscriptionPlan }] });
     res.json({ success:true, data:{ studentId:child.id, childName:child.User?.name || child.elimuid, subscription:sub, status:sub?.status || child.subscriptionStatus, plan:sub?.planName || child.subscriptionPlan, daysRemaining:daysRemaining(sub?.endDate || child.subscriptionExpiry, sub?.status || child.subscriptionStatus) } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
@@ -327,10 +334,9 @@ exports.getChildStatus = async (req, res) => {
 exports.createChildSubscriptionRequest = async (req, res) => {
   try {
     const { studentId, planCode='child_essential', billingCycle='monthly' } = req.body || {};
-    const parent = await getParentWithStudents(req.user.id);
-    if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-    const child = (parent.students || []).find(s => String(s.id) === String(studentId)) || parent.students?.[0];
-    if (!child) return res.status(404).json({ success:false, message:'Child not found' });
+    const owned = await ownership.assertParentOwnsStudent({ parentUserId:req.user.id, studentId, schoolCode:req.user.schoolCode });
+    const parent = owned.parent;
+    const child = owned.student;
     const plan = await getPlanByCode(planCode, 'child');
     if (!plan) return res.status(404).json({ success:false, message:'Child subscription plan not found' });
     const subscription = await findOrCreateChildSubscription(parent, child, plan, billingCycle);
@@ -341,7 +347,7 @@ exports.createChildSubscriptionRequest = async (req, res) => {
 
 exports.createSchoolSubscriptionRequest = async (req, res) => {
   try {
-    const { planCode='school_growth', billingCycle='monthly' } = req.body || {};
+    const { planCode='growth', billingCycle='monthly' } = req.body || {};
     const school = await getSchoolForUser(req.user);
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
     const plan = await getPlanByCode(planCode, 'school');
