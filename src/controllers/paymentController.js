@@ -62,7 +62,7 @@ async function getPlatformPaymentConfig() {
     currency: 'KES',
     parentSubscriptionsEnabled: true,
     schoolSubscriptionsEnabled: true,
-    parentPlans: [{ code:'child_essential', name:'Essential', amount:100, days:30 }],
+    parentPlans: [{ code:'child_basic', name:'Basic', amount:100, days:30, features:['Report cards','Attendance','Progress'] }, { code:'child_premium', name:'Premium', amount:250, days:30, features:['Everything in Basic','AI Tutor: 6 messages/day','Child timetable if school has timetable'] }, { code:'child_ultimate', name:'Ultimate', amount:500, days:30, features:['Everything in Premium','Extended AI Tutor','Live child analytics','Stronger alerts','Child recommendations'] }],
     schoolPlans: [{ code:'school_growth', name:'School Growth', amount:100000, days:30 }],
     darajaCredentials: {}
   };
@@ -119,9 +119,9 @@ function normalizePlanCode(raw, ownerType) {
     if (text.includes('enterprise')) return 'school_enterprise';
     return text.startsWith('school_') ? text : `school_${text}`;
   }
-  if (!text || text === 'basic' || text === 'essential' || text === 'child_basic' || text === 'child_essential') return 'child_essential';
-  if (text.includes('premium') || text.includes('smart')) return 'child_smart';
-  if (text.includes('ultimate') || text.includes('genius')) return 'child_genius';
+  if (!text || text === 'basic' || text === 'essential' || text === 'child_basic' || text === 'child_basic') return 'child_basic';
+  if (text.includes('premium') || text.includes('smart')) return 'child_premium';
+  if (text.includes('ultimate') || text.includes('genius')) return 'child_ultimate';
   return text.startsWith('child_') ? text : `child_${text}`;
 }
 function normalizePlanName(raw, fallback) {
@@ -239,9 +239,9 @@ function normalizePlanInput(plan, ownerType){
     if (raw.includes('starter') || raw === 'school_starter') return 'school_starter';
     return raw.startsWith('school_') ? raw : `school_${raw}`;
   }
-  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_essential';
-  if (raw.includes('genius') || raw.includes('ultimate') || raw === 'child_genius') return 'child_genius';
-  if (raw.includes('smart') || raw.includes('premium') || raw === 'child_smart') return 'child_smart';
+  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_basic' || raw === 'child_basic') return 'child_basic';
+  if (raw.includes('genius') || raw.includes('ultimate') || raw === 'child_ultimate') return 'child_ultimate';
+  if (raw.includes('smart') || raw.includes('premium') || raw === 'child_premium') return 'child_premium';
   return raw.startsWith('child_') ? raw : `child_${raw}`;
 }
 
@@ -609,7 +609,7 @@ exports.parentSubscriptionSTK = async (req, res) => {
   try {
     const { studentId, phone } = req.body || {};
     const billingCycle = billingCycleFromBody(req.body || {});
-    const planCode = normalizePlanInput(req.body?.planCode || req.body?.plan || 'child_essential', 'child');
+    const planCode = normalizePlanInput(req.body?.planCode || req.body?.plan || 'child_basic', 'child');
     if(!studentId || !phone) return res.status(400).json({ success:false, message:'studentId and phone are required' });
     const student = await findStudentForParent(req, studentId);
     if(!student) return res.status(404).json({ success:false, message:'Student not found or not linked to this parent' });
@@ -634,7 +634,7 @@ exports.parentSubscriptionSTK = async (req, res) => {
 exports.parentSubscriptionManual = async (req, res) => {
   try {
     const { studentId, planCode, plan, amount, phone, mpesaCode, reference, billingCycle='monthly', notes } = req.body || {};
-    const code = normalizePlanInput(planCode || plan || 'child_essential', 'child');
+    const code = normalizePlanInput(planCode || plan || 'child_basic', 'child');
     if (!studentId || !(mpesaCode || reference)) return res.status(400).json({ success:false, message:'studentId and M-Pesa code/reference are required' });
     const parent = await currentParent(req);
     if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });

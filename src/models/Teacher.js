@@ -70,6 +70,8 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.JSONB, 
       defaultValue: [] 
     },
+    signature: { type: DataTypes.TEXT, allowNull: true },
+    signatureUrl: { type: DataTypes.TEXT, allowNull: true },
     statistics: {
       type: DataTypes.JSONB,
       defaultValue: { 

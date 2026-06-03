@@ -10,6 +10,7 @@ const {
   AuditLog,
   Settings
 } = require('../models');
+const schoolFeatures = require('../services/schoolFeatureService');
 
 const SCHOOL_CORE_FEATURES = ['attendance', 'marks', 'students', 'teachers', 'basic_reports', 'fees'];
 const SCHOOL_PREMIUM_FEATURES = ['school_branding', 'ai_analytics', 'advanced_reports', 'advanced_timetable', 'smart_alerts', 'premium_dashboards', 'full_ai_tutor'];
@@ -130,9 +131,9 @@ function normalizeLookupCode(code, ownerType) {
     if (raw.includes('starter')) return 'school_starter';
     return raw.startsWith('school_') ? raw : `school_${raw}`;
   }
-  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_essential';
-  if (raw.includes('genius') || raw.includes('ultimate')) return 'child_genius';
-  if (raw.includes('smart') || raw.includes('premium')) return 'child_smart';
+  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_essential' || raw === 'child_basic') return 'child_basic';
+  if (raw.includes('genius') || raw.includes('ultimate')) return 'child_ultimate';
+  if (raw.includes('smart') || raw.includes('premium')) return 'child_premium';
   return raw.startsWith('child_') ? raw : `child_${raw}`;
 }
 
@@ -140,7 +141,7 @@ async function getPlanByCode(code, ownerType) {
   const canonical = normalizeLookupCode(code, ownerType);
   const aliases = ownerType === 'school'
     ? { school_starter: ['school_starter','starter'], school_growth: ['school_growth','growth'], school_enterprise: ['school_enterprise','enterprise'] }
-    : { child_essential: ['child_essential','child_basic','essential','basic'], child_smart: ['child_smart','child_premium','smart','premium'], child_genius: ['child_genius','child_ultimate','genius','ultimate'] };
+    : { child_basic: ['child_basic','child_essential','essential','basic'], child_premium: ['child_premium','child_smart','smart','premium'], child_ultimate: ['child_ultimate','child_genius','genius','ultimate'] };
   const values = aliases[canonical] || [canonical, String(code || '').toLowerCase()];
   return SubscriptionPlan.findOne({
     where: {
@@ -184,8 +185,8 @@ async function findOrCreateChildSubscription(parent, student, plan, cycle) {
       parentId: parent.id,
       studentId: student.id,
       planId: plan?.id || null,
-      planCode: plan?.code || 'child_essential',
-      planName: plan?.displayName || plan?.name || 'Essential',
+      planCode: plan?.code || 'child_basic',
+      planName: plan?.displayName || plan?.name || 'Basic',
       billingCycle: normalizeCycle(cycle),
       status: 'pending',
       features: plan?.features || [],
@@ -263,10 +264,13 @@ exports.getSchoolStatus = async (req, res) => {
   try {
     const school = await getSchoolForUser(req.user);
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    const featureInfo = await schoolFeatures.getSchoolFeatures(school.schoolId);
     const subscription = await Subscription.findOne({ where: { ownerType: 'school', schoolCode: school.schoolId }, include: [{ model: SubscriptionPlan }] });
     const studentCount = await User.count({ where: { schoolCode: school.schoolId, role: 'student' } }).catch(() => 0);
-    const active = subscription?.status === 'active' && subscription.endDate && new Date(subscription.endDate) > new Date();
-    const tier = subscription?.planName || 'Starter';
+    const subActive = subscription?.status === 'active' && subscription.endDate && new Date(subscription.endDate) > new Date();
+    const override = !!featureInfo.fullAccess || !!featureInfo.override;
+    const active = override || subActive;
+    const tier = featureInfo.plan?.name || subscription?.planName || 'Starter';
     res.json({
       success: true,
       data: {
@@ -274,17 +278,21 @@ exports.getSchoolStatus = async (req, res) => {
         schoolCode: school.schoolId,
         schoolName: school.name,
         currentPlan: tier,
-        planCode: subscription?.planCode || 'school_starter',
-        status: active ? 'active' : (subscription?.status || 'pending'),
+        planCode: featureInfo.planCode || subscription?.planCode || 'starter',
+        status: override ? 'pilot_full_access' : (active ? 'active' : (subscription?.status || 'pending')),
         billingCycle: subscription?.billingCycle || 'monthly',
-        expiresAt: subscription?.endDate || null,
-        daysRemaining: daysRemaining(subscription?.endDate, active ? 'active' : subscription?.status),
+        expiresAt: override ? null : (subscription?.endDate || school.subscriptionEndsAt || null),
+        daysRemaining: override ? 9999 : daysRemaining(subscription?.endDate || school.subscriptionEndsAt, active ? 'active' : subscription?.status),
         studentCount,
         schoolTier: tier,
-        coreFeatures: SCHOOL_CORE_FEATURES,
+        features: featureInfo.featureList || [],
+        fullAccess: override,
+        override,
+        accessMode: override ? 'pilot_full_access' : (featureInfo.planCode || 'starter'),
+        coreFeatures: featureInfo.featureList || SCHOOL_CORE_FEATURES,
         premiumLocked: !active,
         lockedFeatures: active ? [] : SCHOOL_PREMIUM_FEATURES,
-        gracefulMode: !active,
+        gracefulMode: !active && !override,
         subscription
       }
     });
@@ -326,7 +334,7 @@ exports.getChildStatus = async (req, res) => {
 
 exports.createChildSubscriptionRequest = async (req, res) => {
   try {
-    const { studentId, planCode='child_essential', billingCycle='monthly' } = req.body || {};
+    const { studentId, planCode='child_basic', billingCycle='monthly' } = req.body || {};
     const parent = await getParentWithStudents(req.user.id);
     if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
     const child = (parent.students || []).find(s => String(s.id) === String(studentId)) || parent.students?.[0];
