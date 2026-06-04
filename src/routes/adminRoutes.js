@@ -80,6 +80,7 @@ router.get('/curriculum/school-subjects', adminController.getSchoolSubjects);
 router.put('/curriculum/school-subjects', adminController.saveSchoolSubjects);
 router.get('/assessment-settings', adminController.getAssessmentSettings);
 router.put('/assessment-settings', adminController.updateAssessmentSettings);
+router.post('/curriculum/classes/sync', adminController.syncCurriculumClasses);
 router.get('/curriculum/classes/:classId/subjects', adminController.getEligibleSubjectsForClass);
 router.get('/students/:studentId/subject-selection', adminController.getStudentSubjectSelection);
 router.put('/students/:studentId/subject-selection', adminController.saveStudentSubjectSelection);

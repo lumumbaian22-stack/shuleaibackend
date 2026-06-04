@@ -810,7 +810,7 @@ function v102BuildCurriculumSettings(school, patch = {}) {
       if (/primary/.test(structureType)) rawGroups.push('early_learning','primary_learning');
       else if (/junior/.test(structureType)) rawGroups.push('junior_school');
       else if (/senior/.test(structureType)) rawGroups.push('senior_secondary');
-      else rawGroups.push('early_learning','primary_learning','junior_school');
+      else rawGroups.push('early_learning','primary_learning','junior_school','senior_secondary');
     } else if (curriculum === '844') {
       if (/secondary/.test(structureType)) rawGroups.push('secondary_844');
       else if (/primary/.test(structureType)) rawGroups.push('primary_844');
@@ -967,6 +967,19 @@ exports.updateCurriculumSetup = async (req, res) => {
     req.body = req.body || {};
     return exports.updateSchoolSettings(req, res);
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+
+exports.syncCurriculumClasses = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const result = await v130SyncClassesForEnabledLevels(school, req.user.id);
+    res.json({ success:true, message:`Curriculum classes synced: ${result.touchedClassIds.length} class(es) touched`, data:result });
+  } catch(error) {
+    console.error('V132 sync curriculum classes error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
 };
 
 exports.getCurriculumLevels = async (req, res) => {
