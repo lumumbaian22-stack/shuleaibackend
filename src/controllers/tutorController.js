@@ -5,16 +5,23 @@ const { LEVELS, normalizeGrade, getLevelByGrade, detectSubject } = require('../s
 const { detectTopic, buildTutorAnswer } = require('../services/tutor/tutorKnowledge');
 const { callStudentTutorAI, getAIProviderConfig } = require('../services/aiProviderService');
 
+// v127: Final parent subscription AI rules.
+// Basic has NO AI Tutor. Premium has 6 AI messages/day. Ultimate has extended access.
+// Legacy Essential/Smart/Genius codes remain accepted as aliases so old active subscriptions do not crash;
+// they are normalized into Basic/Premium/Ultimate behavior.
 const CHILD_AI_PLAN_LIMITS = {
-  child_essential: { daily: 20, monthly: 600, label: 'Essential' },
-  essential: { daily: 20, monthly: 600, label: 'Essential' },
-  basic: { daily: 20, monthly: 600, label: 'Essential' },
-  child_smart: { daily: 75, monthly: 2250, label: 'Smart' },
-  smart: { daily: 75, monthly: 2250, label: 'Smart' },
-  premium: { daily: 75, monthly: 2250, label: 'Smart' },
-  child_genius: { daily: 200, monthly: 6000, label: 'Genius' },
-  genius: { daily: 200, monthly: 6000, label: 'Genius' },
-  ultimate: { daily: 200, monthly: 6000, label: 'Genius' }
+  child_basic: { daily: 0, monthly: 0, label: 'Basic', aiTutor: false },
+  basic: { daily: 0, monthly: 0, label: 'Basic', aiTutor: false },
+  child_essential: { daily: 0, monthly: 0, label: 'Basic', aiTutor: false },
+  essential: { daily: 0, monthly: 0, label: 'Basic', aiTutor: false },
+  child_premium: { daily: 6, monthly: 180, label: 'Premium', aiTutor: true },
+  premium: { daily: 6, monthly: 180, label: 'Premium', aiTutor: true },
+  child_smart: { daily: 6, monthly: 180, label: 'Premium', aiTutor: true },
+  smart: { daily: 6, monthly: 180, label: 'Premium', aiTutor: true },
+  child_ultimate: { daily: 50, monthly: 1500, label: 'Ultimate', aiTutor: true },
+  ultimate: { daily: 50, monthly: 1500, label: 'Ultimate', aiTutor: true },
+  child_genius: { daily: 50, monthly: 1500, label: 'Ultimate', aiTutor: true },
+  genius: { daily: 50, monthly: 1500, label: 'Ultimate', aiTutor: true }
 };
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
@@ -22,24 +29,29 @@ function monthKey(date = new Date()) { return date.toISOString().slice(0, 7); }
 
 function normalizePlanCode(value) {
   const raw = String(value || '').toLowerCase().trim();
-  if (!raw) return '';
-  if (raw.includes('genius') || raw === 'ultimate') return 'child_genius';
-  if (raw.includes('smart') || raw === 'premium') return 'child_smart';
-  if (raw.includes('essential') || raw === 'basic') return 'child_essential';
+  if (!raw) return 'child_basic';
+  if (raw.includes('genius') || raw === 'ultimate' || raw === 'child_ultimate') return 'child_ultimate';
+  if (raw.includes('smart') || raw === 'premium' || raw === 'child_premium') return 'child_premium';
+  if (raw.includes('essential') || raw === 'basic' || raw === 'child_basic') return 'child_basic';
   return raw.startsWith('child_') ? raw : `child_${raw}`;
 }
 
 function planLimitsFrom(subscription, plan) {
   const planCode = normalizePlanCode(subscription?.planCode || plan?.code || plan?.name || subscription?.planName);
-  const defaults = CHILD_AI_PLAN_LIMITS[planCode] || CHILD_AI_PLAN_LIMITS.child_essential;
+  const defaults = CHILD_AI_PLAN_LIMITS[planCode] || CHILD_AI_PLAN_LIMITS.child_basic;
   const limits = { ...(plan?.limits || {}), ...(subscription?.limits || {}) };
-  const daily = Number(limits.aiQuestionsPerDay || limits.dailyAiTutorQuestions || limits.dailyQuestions || defaults.daily);
-  const monthly = Number(limits.aiQuestionsPerMonth || limits.monthlyAiTutorQuestions || limits.monthlyQuestions || defaults.monthly || (daily * 30));
+  const explicitAi = limits.aiTutor ?? limits.aiTutorEnabled ?? limits.aiTutorAccess ?? defaults.aiTutor;
+  const aiTutorEnabled = explicitAi === true || explicitAi === 'true' || explicitAi === 1 || explicitAi === '1' || defaults.aiTutor === true;
+  const dailyRaw = limits.aiQuestionsPerDay ?? limits.dailyAiTutorQuestions ?? limits.dailyQuestions ?? defaults.daily;
+  const monthlyRaw = limits.aiQuestionsPerMonth ?? limits.monthlyAiTutorQuestions ?? limits.monthlyQuestions ?? defaults.monthly;
+  const daily = Number(dailyRaw);
+  const monthly = Number(monthlyRaw);
   return {
     planCode,
     planName: subscription?.planName || plan?.displayName || plan?.name || defaults.label,
-    dailyLimit: Number.isFinite(daily) && daily > 0 ? daily : defaults.daily,
-    monthlyLimit: Number.isFinite(monthly) && monthly > 0 ? monthly : defaults.monthly
+    aiTutorEnabled,
+    dailyLimit: aiTutorEnabled && Number.isFinite(daily) && daily > 0 ? daily : defaults.daily,
+    monthlyLimit: aiTutorEnabled && Number.isFinite(monthly) && monthly > 0 ? monthly : defaults.monthly
   };
 }
 
@@ -130,9 +142,9 @@ exports.getTutorConfig = async (req, res) => {
       provider: providerConfig.provider,
       model: providerConfig.provider === 'anthropic' ? providerConfig.anthropic.model : providerConfig.deepseek.model,
       plans: [
-        { code: 'child_essential', name: 'Essential', dailyLimit: 20, monthlyLimit: 600, priceKes: 100 },
-        { code: 'child_smart', name: 'Smart', dailyLimit: 75, monthlyLimit: 2250, priceKes: 250 },
-        { code: 'child_genius', name: 'Genius', dailyLimit: 200, monthlyLimit: 6000, priceKes: 500 }
+        { code: 'child_basic', name: 'Basic', aiTutor: false, dailyLimit: 0, monthlyLimit: 0, priceKes: 100, features: ['Report cards', 'Attendance', 'Progress'] },
+        { code: 'child_premium', name: 'Premium', aiTutor: true, dailyLimit: 6, monthlyLimit: 180, priceKes: 250, features: ['Everything in Basic', 'AI Tutor: 6 messages/day', 'Child timetable if school has timetable'] },
+        { code: 'child_ultimate', name: 'Ultimate', aiTutor: true, dailyLimit: 50, monthlyLimit: 1500, priceKes: 500, features: ['Everything in Premium', 'Extended AI Tutor', 'Live child analytics', 'Stronger alerts', 'Child recommendations'] }
       ]
     }
   });
@@ -156,13 +168,20 @@ exports.askTutor = async (req, res) => {
     if (!subscription) {
       return res.status(403).json({
         success: false,
-        message: 'AI Tutor is locked. Ask your parent to activate an Essential, Smart, or Genius plan for this child.',
-        data: { locked: true, subscriptionRequired: true, freeTier: false, plans: ['Essential', 'Smart', 'Genius'] }
+        message: 'AI Tutor is locked. Ask your parent to activate Premium or Ultimate for this child. Basic includes report cards, attendance and progress only.',
+        data: { locked: true, subscriptionRequired: true, freeTier: false, plans: ['Premium', 'Ultimate'], basicIncludesAiTutor: false }
       });
     }
 
     const plan = subscription.SubscriptionPlan || await SubscriptionPlan.findByPk(subscription.planId).catch(() => null);
     const planLimit = planLimitsFrom(subscription, plan);
+    if (!planLimit.aiTutorEnabled || planLimit.dailyLimit <= 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'AI Tutor is not included in Basic. Upgrade this child to Premium for 6 messages/day or Ultimate for extended access.',
+        data: { locked: true, reason: 'ai_not_in_plan', plan: planLimit.planName, planCode: planLimit.planCode, requiredPlans: ['Premium', 'Ultimate'] }
+      });
+    }
     const usageDate = todayISO();
     const usageMonth = monthKey();
     let usage = await TutorUsage.findOne({ where: { schoolId, studentId: realStudentId, usageDate } });

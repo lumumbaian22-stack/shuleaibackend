@@ -803,20 +803,27 @@ function v102BuildCurriculumSettings(school, patch = {}) {
   const currentEngine = currentSettings.curriculumEngine || {};
   const curriculum = curriculumEngine.normalizeCurriculum(patch.curriculum || currentEngine.curriculum || school.system || 'cbc');
   const structureType = patch.structureType || patch.schoolStructure || currentEngine.structureType || school.schoolStructure || currentSettings.schoolLevel || 'mixed';
-  const enabledLevels = Array.isArray(patch.enabledLevels) ? patch.enabledLevels : (Array.isArray(currentEngine.enabledLevels) ? currentEngine.enabledLevels : []);
+  const enabledLevelGroups = Array.isArray(patch.enabledLevelGroups) ? patch.enabledLevelGroups : (Array.isArray(currentEngine.enabledLevelGroups) ? currentEngine.enabledLevelGroups : []);
+  const expandedFromGroups = typeof curriculumEngine.expandLevelGroups === 'function' ? curriculumEngine.expandLevelGroups(curriculum, enabledLevelGroups) : [];
+  const enabledLevels = expandedFromGroups.length ? expandedFromGroups : (Array.isArray(patch.enabledLevels) ? patch.enabledLevels : (Array.isArray(currentEngine.enabledLevels) ? currentEngine.enabledLevels : []));
   const schoolSubjects = Array.isArray(patch.schoolSubjects) ? patch.schoolSubjects : (Array.isArray(currentEngine.schoolSubjects) ? currentEngine.schoolSubjects : []);
+  const reportSettings = patch.reportSettings || patch.settings?.reportSettings || currentEngine.reportSettings || currentSettings.reportSettings || {};
   return {
     ...currentSettings,
     schoolStructure: structureType,
+    enabledLevelGroups,
+    reportSettings,
     curriculum,
     curriculumEngine: {
       ...currentEngine,
       curriculum,
       structureType,
+      enabledLevelGroups,
       enabledLevels,
       schoolSubjects,
       seniorSettings: patch.seniorSettings || currentEngine.seniorSettings || {},
       gradingSettings: patch.gradingSettings || currentEngine.gradingSettings || currentSettings.gradingScale || null,
+      reportSettings,
       updatedAt: new Date().toISOString()
     }
   };
@@ -886,7 +893,7 @@ exports.updateSchoolSettings = async (req, res) => {
     }
     if (patch.schoolName) school.name = patch.schoolName;
     if (patch.schoolStructure || patch.structureType) school.schoolStructure = patch.schoolStructure || patch.structureType;
-    if (Array.isArray(newSettings.curriculumEngine.enabledLevels) && newSettings.curriculumEngine.enabledLevels.length) school.enabledLevels = newSettings.curriculumEngine.enabledLevels;
+    if (Array.isArray(newSettings.curriculumEngine.enabledLevels)) school.enabledLevels = newSettings.curriculumEngine.enabledLevels;
     school.settings = { ...newSettings, customSubjects: patch.customSubjects || newSettings.customSubjects || [] };
     await school.save();
     await sequelize.query(`INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","actorRole","module","action","entityType","entityId","before","after","createdAt","updatedAt") VALUES (:schoolCode,:actorUserId,:actorRole,'curriculum','school_settings_updated','School',:entityId,:before,:after,NOW(),NOW())`, {

@@ -29,7 +29,9 @@ module.exports = (sequelize, DataTypes) => {
         managedSchools: {
             type: DataTypes.ARRAY(DataTypes.INTEGER),
             defaultValue: []
-        }
+        },
+        signature: { type: DataTypes.TEXT, allowNull: true },
+        signatureUrl: { type: DataTypes.TEXT, allowNull: true }
     }, {
         timestamps: true,
         hooks: {

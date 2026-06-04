@@ -252,16 +252,25 @@ exports.uploadSignature = async (req, res) => {
         
         const signatureUrl = `/uploads/signatures/${fileName}`;
         
-        // For teachers, store signature in Teacher model
+        // Store signature in both role profile and user preferences so report cards can always find it.
+        const { Teacher, Admin } = require('../models');
+        const absoluteUrl = signatureUrl;
+        const preferences = { ...(req.user.preferences || {}), signatureUrl: absoluteUrl, signatureAbsoluteUrl: absoluteUrl };
+        await req.user.update({ preferences }).catch(() => null);
         if (req.user.role === 'teacher') {
-            const Teacher = require('../models').Teacher;
             await Teacher.update(
-                { signature: signatureUrl },
+                { signature: absoluteUrl, signatureUrl: absoluteUrl },
                 { where: { userId: req.user.id } }
-            );
+            ).catch(() => null);
+        }
+        if (req.user.role === 'admin') {
+            await Admin.update(
+                { signature: absoluteUrl, signatureUrl: absoluteUrl },
+                { where: { userId: req.user.id } }
+            ).catch(() => null);
         }
         
-        res.json({ success: true, data: { signatureUrl } });
+        res.json({ success: true, data: { signatureUrl: absoluteUrl } });
     } catch (error) {
         console.error('Signature upload error:', error);
         res.status(500).json({ success: false, message: error.message });

@@ -206,6 +206,19 @@ const STRUCTURE_PRESETS = {
   }
 };
 
+
+const CBC_LEVEL_GROUPS = {
+  early_learning: ['playgroup','pp1','pp2'],
+  primary_learning: ['grade_1','grade_2','grade_3','grade_4','grade_5','grade_6'],
+  junior_school: ['grade_7','grade_8','grade_9'],
+  senior_secondary: ['grade_10','grade_11','grade_12']
+};
+function expandLevelGroups(curriculum, groups = []) {
+  const cur = normalizeCurriculum(curriculum);
+  if (cur !== 'cbc') return [];
+  return [...new Set((Array.isArray(groups) ? groups : []).flatMap(g => CBC_LEVEL_GROUPS[String(g)] || []))];
+}
+
 function getBank(curriculum) {
   return SUBJECT_BANK[normalizeCurriculum(curriculum)] || SUBJECT_BANK.cbc;
 }
@@ -240,9 +253,10 @@ function getCurriculumConfig(school) {
   const curriculum = normalizeCurriculum(engine.curriculum || school?.system || settings.curriculum || 'cbc');
   const structureType = engine.structureType || settings.schoolStructure || settings.schoolLevel || 'mixed';
   const preset = STRUCTURE_PRESETS[curriculum]?.[structureType] || STRUCTURE_PRESETS[curriculum]?.mixed || getBank(curriculum).levels.map(l => l.code);
-  const enabledLevels = Array.isArray(engine.enabledLevels) && engine.enabledLevels.length ? engine.enabledLevels : preset;
+  const groupedLevels = expandLevelGroups(curriculum, engine.enabledLevelGroups || settings.enabledLevelGroups || []);
+  const enabledLevels = groupedLevels.length ? groupedLevels : (Array.isArray(engine.enabledLevels) && engine.enabledLevels.length ? engine.enabledLevels : preset);
   const schoolSubjects = Array.isArray(engine.schoolSubjects) ? engine.schoolSubjects : [];
-  return { curriculum, structureType, enabledLevels, schoolSubjects, gradingSettings: engine.gradingSettings || settings.gradingScale || null, seniorSettings: engine.seniorSettings || {}, raw: engine };
+  return { curriculum, structureType, enabledLevels, enabledLevelGroups: engine.enabledLevelGroups || settings.enabledLevelGroups || [], schoolSubjects, gradingSettings: engine.gradingSettings || settings.gradingScale || null, reportSettings: engine.reportSettings || settings.reportSettings || null, seniorSettings: engine.seniorSettings || {}, raw: engine };
 }
 
 function getAllowedLevelsForSchool(school) {
@@ -389,6 +403,7 @@ module.exports = {
   buildSubjectRowsForReport,
   summarizeReportRows,
   getGradingProfile,
+  expandLevelGroups,
   STRUCTURE_PRESETS,
   SUBJECT_BANK
 };

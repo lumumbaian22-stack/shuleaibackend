@@ -1545,3 +1545,25 @@ exports.getSchools = async (req, res) => {
     res.status(500).json({ success:false, message:error.message });
   }
 };
+
+// v124: audit wrong/unsafe parent-child links created by legacy imports or old fallback logic.
+exports.auditStudentParentLinks = async (req, res) => {
+  try {
+    const audit = require('../services/parentLinkAuditService');
+    const data = await audit.findBadLinks();
+    res.json({ success: true, data, count: data.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.cleanupStudentParentLinks = async (req, res) => {
+  try {
+    const audit = require('../services/parentLinkAuditService');
+    const dryRun = req.body?.dryRun !== false;
+    const data = await audit.cleanupBadLinks({ dryRun });
+    res.json({ success: true, data, message: dryRun ? 'Dry run complete. Send dryRun:false to remove bad links.' : 'Bad parent-child links cleaned.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

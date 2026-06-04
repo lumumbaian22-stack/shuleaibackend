@@ -1,7 +1,8 @@
-const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, Class, Settings, SubscriptionPlan, sequelize } = require('../models');
+const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, Class, Settings, SubscriptionPlan, Admin, sequelize } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
+const ownership = require('../services/parentOwnershipService');
 
 
 async function countLinkedParents(studentId) {
@@ -41,86 +42,19 @@ function normalizePhone(value) {
 
 async function parentOwnsStudentStrict(parent, student, user) {
   if (!parent || !student || !user) return false;
-  const studentId = Number(student.id || 0);
-  const studentUserId = Number(student.userId || student.User?.id || 0);
-  const parentProfileId = Number(parent.id || 0);
-  const parentUserId = Number(user.id || parent.userId || 0);
-  if (!studentId || !parentUserId) return false;
-  const studentIds = [...new Set([studentId, studentUserId].filter(Boolean))];
-  const parentIds = [...new Set([parentProfileId, parentUserId].filter(Boolean))];
-  const rows = await sequelize.query(`
-    SELECT sp."studentId", sp."parentId", p."id" AS "realParentId", p."userId" AS "linkedParentUserId"
-      FROM "StudentParents" sp
-      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-     WHERE sp."studentId" IN (:studentIds)
-       AND (sp."parentId" IN (:parentIds) OR p."userId" = :parentUserId)
-     LIMIT 1`,
-    { replacements: { studentIds, parentIds, parentUserId }, type: sequelize.QueryTypes.SELECT }
-  ).catch(() => []);
-  if (rows.length) {
-    if (parentProfileId && Number(rows[0].studentId) !== studentId || parentProfileId && Number(rows[0].parentId) !== parentProfileId) {
-      await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
-    }
-    return true;
-  }
-  const directParentId = Number(student.parentId || student.parentUserId || student.guardianId || student.guardianUserId || 0);
-  if (directParentId && (directParentId === parentProfileId || directParentId === parentUserId)) {
-    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
-    return true;
-  }
-  return false;
+  return ownership.ownsStudentId({
+    parentUserId: user.id || parent.userId,
+    parentId: parent.id,
+    studentId: student.id,
+    schoolCode: user.schoolCode
+  });
 }
+
 
 async function parentOwnsStudent(parent, student, user) {
-  if (!parent || !student || !user) return false;
-  const studentId = Number(student.id || student.studentId || 0);
-  const studentUserId = Number(student.userId || student.User?.id || 0);
-  const parentProfileId = Number(parent.id || 0);
-  const parentUserId = Number(user.id || parent.userId || 0);
-  if (!studentId || !parentUserId) return false;
-
-  const studentIds = [...new Set([studentId, studentUserId].filter(Boolean))];
-  const rows = await sequelize.query(`
-    SELECT sp."studentId", sp."parentId", p."userId" AS "linkedParentUserId"
-      FROM "StudentParents" sp
-      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-     WHERE sp."studentId" IN (:studentIds)
-       AND (
-         sp."parentId" = :parentProfileId
-         OR sp."parentId" = :parentUserId
-         OR p."userId" = :parentUserId
-       )
-     LIMIT 1`,
-    { replacements: { studentIds, parentProfileId, parentUserId }, type: sequelize.QueryTypes.SELECT }
-  ).catch(() => []);
-
-  if (rows.length) {
-    // Heal old links that used User.id instead of Student.id, or parent User.id instead of Parent.id.
-    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
-    return true;
-  }
-
-  // Direct student fields used by some legacy imports/manual links.
-  const directParentId = Number(student.parentId || student.parentUserId || student.guardianId || student.guardianUserId || 0);
-  if (directParentId && (directParentId === parentProfileId || directParentId === parentUserId)) {
-    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
-    return true;
-  }
-
-  // Safe fallback for schools that imported students with parent contact details before StudentParents existed.
-  const userEmail = String(user.email || '').trim().toLowerCase();
-  const userPhone = normalizePhone(user.phone || user.phoneNumber || user.mobile || '');
-  const studentEmail = String(student.parentEmail || student.guardianEmail || '').trim().toLowerCase();
-  const studentPhone = normalizePhone(student.parentPhone || student.guardianPhone || student.emergencyContact || '');
-  const emailMatches = userEmail && studentEmail && userEmail === studentEmail;
-  const phoneMatches = userPhone && studentPhone && userPhone === studentPhone;
-  if (emailMatches || phoneMatches) {
-    if (parentProfileId) await linkParentToStudentSafely(parentProfileId, studentId).catch(() => null);
-    return true;
-  }
-
-  return false;
+  return parentOwnsStudentStrict(parent, student, user);
 }
+
 
 async function enrichLinkedChildren(children) {
   const classIds = [...new Set(children.map(c => c.classId).filter(Boolean))];
@@ -160,26 +94,8 @@ exports.getChildren = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Parent profile not found' });
     }
 
-    const linkedRows = await sequelize.query(`
-      SELECT DISTINCT s."id"
-        FROM "Students" s
-        JOIN "StudentParents" sp ON sp."studentId" IN (s."id", s."userId")
-        LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-        JOIN "Users" u ON u."id" = s."userId"
-       WHERE u."schoolCode" = :schoolCode
-         AND (sp."parentId" = :parentProfileId OR sp."parentId" = :parentUserId OR p."userId" = :parentUserId)
-       ORDER BY s."id" ASC`,
-      { replacements: { schoolCode: req.user.schoolCode, parentProfileId: parent.id, parentUserId: req.user.id }, type: sequelize.QueryTypes.SELECT }
-    ).catch(() => []);
-    const ids = linkedRows.map(r => Number(r.id)).filter(Boolean);
-    const children = ids.length ? await Student.findAll({
-      where: { id: { [Op.in]: ids } },
-      attributes: { include: ['classId'] },
-      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode', 'profileImage'] }],
-      order: [[User, 'name', 'ASC']]
-    }) : [];
-    for (const child of children) await linkParentToStudentSafely(parent.id, child.id).catch(() => null);
-
+    // v124: strict parent-child isolation. Only approved/active StudentParents links are returned.
+    const children = await ownership.listOwnedStudents({ parentUserId: req.user.id, schoolCode: req.user.schoolCode });
     const enrichedChildren = await enrichLinkedChildren(children);
     res.json({ success: true, data: enrichedChildren });
   } catch (error) {
@@ -323,60 +239,114 @@ exports.getChildReportCardDetails = async (req, res) => {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-    const student = await Student.findOne({
-      where: { [Op.or]: [{ id: Number(studentId) || 0 }, { userId: Number(studentId) || 0 }] },
-      attributes: { include: ['classId'] },
-      include: [{ model: User, attributes: ['id','name','email','phone','schoolCode','profileImage'] }]
-    });
-    if (!student) return res.status(404).json({ success:false, message:'Student not found' });
-    const linked = await parentOwnsStudentStrict(parent, student, req.user);
-    if (!linked || student.User?.schoolCode !== req.user.schoolCode) return res.status(403).json({ success:false, message:'Not your child' });
+    const owned = await ownership.assertParentOwnsStudent({ parentUserId: req.user.id, parentId: parent.id, studentId, schoolCode: req.user.schoolCode });
+    const student = owned.student;
 
     const schoolCode = student.User?.schoolCode || req.user.schoolCode;
-    const school = await School.findOne({ where: { schoolId: schoolCode }, attributes: ['name','schoolId','system','settings'] }).catch(() => null);
+    const school = await School.findOne({ where: { schoolId: schoolCode }, attributes: ['name','schoolId','system','settings','reportCardSettings'] }).catch(() => null);
     const curriculum = school?.system || school?.settings?.curriculum || student.curriculum || 'cbc';
     const schoolLevel = school?.settings?.schoolLevel || 'secondary';
     const classTeacher = await Teacher.findOne({
       where: student.classId ? { [Op.or]: [{ classTeacher: student.grade }, { classId: student.classId }] } : { classTeacher: student.grade },
-      include: [{ model: User, attributes: ['id','name','email','phone'] }]
+      include: [{ model: User, attributes: ['id','name','email','phone','preferences'] }]
     }).catch(() => null);
+    const adminSigner = await Admin.findOne({
+      where: {},
+      include: [{ model: User, attributes: ['id','name','email','phone','preferences'], where: { schoolCode, role: 'admin' }, required: true }],
+      order: [['updatedAt','DESC']]
+    }).catch(() => null);
+    const safeSig = (model, user) => model?.signatureUrl || model?.signature || user?.preferences?.signatureUrl || user?.preferences?.signatureAbsoluteUrl || '';
+
     const records = await AcademicRecord.findAll({
       where: { studentId: student.id, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
       order: [['year','DESC'], ['term','DESC'], ['date','DESC']]
     }).catch(() => []);
+    const assessmentSettings = await sequelize.query(`
+      SELECT * FROM "SchoolAssessmentSettings" WHERE "schoolCode" = :schoolCode ORDER BY "displayOrder" ASC, "id" ASC
+    `, { replacements:{ schoolCode }, type:sequelize.QueryTypes.SELECT }).catch(() => []);
+    const defaultTests = [
+      { assessmentType:'cat', label:'CAT', showOnReport:true, countInFinal:true, weight:20, displayOrder:1 },
+      { assessmentType:'midterm', label:'Midterm', showOnReport:true, countInFinal:true, weight:30, displayOrder:2 },
+      { assessmentType:'end_term', label:'End Term', showOnReport:true, countInFinal:true, weight:50, displayOrder:3 },
+      { assessmentType:'sba', label:'SBA', showOnReport:false, countInFinal:false, weight:0, displayOrder:4 },
+      { assessmentType:'project', label:'Project', showOnReport:false, countInFinal:false, weight:0, displayOrder:5 },
+      { assessmentType:'practical', label:'Practical', showOnReport:false, countInFinal:false, weight:0, displayOrder:6 }
+    ];
+    const testSettings = assessmentSettings.length ? assessmentSettings : defaultTests;
+    const settingMap = new Map(testSettings.map(t => [String(t.assessmentType || t.type || '').toLowerCase(), t]));
+    const normalizedType = (r) => String(r.assessmentType || r.testType || r.examType || r.assessmentName || r.assessment || 'end_term').toLowerCase().replace(/\s+/g, '_');
+    const gradeFromScore = (score) => {
+      const n = Number(score || 0);
+      if (String(curriculum).toLowerCase() === 'cbc' || String(curriculum).toLowerCase() === 'cbe') { if (n >= 80) return 'EE'; if (n >= 60) return 'ME'; if (n >= 40) return 'AE'; return n > 0 ? 'BE' : '-'; }
+      if (n >= 80) return 'A'; if (n >= 70) return 'B'; if (n >= 60) return 'C'; if (n >= 50) return 'D'; return n > 0 ? 'E' : '-';
+    };
     const subjectMap = {};
     records.forEach(r => {
       const subject = r.subject || 'Subject';
-      if (!subjectMap[subject]) subjectMap[subject] = { total:0, count:0 };
-      subjectMap[subject].total += Number(r.score || 0);
-      subjectMap[subject].count += 1;
+      const type = normalizedType(r);
+      const setting = settingMap.get(type) || settingMap.get(type.replace(/_?exam$/, '')) || { label:r.assessmentName || r.assessment || type, showOnReport:true, countInFinal:true, weight:0, displayOrder:99 };
+      if (setting.showOnReport === false || r.showOnReport === false) return;
+      if (!subjectMap[subject]) subjectMap[subject] = { subject, weighted:0, weight:0, rawTotal:0, rawCount:0, components:[] };
+      const score = Number(r.score || 0);
+      const weight = Number(r.assessmentWeight ?? setting.weight ?? 0);
+      if (setting.countInFinal !== false && r.countInFinal !== false) {
+        if (weight > 0) { subjectMap[subject].weighted += score * weight; subjectMap[subject].weight += weight; }
+        else { subjectMap[subject].rawTotal += score; subjectMap[subject].rawCount += 1; }
+      }
+      subjectMap[subject].components.push({ type, label:setting.label || r.assessmentName || r.assessment || type, score, weight, countInFinal:setting.countInFinal !== false && r.countInFinal !== false, displayOrder:Number(setting.displayOrder || 99), date:r.date, term:r.term, year:r.year });
     });
-    const gradeFromScore = (score) => {
-      const n = Number(score || 0);
-      if (n >= 80) return 'A'; if (n >= 70) return 'B'; if (n >= 60) return 'C'; if (n >= 50) return 'D'; return n > 0 ? 'E' : '-';
-    };
-    const subjects = Object.entries(subjectMap).map(([subject, d]) => {
-      const average = Math.round(d.total / Math.max(1, d.count));
-      return { subject, average, grade: gradeFromScore(average) };
+    const subjects = Object.values(subjectMap).map((d) => {
+      const average = d.weight > 0 ? Math.round(d.weighted / d.weight) : Math.round(d.rawTotal / Math.max(1, d.rawCount));
+      return { subject:d.subject, average, grade:gradeFromScore(average), components:d.components.sort((a,b)=>a.displayOrder-b.displayOrder) };
     });
     const attendance = await Attendance.findAll({ where: { studentId: student.id, schoolCode }, order: [['date','DESC']] }).catch(() => []);
     const present = attendance.filter(a => a.status === 'present').length;
     const absent = attendance.filter(a => a.status === 'absent').length;
     const late = attendance.filter(a => a.status === 'late').length;
     const rate = attendance.length ? Math.round((present / attendance.length) * 100) : 0;
+    const fee = await Fee.findOne({ where: { studentId: student.id, status: { [Op.ne]: 'paid' } }, order:[['updatedAt','DESC']] }).catch(() => null);
+    const feeBalance = fee ? Math.max(0, Number(fee.totalAmount || 0) - Number(fee.paidAmount || 0)) : null;
+
+    let ranking = { classPosition: null, classSize: null, streamPosition: null, streamSize: null, showClassPosition: false, showStreamPosition: false };
+    try {
+      const reportSettings = school?.settings?.reportCardSettings || school?.reportCardSettings || {};
+      const showClassPosition = reportSettings.showClassPosition === true || reportSettings.showPositions === true || ['844','8-4-4'].includes(String(curriculum).toLowerCase());
+      const showStreamPosition = reportSettings.showStreamPosition === true;
+      if ((showClassPosition || showStreamPosition) && student.classId) {
+        const peers = await sequelize.query(`
+          SELECT ar."studentId", AVG(COALESCE(ar."score",0)) AS avg_score
+          FROM "AcademicRecords" ar
+          JOIN "Students" st ON st."id" = ar."studentId"
+          JOIN "Users" u ON u."id" = st."userId"
+          WHERE u."schoolCode" = :schoolCode
+            AND st."classId" = :classId
+            AND (ar."isPublished" = true OR ar."status" = 'published')
+          GROUP BY ar."studentId"
+          ORDER BY avg_score DESC
+        `, { replacements:{ schoolCode, classId: student.classId }, type:sequelize.QueryTypes.SELECT }).catch(() => []);
+        const ordered = peers.map((p, idx) => ({ studentId:Number(p.studentId), avg:Number(p.avg_score || 0), rank:idx + 1 }));
+        const mine = ordered.find(p => p.studentId === Number(student.id));
+        ranking = { classPosition: mine?.rank || null, classSize: ordered.length || null, streamPosition: mine?.rank || null, streamSize: ordered.length || null, showClassPosition, showStreamPosition };
+      }
+    } catch (rankErr) { console.warn('Report position calculation skipped:', rankErr.message); }
 
     res.json({ success:true, data:{
-      student: { id:student.id, elimuid:student.elimuid, grade:student.grade, status:student.status, classId:student.classId, photo:student.User?.profileImage },
+      student: { id:student.id, elimuid:student.elimuid, grade:student.grade, status:student.status, classId:student.classId, photo:student.User?.profileImage || student.profileImage || student.photo || student.passportPhoto, curriculum },
       user: { name:student.User?.name, email:student.User?.email, phone:student.User?.phone },
-      classTeacher: classTeacher?.User ? { name:classTeacher.User.name, email:classTeacher.User.email, phone:classTeacher.User.phone } : null,
+      classTeacher: classTeacher?.User ? { name:classTeacher.User.name, email:classTeacher.User.email, phone:classTeacher.User.phone, signature:safeSig(classTeacher, classTeacher.User), signatureUrl:safeSig(classTeacher, classTeacher.User) } : null,
+      headteacher: adminSigner?.User ? { name:adminSigner.User.name, email:adminSigner.User.email, phone:adminSigner.User.phone, signature:safeSig(adminSigner, adminSigner.User), signatureUrl:safeSig(adminSigner, adminSigner.User) } : null,
+      principal: adminSigner?.User ? { name:adminSigner.User.name, email:adminSigner.User.email, phone:adminSigner.User.phone, signature:safeSig(adminSigner, adminSigner.User), signatureUrl:safeSig(adminSigner, adminSigner.User) } : null,
+      reportSignatures: { classTeacher:safeSig(classTeacher, classTeacher?.User), headteacher:safeSig(adminSigner, adminSigner?.User), principal:safeSig(adminSigner, adminSigner?.User) },
       academicSummary: { overallAverage: records.length ? Math.round(records.reduce((sum, r) => sum + Number(r.score || 0), 0) / records.length) : 0, subjects },
       attendanceSummary: { rate, present, absent, late },
-      recentAssessments: records.slice(0, 5).map(r => ({ subject:r.subject, assessment:r.assessmentName, score:r.score, grade:gradeFromScore(r.score), term:r.term, year:r.year, date:r.date })),
-      school: { name:school?.name || null, schoolName:school?.name || null, schoolCode, curriculum, system:curriculum, schoolLevel, logo:school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null, branding:school?.settings?.branding || {} }
+      feeBalance,
+      ranking,
+      recentAssessments: records.slice(0, 5).map(r => ({ subject:r.subject, assessment:r.assessmentName || r.assessmentType || r.assessment, score:r.score, grade:gradeFromScore(r.score), term:r.term, year:r.year, date:r.date })),
+      school: { name:school?.name || null, schoolName:school?.name || null, schoolCode, curriculum, system:curriculum, schoolLevel, logo:school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null, branding:school?.settings?.branding || {}, reportCardSettings: school?.settings?.reportCardSettings || school?.reportCardSettings || {} }
     }});
   } catch (error) {
     console.error('Get child report card details error:', error);
-    res.status(500).json({ success:false, message:error.message });
+    res.status(error.status || 500).json({ success:false, message:error.message });
   }
 };
 
@@ -503,7 +473,7 @@ exports.getSubscriptionPlans = async (req, res) => {
         const amount = Number(p.amount ?? p.price ?? p.monthlyPriceKes ?? p.price_kes ?? 0) || 0;
         return {
           id: code,
-          code: code === 'basic' ? 'child_essential' : code === 'premium' ? 'child_smart' : code === 'ultimate' ? 'child_genius' : (code.startsWith('child_') ? code : `child_${code}`),
+          code: code === 'basic' ? 'child_basic' : code === 'premium' ? 'child_premium' : code === 'ultimate' ? 'child_ultimate' : code === 'essential' ? 'child_basic' : code === 'smart' ? 'child_premium' : code === 'genius' ? 'child_ultimate' : (code.startsWith('child_') ? code : `child_${code}`),
           name: p.displayName || p.name || code,
           displayName: p.displayName || p.name || code,
           price: amount,
@@ -542,9 +512,9 @@ exports.getSubscriptionPlans = async (req, res) => {
       })) });
     }
     res.json({ success: true, data: [
-      { id: 'child_essential', code:'child_essential', name: 'Essential', price: 100, currency: 'KES', interval: 'month', features: ['Report cards', 'Attendance', 'Homework tracking', 'Teacher communication'] },
-      { id: 'child_smart', code:'child_smart', name: 'Smart', price: 300, currency: 'KES', interval: 'month', features: ['Everything in Essential', 'Progress analytics', 'Study insights'] },
-      { id: 'child_genius', code:'child_genius', name: 'Genius', price: 500, currency: 'KES', interval: 'month', features: ['Everything in Smart', 'AI tutor', 'Full analytics'] }
+      { id: 'child_basic', code:'child_basic', name: 'Basic', displayName:'Basic', price: 100, monthlyPriceKes:100, currency: 'KES', interval: 'month', features: ['Report cards', 'Attendance', 'Progress'], limits:{ days:30, aiTutor:false, aiQuestionsPerDay:0, aiQuestionsPerMonth:0 } },
+      { id: 'child_premium', code:'child_premium', name: 'Premium', displayName:'Premium', price: 250, monthlyPriceKes:250, currency: 'KES', interval: 'month', features: ['Everything in Basic', 'AI Tutor: 6 messages/day', 'Child timetable if school has timetable'], limits:{ days:30, aiTutor:true, aiQuestionsPerDay:6, aiQuestionsPerMonth:180 } },
+      { id: 'child_ultimate', code:'child_ultimate', name: 'Ultimate', displayName:'Ultimate', price: 500, monthlyPriceKes:500, currency: 'KES', interval: 'month', features: ['Everything in Premium', 'Extended AI Tutor', 'Live child analytics', 'Stronger alerts', 'Child recommendations'], limits:{ days:30, aiTutor:true, aiQuestionsPerDay:50, aiQuestionsPerMonth:1500 } }
     ] });
   } catch (error) {
     console.error('Get plans error:', error);

@@ -173,7 +173,7 @@ exports.getAgentToolkit = async (req, res) => {
     pricing: [
       { name: 'School Starter', target: 'Small schools', includes: ['Core school OS', 'Parents portal', 'Finance & Fees', 'Alerts'], note: 'Use as entry package.' },
       { name: 'School Growth', target: 'Growing schools', includes: ['Everything in Starter', 'Analytics', 'AI announcement suggestions', 'Advanced reports'], note: 'Best pilot-to-rollout option.' },
-      { name: 'Child AI Plans', target: 'Parents/students', includes: ['Essential', 'Smart', 'Genius'], note: 'Student AI tutor is paid per child.' }
+      { name: 'Parent Child Plans', target: 'Parents/students', includes: ['Basic: reports/attendance/progress', 'Premium: AI Tutor 6/day', 'Ultimate: extended AI + recommendations'], note: 'Parent subscriptions are paid per child. Basic does not include AI Tutor.' }
     ],
     pitchScript: 'Shule AI gives schools one intelligent platform for fees, attendance, academics, communication, alerts, AI tutoring, and student success — built for Kenyan schools and mobile-first usage.',
     faq: [
