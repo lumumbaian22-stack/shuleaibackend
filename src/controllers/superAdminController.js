@@ -679,7 +679,7 @@ exports.getSystemStatus = async (req, res) => {
     
     // Check API status (always operational if we're here)
     const apiStatus = 'operational';
-    const apiLatency = Math.floor(Math.random() * 50) + 50; // Mock latency
+    const apiLatency = Date.now() - (req._startAt || Date.now())
     
     // Check WebSocket (if you have socket.io)
     let websocketStatus = 'connected';
@@ -728,7 +728,7 @@ exports.getSystemMetrics = async (req, res) => {
     
     // Get database size (if PostgreSQL)
     let storageUsed = 0;
-    let storageTotal = 100; // GB
+    let storageTotal = null; // host storage quota is not exposed by Render/API runtime
     try {
       const [results] = await sequelize.query(`
         SELECT pg_database_size(current_database()) as size
@@ -738,7 +738,7 @@ exports.getSystemMetrics = async (req, res) => {
       console.error('Failed to get database size:', dbError);
     }
     
-    const storagePercent = (storageUsed / storageTotal) * 100;
+    const storagePercent = storageTotal ? (storageUsed / storageTotal) * 100 : null;
     
     res.json({
       success: true,
@@ -752,7 +752,7 @@ exports.getSystemMetrics = async (req, res) => {
         memoryTotal: Math.round(totalMem),
         storageUsed: Math.round(storageUsed),
         storageTotal,
-        storagePercent: Math.min(100, Math.round(storagePercent)),
+        storagePercent: storagePercent === null ? null : Math.min(100, Math.round(storagePercent)),
         uptime: os.uptime(),
         timestamp: new Date()
       }

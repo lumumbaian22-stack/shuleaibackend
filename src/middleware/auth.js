@@ -1,7 +1,30 @@
 const jwt = require('jsonwebtoken');
-const { User, School } = require('../models');
+const { User, School, Teacher, Student, Parent, Admin } = require('../models');
 const { computeSchoolAccess } = require('../services/schoolAccessEngine');
 const { setTenantUser } = require('./requestContext');
+
+
+async function resolveSchoolScopeForUser(user) {
+  if (!user || user.role === 'super_admin') return null;
+  if (user.schoolCode) return user.schoolCode;
+  const lookups = {
+    teacher: () => Teacher.findOne({ where: { userId: user.id } }),
+    student: () => Student.findOne({ where: { userId: user.id } }),
+    parent: () => Parent.findOne({ where: { userId: user.id } }),
+    admin: () => Admin.findOne({ where: { userId: user.id } })
+  };
+  const fn = lookups[String(user.role || '').toLowerCase()];
+  if (!fn) return null;
+  const profile = await fn().catch(() => null);
+  const direct = profile?.schoolCode || profile?.schoolId || null;
+  if (direct) return direct;
+  // Admin profiles may store numeric School.id values in managedSchools.
+  if (String(user.role).toLowerCase() === 'admin' && Array.isArray(profile?.managedSchools) && profile.managedSchools.length) {
+    const school = await School.findOne({ where: { id: profile.managedSchools[0] } }).catch(() => null);
+    return school?.schoolId || null;
+  }
+  return null;
+}
 
 const protect = async (req, res, next) => {
   let token;
@@ -21,13 +44,21 @@ const protect = async (req, res, next) => {
     if (!user || !user.isActive) {
       return res.status(401).json({ success: false, message: 'User not found or inactive' });
     }
+    if (user.role !== 'super_admin' && !user.schoolCode) {
+      const resolvedSchoolCode = await resolveSchoolScopeForUser(user);
+      if (resolvedSchoolCode) {
+        user.schoolCode = resolvedSchoolCode;
+        await User.update({ schoolCode: resolvedSchoolCode }, { where: { id: user.id } }).catch(() => null);
+      }
+    }
     req.user = user;
     setTenantUser(user);
     if (user.role !== 'super_admin' && !user.schoolCode) {
-      return res.status(403).json({ success: false, message: 'User is not attached to a school tenant' });
+      return res.status(403).json({ success: false, code: 'SCHOOL_SCOPE_REQUIRED', message: 'User is not attached to a school tenant' });
     }
     if (user.role !== 'super_admin' && user.schoolCode) {
       const school = await School.findOne({ where: { schoolId: user.schoolCode } }).catch(() => null);
+      req.school = school || null;
       if (school) {
         const access = computeSchoolAccess(school);
         req.schoolAccess = access;

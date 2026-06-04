@@ -52,10 +52,12 @@ const { requestContext, productionErrorHandler } = require('./middleware/request
 const { ensureRuntimeSchema } = require('./utils/schemaSafety');
 const { accessSchemaMiddleware, ensureSchoolAccessSchema } = require('./utils/accessSchemaGuard');
 const { requireFeature } = require('./middleware/featureGate');
+const { protect } = require('./middleware/auth');
 
 const app = express();
 
 // ============ MIDDLEWARE ============
+app.use((req, res, next) => { req._startAt = Date.now(); next(); });
 app.use(requestContext);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
@@ -290,7 +292,7 @@ app.post('/api/system/repair-schema', (req, res, next) => {
 // ============ MOUNT ROUTES ============
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/duty', requireFeature('duty'), dutyRoutes);
+app.use('/api/duty', protect, requireFeature('duty'), dutyRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/teacher', teacherRoutes);
@@ -315,9 +317,9 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/sms', smsRoutes);
 // V27 compatibility routes fix old frontend/test endpoints and role-safe aliases.
 app.use('/api', compatibilityRoutes);
-app.use('/api/calendar', requireFeature('calendar'), calendarRoutes);
-app.use('/api/timetable', requireFeature('timetable'), timetableRoutes);
-app.use('/api/homework', requireFeature('homework'), homeworkRoutes);
+app.use('/api/calendar', protect, requireFeature('calendar'), calendarRoutes);
+app.use('/api/timetable', protect, requireFeature('timetable'), timetableRoutes);
+app.use('/api/homework', protect, requireFeature('homework'), homeworkRoutes);
 app.use('/api/gamification', gamificationRoutes);
 app.use('/api/chat-v9', chatV9Routes);
 app.use('/api/scale', scaleRoutes);

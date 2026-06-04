@@ -44,7 +44,9 @@ router.get('/gradebook', teacherController.getClassGradebook);
 router.get('/reports/snapshots', teacherController.listClassReportSnapshots);
 router.get('/performance', teacherController.getPerformanceData);
 router.get('/subject-selection-requests', subjectSelectionController.listTeacherSubjectRequests);
+router.get('/subject-requests', subjectSelectionController.listTeacherSubjectRequests);
 router.post('/subject-selection-requests/:selectionId/review', subjectSelectionController.reviewTeacherSubjectRequest);
+router.post('/subject-requests/:selectionId/review', subjectSelectionController.reviewTeacherSubjectRequest);
 
 // Messaging (Parent)
 router.get('/parent-conversations', chatController.getParentConversations);
