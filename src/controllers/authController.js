@@ -4,6 +4,26 @@ const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 const sequelize = require('../config/database');
 const { computeSchoolAccess } = require('../services/schoolAccessEngine');
+const { getSchoolFeatures } = require('../services/schoolFeatureService');
+const curriculumEngine = require('../services/curriculumStructureEngine');
+
+async function buildSchoolSessionPayload(school) {
+  if (!school) return null;
+  const json = school.toJSON ? school.toJSON() : school;
+  const access = computeSchoolAccess(school);
+  const featurePayload = await getSchoolFeatures(json.schoolId || json.schoolCode).catch(() => ({ planCode: access.planCode || 'starter', featureList: [], plan: null, fullAccess:false, brandingAllowed:false }));
+  return {
+    ...json,
+    access,
+    planCode: featurePayload.planCode || access.planCode || 'starter',
+    plan: featurePayload.plan || null,
+    features: featurePayload.featureList || [],
+    featureList: featurePayload.featureList || [],
+    fullAccess: !!(featurePayload.fullAccess || access.fullAccess),
+    brandingAllowed: !!(featurePayload.brandingAllowed || access.brandingAllowed),
+    curriculumSetup: curriculumEngine.getCurriculumConfig(school)
+  };
+}
 
 async function linkParentToStudentSafely(parentId, studentId) {
   const now = new Date();
@@ -68,7 +88,7 @@ const authController = {
     try {
       const { 
         name, email, password, phone, 
-        schoolName, schoolLevel, curriculum, schoolType,
+        schoolName, schoolLevel, curriculum, schoolType, enabledLevels, enabledLevelGroups, structureType, schoolStructure,
         address, contact 
       } = req.body;
 
@@ -90,10 +110,14 @@ const authController = {
       }
 
       // Create school - let the model defaults handle schoolId and shortCode
+      const normalizedCurriculum = curriculumEngine.normalizeCurriculum(curriculum || 'cbc');
+      const selectedLevels = curriculumEngine.expandEnabledLevelCodes(normalizedCurriculum, [...(Array.isArray(enabledLevelGroups) ? enabledLevelGroups : []), ...(Array.isArray(enabledLevels) ? enabledLevels : [])]);
+      const selectedGroups = curriculumEngine.groupsFromEnabledLevels(normalizedCurriculum, selectedLevels);
+      const normalizedStructure = structureType || schoolStructure || schoolLevel || 'mixed';
       console.log('Creating school with name:', schoolName);
       const school = await School.create({
         name: schoolName,
-        system: curriculum || 'cbc',
+        system: normalizedCurriculum,
         address: address || {},
         contact: contact || { phone, email },
         status: 'pending',
@@ -102,9 +126,11 @@ const authController = {
           allowTeacherSignup: true,
           requireApproval: true,
           autoApproveDomains: [],
-          schoolLevel: schoolLevel || 'secondary',
-          curriculum: curriculum || 'cbc',
+          schoolLevel: normalizedStructure,
+          curriculum: normalizedCurriculum,
           schoolType: schoolType || 'day',
+          schoolStructure: normalizedStructure,
+          curriculumEngine: { curriculum: normalizedCurriculum, structureType: normalizedStructure, enabledLevels: selectedLevels, enabledLevelGroups: selectedGroups, schoolSubjects: [], assessmentSettings: curriculumEngine.defaultAssessmentSettings(), updatedAt: new Date().toISOString() },
           originalSignupName: schoolName,
           displayName: schoolName,
           boarding: { type: schoolType || 'day', hasBoarding: ['boarding','day_boarding'].includes(schoolType || 'day') },
@@ -114,7 +140,9 @@ const authController = {
             maxTeachersPerDay: 3,
             checkInWindow: 15
           }
-        }
+        },
+        schoolStructure: normalizedStructure,
+        enabledLevels: selectedLevels
       });
 
       console.log('School created successfully:', {
@@ -449,12 +477,11 @@ const authController = {
       else if (role === 'admin') profile = await Admin.findOne({ where: { userId: user.id } });
 
       const school = user.schoolCode ? await School.findOne({ where: { schoolId: user.schoolCode } }) : null;
-      const schoolJson = school?.toJSON ? school.toJSON() : school;
-      const schoolAccess = school ? computeSchoolAccess(school) : null;
+      const schoolPayload = await buildSchoolSessionPayload(school);
 
       res.json({
         success: true,
-        data: { token, user: user.getPublicProfile(), profile, school: schoolJson ? { ...schoolJson, access: schoolAccess } : null }
+        data: { token, user: user.getPublicProfile(), profile, school: schoolPayload }
       });
     } catch (error) {
       console.error('Login error:', error);
@@ -498,12 +525,11 @@ const authController = {
       else if (user.role === 'admin') profile = await Admin.findOne({ where: { userId: user.id } });
 
       const school = user.schoolCode ? await School.findOne({ where: { schoolId: user.schoolCode } }) : null;
-      const schoolJson = school?.toJSON ? school.toJSON() : school;
-      const schoolAccess = school ? computeSchoolAccess(school) : null;
+      const schoolPayload = await buildSchoolSessionPayload(school);
 
       res.json({
         success: true,
-        data: { user: user.getPublicProfile(), profile, school: schoolJson ? { ...schoolJson, access: schoolAccess } : null }
+        data: { user: user.getPublicProfile(), profile, school: schoolPayload }
       });
     } catch (error) {
       console.error('Get me error:', error);

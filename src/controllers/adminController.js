@@ -803,30 +803,56 @@ function v102BuildCurriculumSettings(school, patch = {}) {
   const currentEngine = currentSettings.curriculumEngine || {};
   const curriculum = curriculumEngine.normalizeCurriculum(patch.curriculum || currentEngine.curriculum || school.system || 'cbc');
   const structureType = patch.structureType || patch.schoolStructure || currentEngine.structureType || school.schoolStructure || currentSettings.schoolLevel || 'mixed';
-  const enabledLevelGroups = Array.isArray(patch.enabledLevelGroups) ? patch.enabledLevelGroups : (Array.isArray(currentEngine.enabledLevelGroups) ? currentEngine.enabledLevelGroups : []);
-  const expandedFromGroups = typeof curriculumEngine.expandLevelGroups === 'function' ? curriculumEngine.expandLevelGroups(curriculum, enabledLevelGroups) : [];
-  const enabledLevels = expandedFromGroups.length ? expandedFromGroups : (Array.isArray(patch.enabledLevels) ? patch.enabledLevels : (Array.isArray(currentEngine.enabledLevels) ? currentEngine.enabledLevels : []));
+  const rawLevels = Array.isArray(patch.enabledLevels) ? patch.enabledLevels : (Array.isArray(currentEngine.enabledLevels) ? currentEngine.enabledLevels : []);
+  const rawGroups = Array.isArray(patch.enabledLevelGroups) ? patch.enabledLevelGroups : (Array.isArray(currentEngine.enabledLevelGroups) ? currentEngine.enabledLevelGroups : []);
+  const enabledLevels = curriculumEngine.expandEnabledLevelCodes(curriculum, [...rawGroups, ...rawLevels]);
+  const enabledLevelGroups = curriculumEngine.groupsFromEnabledLevels(curriculum, enabledLevels);
   const schoolSubjects = Array.isArray(patch.schoolSubjects) ? patch.schoolSubjects : (Array.isArray(currentEngine.schoolSubjects) ? currentEngine.schoolSubjects : []);
-  const reportSettings = patch.reportSettings || patch.settings?.reportSettings || currentEngine.reportSettings || currentSettings.reportSettings || {};
+  const assessmentSettings = Array.isArray(patch.assessmentSettings) ? patch.assessmentSettings : (Array.isArray(currentEngine.assessmentSettings) ? currentEngine.assessmentSettings : curriculumEngine.defaultAssessmentSettings());
   return {
     ...currentSettings,
     schoolStructure: structureType,
-    enabledLevelGroups,
-    reportSettings,
     curriculum,
     curriculumEngine: {
       ...currentEngine,
       curriculum,
       structureType,
-      enabledLevelGroups,
       enabledLevels,
+      enabledLevelGroups,
       schoolSubjects,
+      assessmentSettings,
       seniorSettings: patch.seniorSettings || currentEngine.seniorSettings || {},
       gradingSettings: patch.gradingSettings || currentEngine.gradingSettings || currentSettings.gradingScale || null,
-      reportSettings,
       updatedAt: new Date().toISOString()
     }
   };
+}
+
+
+async function v130SyncClassesForEnabledLevels(school, actorUserId) {
+  const cfg = curriculumEngine.getCurriculumConfig(school);
+  const allowedLevels = curriculumEngine.getAllowedLevelsForSchool(school);
+  const allowedCodes = new Set(allowedLevels.map(l => l.code));
+  const existing = await Class.findAll({ where: { schoolCode: school.schoolId } });
+  const byLevel = new Map(existing.filter(c => c.levelCode).map(c => [c.levelCode, c]));
+  const touched = [];
+  for (const level of allowedLevels) {
+    const subjectList = curriculumEngine.getEligibleSubjectsForClass(school, { grade: level.label, name: level.label, levelCode: level.code, subjectTeachers: [] });
+    const settings = { curriculumMeta: { curriculum: cfg.curriculum, structureType: cfg.structureType, levelCode: level.code, levelLabel: level.label, curriculumLevel: level.group || null }, subjects: subjectList.map(s => ({ id:s.id, name:s.name, category:s.category, isCore:s.isCore, countsInFinalByDefault:s.countsInFinalByDefault })) };
+    const current = byLevel.get(level.code) || existing.find(c => String(c.grade || '').toLowerCase() === String(level.label).toLowerCase());
+    if (current) {
+      await current.update({ curriculum: cfg.curriculum, levelCode: level.code, levelLabel: level.label, curriculumLevel: level.group || null, isActive: true, settings: { ...(current.settings || {}), ...settings } });
+      touched.push(current.id);
+    } else {
+      const created = await Class.create({ name: level.label, grade: level.label, stream: null, schoolCode: school.schoolId, curriculum: cfg.curriculum, levelCode: level.code, levelLabel: level.label, curriculumLevel: level.group || null, isActive: true, settings });
+      touched.push(created.id);
+    }
+  }
+  for (const cls of existing) {
+    if (cls.levelCode && !allowedCodes.has(cls.levelCode)) await cls.update({ isActive:false }).catch(() => null);
+  }
+  await sequelize.query(`INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","eventType","payload","createdAt","updatedAt") VALUES (:schoolCode,:actorUserId,'curriculum_classes_synced',:payload,NOW(),NOW())`, { replacements:{ schoolCode: school.schoolId, actorUserId: actorUserId || null, payload: JSON.stringify({ enabledLevels:[...allowedCodes], touchedClassIds:touched }) } }).catch(() => null);
+  return { touchedClassIds:touched, enabledLevels:[...allowedCodes] };
 }
 
 function v102ClassMeta(school, gradeOrName) {
@@ -892,17 +918,18 @@ exports.updateSchoolSettings = async (req, res) => {
       school.system = nextCurriculum;
     }
     if (patch.schoolName) school.name = patch.schoolName;
-    if (patch.schoolStructure || patch.structureType) school.schoolStructure = patch.schoolStructure || patch.structureType;
-    if (Array.isArray(newSettings.curriculumEngine.enabledLevels)) school.enabledLevels = newSettings.curriculumEngine.enabledLevels;
+    school.schoolStructure = newSettings.curriculumEngine.structureType;
+    school.enabledLevels = newSettings.curriculumEngine.enabledLevels;
     school.settings = { ...newSettings, customSubjects: patch.customSubjects || newSettings.customSubjects || [] };
     await school.save();
-    await sequelize.query(`INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","actorRole","module","action","entityType","entityId","before","after","createdAt","updatedAt") VALUES (:schoolCode,:actorUserId,:actorRole,'curriculum','school_settings_updated','School',:entityId,:before,:after,NOW(),NOW())`, {
-      replacements: { schoolCode: school.schoolId, actorUserId: req.user.id, actorRole: req.user.role, entityId: String(school.id), before: JSON.stringify({ system: before.system, settings: before.settings }), after: JSON.stringify({ system: school.system, settings: school.settings }) }
+    const sync = await v130SyncClassesForEnabledLevels(school, req.user.id);
+    await sequelize.query(`INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","eventType","payload","createdAt","updatedAt") VALUES (:schoolCode,:actorUserId,'school_settings_updated',:payload,NOW(),NOW())`, {
+      replacements: { schoolCode: school.schoolId, actorUserId: req.user.id, payload: JSON.stringify({ before: { system: before.system, settings: before.settings }, after: { system: school.system, settings: school.settings }, sync }) }
     }).catch(() => null);
-    if (global.io) global.io.to(`school-${school.schoolId}`).emit('curriculum-updated', { curriculum: school.system, curriculumName: getCurriculumName(school.system), timestamp: new Date() });
-    res.json({ success: true, data: { ...school.toJSON(), curriculum: school.system, curriculumSetup: curriculumEngine.getCurriculumConfig(school) } });
+    if (global.io) global.io.to(`school-${school.schoolId}`).emit('curriculum-updated', { curriculum: school.system, timestamp: new Date() });
+    res.json({ success: true, data: { ...school.toJSON(), curriculum: school.system, curriculumSetup: curriculumEngine.getCurriculumConfig(school), classSync: sync } });
   } catch (error) {
-    console.error('V102 update school settings error:', error);
+    console.error('V130 update school settings error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -916,7 +943,9 @@ exports.getCurriculumSetup = async (req, res) => {
       config: curriculumEngine.getCurriculumConfig(school),
       levels: curriculumEngine.getAllowedLevelsForSchool(school),
       subjectBank: curriculumEngine.getSubjectBankForSchool(school),
-      gradingProfile: curriculumEngine.getGradingProfile(school.system, null)
+      gradingProfile: curriculumEngine.getGradingProfile(school.system, null),
+      levelGroups: curriculumEngine.getLevelGroups(school.system),
+      assessmentSettings: curriculumEngine.getCurriculumConfig(school).assessmentSettings
     }});
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };
@@ -934,7 +963,7 @@ exports.getCurriculumLevels = async (req, res) => {
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
     const cfg = curriculumEngine.getCurriculumConfig(school);
     const allLevels = curriculumEngine.getBank(cfg.curriculum).levels;
-    res.json({ success:true, data:{ curriculum:cfg.curriculum, structureType:cfg.structureType, enabledLevels:cfg.enabledLevels, levels:allLevels, allowedLevels:curriculumEngine.getAllowedLevelsForSchool(school) } });
+    res.json({ success:true, data:{ curriculum:cfg.curriculum, structureType:cfg.structureType, enabledLevels:cfg.enabledLevels, enabledLevelGroups:cfg.enabledLevelGroups, levelGroups:cfg.levelGroups, levels:allLevels, allowedLevels:curriculumEngine.getAllowedLevelsForSchool(school) } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };
 
@@ -953,14 +982,18 @@ exports.saveSchoolSubjects = async (req, res) => {
     const selected = Array.isArray(req.body.subjects) ? req.body.subjects : [];
     const bank = curriculumEngine.getSubjectBankForSchool(school);
     const byId = new Map(bank.map(s => [s.id, s]));
+    const allowedLevels = new Set(curriculumEngine.getAllowedLevelsForSchool(school).map(l => l.code));
     const schoolSubjects = selected.map(item => {
       const subject = byId.get(item.subjectId || item.id) || item;
+      const originalLevels = Array.isArray(item.levelCodes) && item.levelCodes.length ? item.levelCodes : (subject.levelCodes || []);
+      const levelCodes = originalLevels.filter(code => allowedLevels.has(code));
       const isCustom = !!(item.isCustom || item.source === 'custom' || item.scope || item.classIds);
+      if (!isCustom && !levelCodes.length) return null;
       return {
         subjectId: subject.id || item.subjectId || item.id || (isCustom ? `custom_${String(item.name || item.subjectName || '').toLowerCase().replace(/[^a-z0-9]+/g, '_')}` : null),
         name: subject.name || item.name || item.subjectName,
         category: subject.category || item.category || (isCustom ? 'custom' : 'school_subject'),
-        levelCodes: Array.isArray(item.levelCodes) && item.levelCodes.length ? item.levelCodes : (subject.levelCodes || []),
+        levelCodes: levelCodes.length ? levelCodes : originalLevels,
         classIds: Array.isArray(item.classIds) ? item.classIds.map(Number).filter(Boolean) : [],
         scope: item.scope || (Array.isArray(item.classIds) && item.classIds.length ? 'class' : 'school'),
         pathway: subject.pathway || item.pathway || null,
@@ -973,12 +1006,14 @@ exports.saveSchoolSubjects = async (req, res) => {
         savedAt: new Date().toISOString(),
         savedBy: req.user.id
       };
-    }).filter(s => s.name);
+    }).filter(s => s && s.name);
     const settings = v102BuildCurriculumSettings(school, { schoolSubjects });
     school.settings = settings;
+    school.enabledLevels = settings.curriculumEngine.enabledLevels;
     await school.save();
-    res.json({ success:true, message:`${schoolSubjects.length} school subject(s) saved`, data:{ schoolSubjects } });
-  } catch(error) { console.error('V102 save school subjects error:', error); res.status(500).json({ success:false, message:error.message }); }
+    const sync = await v130SyncClassesForEnabledLevels(school, req.user.id);
+    res.json({ success:true, message:`${schoolSubjects.length} school subject(s) saved and class subjects synced`, data:{ schoolSubjects, classSync:sync } });
+  } catch(error) { console.error('V130 save school subjects error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 
 exports.getSchoolSubjects = async (req, res) => {
@@ -1165,6 +1200,35 @@ exports.saveStudentSubjectSelection = async (req, res) => {
     const rows = await replaceStudentSubjectSelections({ schoolCode:req.user.schoolCode, studentId:student.id, classId, pathway:req.body.pathway, track:req.body.track, subjects, actorUserId:req.user.id });
     res.json({ success:true, message:'Student subject selection saved', data:{ selections:rows } });
   } catch(error) { console.error('V102 save student subject selection error:', error); res.status(500).json({ success:false, message:error.message }); }
+};
+
+
+exports.getAssessmentSettings = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const cfg = curriculumEngine.getCurriculumConfig(school);
+    res.json({ success:true, data:{ assessmentSettings: cfg.assessmentSettings, config: cfg } });
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.updateAssessmentSettings = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const incoming = Array.isArray(req.body.assessmentSettings) ? req.body.assessmentSettings : [];
+    const defaults = curriculumEngine.defaultAssessmentSettings();
+    const byKey = new Map(defaults.map(x => [x.key, x]));
+    const sanitized = incoming.map((row, idx) => {
+      const key = String(row.key || row.assessmentType || '').toLowerCase().replace(/\s+/g, '');
+      const base = byKey.get(key) || row;
+      return { key: base.key || key || `custom_${idx+1}`, label: row.label || base.label || row.assessmentType || `Assessment ${idx+1}`, showOnReport: row.showOnReport !== false, countInFinal: row.countInFinal !== false, weight: Number(row.weight || 0), displayOrder: Number(row.displayOrder || idx + 1), assessmentType: row.assessmentType || base.assessmentType || row.label || 'Custom' };
+    }).filter(x => x.label);
+    const settings = v102BuildCurriculumSettings(school, { assessmentSettings: sanitized.length ? sanitized : defaults });
+    school.settings = settings;
+    await school.save();
+    res.json({ success:true, message:'Assessment/report settings saved', data:{ assessmentSettings: settings.curriculumEngine.assessmentSettings } });
+  } catch(error) { console.error('V130 assessment settings error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 
 exports.submitSchoolPaymentConfirmation = async (req, res) => {

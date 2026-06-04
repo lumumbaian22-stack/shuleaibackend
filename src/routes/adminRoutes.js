@@ -78,6 +78,8 @@ router.get('/curriculum/levels', adminController.getCurriculumLevels);
 router.get('/curriculum/subject-bank', adminController.getCurriculumSubjectBank);
 router.get('/curriculum/school-subjects', adminController.getSchoolSubjects);
 router.put('/curriculum/school-subjects', adminController.saveSchoolSubjects);
+router.get('/assessment-settings', adminController.getAssessmentSettings);
+router.put('/assessment-settings', adminController.updateAssessmentSettings);
 router.get('/curriculum/classes/:classId/subjects', adminController.getEligibleSubjectsForClass);
 router.get('/students/:studentId/subject-selection', adminController.getStudentSubjectSelection);
 router.put('/students/:studentId/subject-selection', adminController.saveStudentSubjectSelection);

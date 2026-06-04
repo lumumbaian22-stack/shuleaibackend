@@ -206,19 +206,6 @@ const STRUCTURE_PRESETS = {
   }
 };
 
-
-const CBC_LEVEL_GROUPS = {
-  early_learning: ['playgroup','pp1','pp2'],
-  primary_learning: ['grade_1','grade_2','grade_3','grade_4','grade_5','grade_6'],
-  junior_school: ['grade_7','grade_8','grade_9'],
-  senior_secondary: ['grade_10','grade_11','grade_12']
-};
-function expandLevelGroups(curriculum, groups = []) {
-  const cur = normalizeCurriculum(curriculum);
-  if (cur !== 'cbc') return [];
-  return [...new Set((Array.isArray(groups) ? groups : []).flatMap(g => CBC_LEVEL_GROUPS[String(g)] || []))];
-}
-
 function getBank(curriculum) {
   return SUBJECT_BANK[normalizeCurriculum(curriculum)] || SUBJECT_BANK.cbc;
 }
@@ -247,16 +234,72 @@ function levelCodeFromGrade(curriculum, gradeOrName) {
   return null;
 }
 
+
+const LEVEL_GROUPS = {
+  cbc: [
+    { code:'early_learning', label:'Early Learning', description:'PP1–PP2', levelCodes:['pp1','pp2'] },
+    { code:'primary_learning', label:'Primary Learning', description:'Grade 1–6', levelCodes:['grade_1','grade_2','grade_3','grade_4','grade_5','grade_6'] },
+    { code:'junior_school', label:'Junior School', description:'Grade 7–9', levelCodes:['grade_7','grade_8','grade_9'] },
+    { code:'senior_secondary', label:'Senior Secondary', description:'Grade 10–12', levelCodes:['grade_10','grade_11','grade_12'] }
+  ],
+  '844': [
+    { code:'primary_844', label:'8-4-4 Primary', description:'Class 1–8', levelCodes:['class_1','class_2','class_3','class_4','class_5','class_6','class_7','class_8'] },
+    { code:'secondary_844', label:'8-4-4 Secondary', description:'Form 1–4', levelCodes:['form_1','form_2','form_3','form_4'] }
+  ],
+  british: [
+    { code:'british_early_primary', label:'Early & Primary', description:'Nursery, Reception, Year 1–6', levelCodes:['nursery','reception','year_1','year_2','year_3','year_4','year_5','year_6'] },
+    { code:'british_secondary', label:'Secondary', description:'Year 7–13', levelCodes:['year_7','year_8','year_9','year_10','year_11','year_12','year_13'] }
+  ],
+  american: [
+    { code:'american_elementary', label:'Elementary', description:'Pre-K to Grade 5', levelCodes:['pre_k','kindergarten','grade_1','grade_2','grade_3','grade_4','grade_5'] },
+    { code:'american_middle', label:'Middle School', description:'Grade 6–8', levelCodes:['grade_6','grade_7','grade_8'] },
+    { code:'american_high', label:'High School', description:'Grade 9–12', levelCodes:['grade_9','grade_10','grade_11','grade_12'] }
+  ],
+  custom: []
+};
+
+const DEFAULT_ASSESSMENT_SETTINGS = [
+  { key:'cat', label:'CAT', showOnReport:true, countInFinal:true, weight:10, displayOrder:1, assessmentType:'CAT' },
+  { key:'midterm', label:'Midterm', showOnReport:true, countInFinal:true, weight:20, displayOrder:2, assessmentType:'Midterm' },
+  { key:'endterm', label:'End Term', showOnReport:true, countInFinal:true, weight:50, displayOrder:3, assessmentType:'End Term' },
+  { key:'sba', label:'SBA', showOnReport:false, countInFinal:false, weight:10, displayOrder:4, assessmentType:'SBA' },
+  { key:'project', label:'Project', showOnReport:false, countInFinal:false, weight:5, displayOrder:5, assessmentType:'Project' },
+  { key:'practical', label:'Practical', showOnReport:false, countInFinal:false, weight:5, displayOrder:6, assessmentType:'Practical' }
+];
+
+function getLevelGroups(curriculum='cbc') {
+  return LEVEL_GROUPS[normalizeCurriculum(curriculum)] || LEVEL_GROUPS.custom || [];
+}
+function expandEnabledLevelCodes(curriculum='cbc', values=[]) {
+  const cur = normalizeCurriculum(curriculum);
+  const groups = new Map(getLevelGroups(cur).map(g => [g.code, g]));
+  const allLevels = new Set((SUBJECT_BANK[cur]?.levels || []).map(l => l.code));
+  const expanded = [];
+  for (const raw of Array.isArray(values) ? values : []) {
+    const value = String(raw || '').trim();
+    if (!value) continue;
+    if (groups.has(value)) expanded.push(...groups.get(value).levelCodes);
+    else if (allLevels.has(value)) expanded.push(value);
+  }
+  return [...new Set(expanded)];
+}
+function groupsFromEnabledLevels(curriculum='cbc', values=[]) {
+  const enabled = new Set(expandEnabledLevelCodes(curriculum, values));
+  return getLevelGroups(curriculum).filter(g => g.levelCodes.every(c => enabled.has(c))).map(g => g.code);
+}
+function defaultAssessmentSettings() { return DEFAULT_ASSESSMENT_SETTINGS.map(x => ({...x})); }
+
 function getCurriculumConfig(school) {
   const settings = school?.settings || {};
   const engine = settings.curriculumEngine || {};
-  const curriculum = normalizeCurriculum(engine.curriculum || school?.system || settings.curriculum || 'cbc');
-  const structureType = engine.structureType || settings.schoolStructure || settings.schoolLevel || 'mixed';
-  const preset = STRUCTURE_PRESETS[curriculum]?.[structureType] || STRUCTURE_PRESETS[curriculum]?.mixed || getBank(curriculum).levels.map(l => l.code);
-  const groupedLevels = expandLevelGroups(curriculum, engine.enabledLevelGroups || settings.enabledLevelGroups || []);
-  const enabledLevels = groupedLevels.length ? groupedLevels : (Array.isArray(engine.enabledLevels) && engine.enabledLevels.length ? engine.enabledLevels : preset);
+  const curriculum = normalizeCurriculum(engine.curriculum || settings.curriculum || school?.system || 'cbc');
+  const structureType = engine.structureType || settings.schoolStructure || school?.schoolStructure || 'mixed';
+  const rawLevels = Array.isArray(engine.enabledLevels) && engine.enabledLevels.length ? engine.enabledLevels : (Array.isArray(school?.enabledLevels) ? school.enabledLevels : []);
+  const enabledLevels = expandEnabledLevelCodes(curriculum, rawLevels);
+  const groups = groupsFromEnabledLevels(curriculum, rawLevels);
   const schoolSubjects = Array.isArray(engine.schoolSubjects) ? engine.schoolSubjects : [];
-  return { curriculum, structureType, enabledLevels, enabledLevelGroups: engine.enabledLevelGroups || settings.enabledLevelGroups || [], schoolSubjects, gradingSettings: engine.gradingSettings || settings.gradingScale || null, reportSettings: engine.reportSettings || settings.reportSettings || null, seniorSettings: engine.seniorSettings || {}, raw: engine };
+  const assessmentSettings = Array.isArray(engine.assessmentSettings) && engine.assessmentSettings.length ? engine.assessmentSettings : defaultAssessmentSettings();
+  return { curriculum, structureType, enabledLevels, enabledLevelGroups:groups, levelGroups:getLevelGroups(curriculum), schoolSubjects, assessmentSettings, engine };
 }
 
 function getAllowedLevelsForSchool(school) {
@@ -391,6 +434,7 @@ function getGradingProfile(curriculum, levelCode) {
 }
 
 module.exports = {
+  LEVEL_GROUPS, DEFAULT_ASSESSMENT_SETTINGS, getLevelGroups, expandEnabledLevelCodes, groupsFromEnabledLevels, defaultAssessmentSettings,
   normalizeCurriculum,
   getBank,
   getCurriculumConfig,
@@ -403,7 +447,6 @@ module.exports = {
   buildSubjectRowsForReport,
   summarizeReportRows,
   getGradingProfile,
-  expandLevelGroups,
   STRUCTURE_PRESETS,
   SUBJECT_BANK
 };
