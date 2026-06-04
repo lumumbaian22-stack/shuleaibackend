@@ -1533,10 +1533,11 @@ exports.getSchools = async (req, res) => {
       const access = await v102RecalculateSchoolAccess(s).catch(() => computeSchoolAccess(s));
       const json = s.toJSON();
       const settings = json.settings || {};
-      const originalSignupName = settings.originalSignupName || settings.displayName || json.name;
-      const genericName = /^shule\s*ai$/i.test(String(json.name || '').trim()) || /^shuleai$/i.test(String(json.name || '').trim());
-      const displayName = genericName && originalSignupName ? originalSignupName : (json.name || originalSignupName || 'Unnamed School');
-      return { ...json, name: displayName, originalName: json.name, originalSignupName, displayName, access };
+      const admin = Array.isArray(json.admins) ? json.admins[0] : null;
+      const candidates = [settings.officialSchoolName, settings.originalSignupName, settings.signupSchoolName, settings.schoolName, settings.organizationName, settings.displayName, json.schoolName, json.officialSchoolName, json.name].filter(Boolean).map(v => String(v).trim()).filter(Boolean);
+      const originalSignupName = candidates.find(v => !/^shule\s*ai$/i.test(v) && !/^shuleai$/i.test(v)) || '';
+      const displayName = originalSignupName || (admin?.name ? `${admin.name}'s School` : `School ${json.shortCode || json.schoolId || json.id}`);
+      return { ...json, name: displayName, originalName: json.name, originalSignupName: originalSignupName || displayName, displayName, adminName:admin?.name || null, adminEmail:admin?.email || null, access };
     }));
     res.json({ success:true, data });
   } catch(error) {

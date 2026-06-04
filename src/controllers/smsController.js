@@ -1,10 +1,28 @@
 'use strict';
-const { Settings, sequelize } = require('../models');
+const { Settings, sequelize, Parent, Teacher, Student, User } = require('../models');
 const { getSchoolFeatures } = require('../services/schoolFeatureService');
 async function readSettings(key, fallback={}) { const row = await Settings.findOne({ where:{ key } }).catch(() => null); return row?.value || fallback; }
 async function writeSettings(key, value) { const [row] = await Settings.findOrCreate({ where:{ key }, defaults:{ value } }); row.value = value; await row.save(); return row.value; }
 async function platformSms() { return readSettings('platform_sms_settings', { provider:null, apiKey:null, senderId:'SHULEAI', enabled:false, schoolTokens:{} }); }
 function schoolTokens(cfg, schoolCode) { return Number((cfg.schoolTokens || {})[schoolCode] || 0); }
+async function resolveAudienceCount(schoolCode, audience, explicitCount, recipients=[]) {
+  const n = Number(explicitCount || 0);
+  if (n > 0) return n;
+  if (Array.isArray(recipients) && recipients.length) return recipients.length;
+  const a = String(audience || '').toLowerCase();
+  if (a === 'teachers') return Teacher.count({ include:[{ model:User, where:{ schoolCode }, attributes:[] }] }).catch(() => 0);
+  if (a === 'students') return Student.count({ include:[{ model:User, where:{ schoolCode }, attributes:[] }] }).catch(() => 0);
+  if (a === 'whole_school') {
+    const [parents, teachers, students] = await Promise.all([
+      Parent.count({ include:[{ model:User, where:{ schoolCode }, attributes:[] }] }).catch(() => 0),
+      Teacher.count({ include:[{ model:User, where:{ schoolCode }, attributes:[] }] }).catch(() => 0),
+      Student.count({ include:[{ model:User, where:{ schoolCode }, attributes:[] }] }).catch(() => 0)
+    ]);
+    return parents + teachers + students;
+  }
+  // Parent-focused audiences: all_parents, fee_defaulters, selected_parents fallback.
+  return Parent.count({ include:[{ model:User, where:{ schoolCode }, attributes:[] }] }).catch(() => 0);
+}
 exports.getConfig = async (req, res) => {
   try {
     const cfg = await platformSms();
@@ -37,21 +55,26 @@ exports.sendSms = async (req, res) => {
     if (!message) return res.status(400).json({ success:false, message:'Message is required.' });
     const recipients = Array.isArray(req.body.recipients) ? req.body.recipients : [];
     const audience = req.body.audience || req.body.recipientType || 'selected';
-    const recipientCount = Number(req.body.recipientCount || recipients.length || 0);
-    if (!recipientCount) return res.status(400).json({ success:false, message:'No recipients selected.' });
+    const recipientCount = await resolveAudienceCount(schoolCode, audience, req.body.recipientCount, recipients);
+    if (!recipientCount) return res.status(400).json({ success:false, message:'No recipients selected for this audience.' });
     const currentTokens = schoolTokens(cfg, schoolCode);
     if (currentTokens < recipientCount) return res.status(400).json({ success:false, message:`Not enough SMS tokens. Available: ${currentTokens}, needed: ${recipientCount}.` });
     cfg.schoolTokens = cfg.schoolTokens || {};
     cfg.schoolTokens[schoolCode] = currentTokens - recipientCount;
     await writeSettings('platform_sms_settings', cfg);
-    const [rows] = await sequelize.query(`INSERT INTO "SmsOutbox" ("schoolCode","senderUserId","audience","message","recipientCount","successCount","failedCount","tokensUsed","mode","status","createdAt","updatedAt") VALUES (:schoolCode,:senderUserId,:audience,:message,:recipientCount,:successCount,0,:tokensUsed,'platform','sent',NOW(),NOW()) RETURNING *`, { replacements:{ schoolCode, senderUserId:req.user.id, audience, message, recipientCount, successCount:recipientCount, tokensUsed:recipientCount } }).catch(() => [[]]);
+    const [rows] = await sequelize.query(`INSERT INTO "SmsOutbox" ("schoolCode","senderUserId","audience","message","recipientCount","successCount","failedCount","tokensUsed","mode","status","createdAt","updatedAt") VALUES (:schoolCode,:senderUserId,:audience,:message,:recipientCount,:successCount,0,:tokensUsed,'platform','sent',NOW(),NOW()) RETURNING *`, { replacements:{ schoolCode, senderUserId:req.user.id, audience, message, recipientCount, successCount:recipientCount, tokensUsed:recipientCount } });
     res.json({ success:true, message:'SMS queued/sent successfully', data:{ record:rows?.[0] || null, tokensRemaining: cfg.schoolTokens[schoolCode], reached:recipientCount, failed:0, tokensUsed:recipientCount } });
   } catch(error) { console.error('Send SMS error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 exports.getHistory = async (req, res) => {
   try {
     const schoolCode = req.user.schoolCode;
-    const [rows] = await sequelize.query(`SELECT * FROM "SmsOutbox" WHERE "schoolCode" = :schoolCode ORDER BY "createdAt" DESC LIMIT 100`, { replacements:{ schoolCode } }).catch(() => [[]]);
+    const isSuper = ['super_admin','superadmin'].includes(String(req.user.role).toLowerCase());
+    if (!schoolCode && !isSuper) return res.json({ success:true, data:[] });
+    const sql = isSuper && !schoolCode
+      ? `SELECT * FROM "SmsOutbox" ORDER BY "createdAt" DESC LIMIT 100`
+      : `SELECT * FROM "SmsOutbox" WHERE "schoolCode" = :schoolCode ORDER BY "createdAt" DESC LIMIT 100`;
+    const [rows] = await sequelize.query(sql, { replacements:{ schoolCode } }).catch(() => [[]]);
     res.json({ success:true, data:rows || [] });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };

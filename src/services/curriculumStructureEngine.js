@@ -359,7 +359,7 @@ function normalizeSchoolSubject(row, cfg, levelCode, classItem) {
 
 function getEligibleSubjectsForClass(school, classItem) {
   const cfg = getCurriculumConfig(school);
-  const levelCode = levelCodeFromGrade(cfg.curriculum, classItem?.grade || classItem?.name);
+  const levelCode = classItem?.levelCode || classItem?.curriculumLevel || classItem?.settings?.curriculumMeta?.levelCode || levelCodeFromGrade(cfg.curriculum, classItem?.grade || classItem?.name || classItem?.className);
   const enabled = new Set(cfg.enabledLevels);
   if (!levelCode || !enabled.has(levelCode)) return [];
   if (!cfg.schoolSubjects.length) return [];
@@ -381,7 +381,7 @@ function getEligibleSubjectsForClass(school, classItem) {
 
 function validateClassLevel(school, gradeOrName) {
   const cfg = getCurriculumConfig(school);
-  const levelCode = levelCodeFromGrade(cfg.curriculum, gradeOrName);
+  const levelCode = (gradeOrName && typeof gradeOrName === 'object') ? (gradeOrName.levelCode || gradeOrName.curriculumLevel || gradeOrName.settings?.curriculumMeta?.levelCode || levelCodeFromGrade(cfg.curriculum, gradeOrName.grade || gradeOrName.name || gradeOrName.className)) : levelCodeFromGrade(cfg.curriculum, gradeOrName);
   if (!levelCode) return { ok: false, levelCode: null, message: `${gradeOrName || 'This class'} does not match any enabled level in the selected ${getBank(cfg.curriculum).label} curriculum. Select a valid level from the school structure.` };
   const ok = cfg.enabledLevels.includes(levelCode);
   return { ok, levelCode, level: getLevelByCode(cfg.curriculum, levelCode), message: ok ? null : `${gradeOrName} is not enabled in this school's ${getBank(cfg.curriculum).label} structure.` };

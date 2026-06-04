@@ -803,8 +803,20 @@ function v102BuildCurriculumSettings(school, patch = {}) {
   const currentEngine = currentSettings.curriculumEngine || {};
   const curriculum = curriculumEngine.normalizeCurriculum(patch.curriculum || currentEngine.curriculum || school.system || 'cbc');
   const structureType = patch.structureType || patch.schoolStructure || currentEngine.structureType || school.schoolStructure || currentSettings.schoolLevel || 'mixed';
-  const rawLevels = Array.isArray(patch.enabledLevels) ? patch.enabledLevels : (Array.isArray(currentEngine.enabledLevels) ? currentEngine.enabledLevels : []);
-  const rawGroups = Array.isArray(patch.enabledLevelGroups) ? patch.enabledLevelGroups : (Array.isArray(currentEngine.enabledLevelGroups) ? currentEngine.enabledLevelGroups : []);
+  const rawLevels = Array.isArray(patch.enabledLevels) ? [...patch.enabledLevels] : (Array.isArray(currentEngine.enabledLevels) ? [...currentEngine.enabledLevels] : []);
+  const rawGroups = Array.isArray(patch.enabledLevelGroups) ? [...patch.enabledLevelGroups] : (Array.isArray(currentEngine.enabledLevelGroups) ? [...currentEngine.enabledLevelGroups] : []);
+  if (!rawLevels.length && !rawGroups.length) {
+    if (curriculum === 'cbc') {
+      if (/primary/.test(structureType)) rawGroups.push('early_learning','primary_learning');
+      else if (/junior/.test(structureType)) rawGroups.push('junior_school');
+      else if (/senior/.test(structureType)) rawGroups.push('senior_secondary');
+      else rawGroups.push('early_learning','primary_learning','junior_school');
+    } else if (curriculum === '844') {
+      if (/secondary/.test(structureType)) rawGroups.push('secondary_844');
+      else if (/primary/.test(structureType)) rawGroups.push('primary_844');
+      else rawGroups.push('primary_844','secondary_844');
+    }
+  }
   const enabledLevels = curriculumEngine.expandEnabledLevelCodes(curriculum, [...rawGroups, ...rawLevels]);
   const enabledLevelGroups = curriculumEngine.groupsFromEnabledLevels(curriculum, enabledLevels);
   const schoolSubjects = Array.isArray(patch.schoolSubjects) ? patch.schoolSubjects : (Array.isArray(currentEngine.schoolSubjects) ? currentEngine.schoolSubjects : []);
@@ -1031,7 +1043,7 @@ exports.getEligibleSubjectsForClass = async (req, res) => {
     const classItem = await v102ClassWithScope(req.params.classId, req.user.schoolCode);
     if (!school || !classItem) return res.status(404).json({ success:false, message:'School or class not found' });
     const subjects = curriculumEngine.getEligibleSubjectsForClass(school, classItem);
-    res.json({ success:true, data:{ classId:classItem.id, className:classItem.name, grade:classItem.grade, curriculum:school.system, levelCode:curriculumEngine.levelCodeFromGrade(school.system, classItem.grade || classItem.name), subjects } });
+    res.json({ success:true, data:subjects, meta:{ classId:classItem.id, className:classItem.name, grade:classItem.grade, curriculum:school.system, levelCode:classItem.levelCode || classItem.curriculumLevel || classItem.settings?.curriculumMeta?.levelCode || curriculumEngine.levelCodeFromGrade(school.system, classItem.grade || classItem.name), subjectCount:subjects.length } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };
 

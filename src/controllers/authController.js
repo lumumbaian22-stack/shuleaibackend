@@ -111,9 +111,22 @@ const authController = {
 
       // Create school - let the model defaults handle schoolId and shortCode
       const normalizedCurriculum = curriculumEngine.normalizeCurriculum(curriculum || 'cbc');
-      const selectedLevels = curriculumEngine.expandEnabledLevelCodes(normalizedCurriculum, [...(Array.isArray(enabledLevelGroups) ? enabledLevelGroups : []), ...(Array.isArray(enabledLevels) ? enabledLevels : [])]);
-      const selectedGroups = curriculumEngine.groupsFromEnabledLevels(normalizedCurriculum, selectedLevels);
       const normalizedStructure = structureType || schoolStructure || schoolLevel || 'mixed';
+      const rawLevelValues = [...(Array.isArray(enabledLevelGroups) ? enabledLevelGroups : []), ...(Array.isArray(enabledLevels) ? enabledLevels : [])];
+      if (!rawLevelValues.length) {
+        if (normalizedCurriculum === 'cbc') {
+          if (/primary/.test(normalizedStructure)) rawLevelValues.push('early_learning','primary_learning');
+          else if (/junior/.test(normalizedStructure)) rawLevelValues.push('junior_school');
+          else if (/senior/.test(normalizedStructure)) rawLevelValues.push('senior_secondary');
+          else rawLevelValues.push('early_learning','primary_learning','junior_school');
+        } else if (normalizedCurriculum === '844') {
+          if (/secondary/.test(normalizedStructure)) rawLevelValues.push('secondary_844');
+          else if (/primary/.test(normalizedStructure)) rawLevelValues.push('primary_844');
+          else rawLevelValues.push('primary_844','secondary_844');
+        }
+      }
+      const selectedLevels = curriculumEngine.expandEnabledLevelCodes(normalizedCurriculum, rawLevelValues);
+      const selectedGroups = curriculumEngine.groupsFromEnabledLevels(normalizedCurriculum, selectedLevels);
       console.log('Creating school with name:', schoolName);
       const school = await School.create({
         name: schoolName,

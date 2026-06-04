@@ -312,7 +312,7 @@ app.use('/api/home-tasks', homeTaskRoutes);
 app.use('/api/consent', consentRoutes);   // <-- ADDED
 app.use('/api/search', searchRoutes);
 app.use('/api/reports', reportRoutes);
-app.use('/api/sms', requireFeature('bulk_sms'), smsRoutes);
+app.use('/api/sms', smsRoutes);
 // V27 compatibility routes fix old frontend/test endpoints and role-safe aliases.
 app.use('/api', compatibilityRoutes);
 app.use('/api/calendar', requireFeature('calendar'), calendarRoutes);
