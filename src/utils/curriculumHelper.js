@@ -103,29 +103,55 @@ function normalizeCurriculumKey(curriculum) {
     return 'cbc';
 }
 
+function parseGradeRange(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    let min = entry.min ?? entry.minScore ?? entry.from ?? entry.low ?? null;
+    let max = entry.max ?? entry.maxScore ?? entry.to ?? entry.high ?? null;
+    const rawRange = entry.range ?? entry.scoreRange ?? entry.marksRange ?? entry.bounds;
+    if ((min === null || max === null) && Array.isArray(rawRange) && rawRange.length >= 2) {
+        min = rawRange[0]; max = rawRange[1];
+    }
+    if ((min === null || max === null) && typeof rawRange === 'string') {
+        const m = rawRange.match(/(-?\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(-?\d+(?:\.\d+)?)/i);
+        if (m) { min = m[1]; max = m[2]; }
+    }
+    min = Number(min); max = Number(max);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    if (min > max) [min, max] = [max, min];
+    return { min, max };
+}
+
+function normalizeLevelForGrading(level) {
+    const raw = String(level || '').toLowerCase();
+    if (/pp\s*1|pp\s*2|play|pre.?primary|early|grade\s*[1-6]\b|grade_[1-6]\b|primary|standard\s*[1-8]/.test(raw)) return 'primary';
+    if (/grade\s*[7-9]\b|grade_[7-9]\b|junior/.test(raw)) return 'primary';
+    if (/grade\s*1[0-2]\b|grade_1[0-2]\b|senior|secondary|form\s*[1-4]/.test(raw)) return 'secondary';
+    if (raw === 'both' || raw === 'mixed' || raw === 'full') return 'primary';
+    return raw || 'primary';
+}
+
 function getGradeFromScore(score, curriculum, level, customScale) {
     const scoreNum = Number(score);
-    if (isNaN(scoreNum)) return 'N/A';
+    if (!Number.isFinite(scoreNum)) return 'N/A';
 
     if (Array.isArray(customScale) && customScale.length) {
         for (const entry of customScale) {
-            const min = Number(entry.min ?? entry.from ?? 0);
-            const max = Number(entry.max ?? entry.to ?? 100);
-            if (scoreNum >= min && scoreNum <= max) return entry.grade || entry.label || 'N/A';
+            const bounds = parseGradeRange(entry);
+            if (!bounds) continue;
+            if (scoreNum >= bounds.min && scoreNum <= bounds.max) return entry.grade || entry.label || 'N/A';
         }
     }
 
     const curriculumData = CURRICULUMS[normalizeCurriculumKey(curriculum)];
     if (!curriculumData) return 'N/A';
 
-    let normalizedLevel = level;
-    if (level === 'both') normalizedLevel = 'secondary';
-    const scale = curriculumData[normalizedLevel] || curriculumData.primary;
+    const normalizedLevel = normalizeLevelForGrading(level);
+    const scale = curriculumData[normalizedLevel] || curriculumData.primary || curriculumData.secondary;
     if (!scale) return 'N/A';
 
     for (const entry of scale) {
-        const [min, max] = entry.range;
-        if (scoreNum >= min && scoreNum <= max) {
+        const bounds = parseGradeRange(entry);
+        if (bounds && scoreNum >= bounds.min && scoreNum <= bounds.max) {
             return entry.grade;
         }
     }

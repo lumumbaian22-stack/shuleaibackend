@@ -617,12 +617,19 @@ exports.requestDutySwap = async (req, res) => {
       createdAt: new Date()
     };
 
-    let swapRequests = [];
-    const stored = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: 'swap_requests' } });
-    if (stored && Array.isArray(stored.duties)) swapRequests = stored.duties;
-    else if (stored && stored.duties && Array.isArray(stored.duties.requests)) swapRequests = stored.duties.requests;
+    const settings = school.settings || {};
+    const dutyManagement = settings.dutyManagement || {};
+    const swapRequests = Array.isArray(dutyManagement.swapRequests) ? dutyManagement.swapRequests.slice() : [];
     swapRequests.push(swapRequest);
-    await DutyRoster.upsert({ schoolId: school.schoolId, date: 'swap_requests', duties: swapRequests, createdBy: req.user.id });
+    await school.update({
+      settings: {
+        ...settings,
+        dutyManagement: {
+          ...dutyManagement,
+          swapRequests
+        }
+      }
+    });
 
     const admins = await User.findAll({ where: { role: 'admin', schoolCode: school.schoolId } });
     for (const admin of admins) {
@@ -646,10 +653,10 @@ exports.getAvailableSwaps = async (req, res) => {
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    const swapRequests = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: 'swap_requests' } });
-    if (!swapRequests || !swapRequests.duties) return res.json({ success: true, data: [] });
+    const swapRequests = school?.settings?.dutyManagement?.swapRequests || [];
+    if (!Array.isArray(swapRequests) || !swapRequests.length) return res.json({ success: true, data: [] });
 
-    const available = swapRequests.duties.filter(req => req.status === 'pending' && req.teacherId !== teacher.id && (!req.targetTeacherId || req.targetTeacherId === teacher.id));
+    const available = swapRequests.filter(req => req.status === 'pending' && req.teacherId !== teacher.id && (!req.targetTeacherId || req.targetTeacherId === teacher.id));
     const enriched = await Promise.all(available.map(async req => {
       const requestingTeacher = await Teacher.findByPk(req.teacherId, { include: [{ model: User, attributes: ['name'] }] });
       return { ...req, teacherName: requestingTeacher?.User?.name || 'Unknown', dutyDate: req.date, dutyType: req.dutyType };

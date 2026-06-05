@@ -2,6 +2,7 @@
 const { sequelize, Student, AcademicRecord, Attendance, Message, User, Class, Teacher, Parent, School, Alert, TeacherSubjectAssignment } = require('../models');
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
+const schoolFeatureService = require('../services/schoolFeatureService');
 
 // Helper: get grade from score using the school's curriculum (simplified)
 function getGradeFromScore(score, curriculum, level) {
@@ -147,6 +148,7 @@ exports.getDashboard = async (req, res) => {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     const curriculum = school ? school.system : 'cbc';
     const schoolLevel = school?.settings?.schoolLevel || 'secondary';
+    const accessInfo = school ? await schoolFeatureService.getSchoolFeatures(school.schoolId).catch(() => null) : null;
 
     const avg = records.length ? (records.reduce((a, b) => a + b.score, 0) / records.length).toFixed(1) : 0;
 
@@ -183,7 +185,12 @@ exports.getDashboard = async (req, res) => {
             system: curriculum,
             schoolLevel,
             logo: school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null,
-            branding: school?.settings?.branding || {}
+            branding: school?.settings?.branding || {},
+            access: accessInfo?.access || null,
+            featureList: accessInfo?.featureList || [],
+            fullAccess: !!accessInfo?.fullAccess,
+            planCode: accessInfo?.planCode || null,
+            brandingAllowed: !!accessInfo?.brandingAllowed
         }
       }
     });

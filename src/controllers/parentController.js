@@ -255,7 +255,7 @@ exports.getChildReportCardDetails = async (req, res) => {
       include: [{ model: User, attributes: ['id','name','email','phone','preferences'], where: { schoolCode, role: 'admin' }, required: true }],
       order: [['updatedAt','DESC']]
     }).catch(() => null);
-    const safeSig = (model, user) => model?.signatureUrl || model?.signature || user?.preferences?.signatureUrl || user?.preferences?.signatureAbsoluteUrl || '';
+    const safeSig = (model, user) => user?.preferences?.signatureDataUrl || model?.signatureUrl || model?.signature || user?.preferences?.signatureUrl || user?.preferences?.signatureAbsoluteUrl || '';
 
     const records = await AcademicRecord.findAll({
       where: { studentId: student.id, [Op.or]: [{ isPublished: true }, { status: 'published' }] },

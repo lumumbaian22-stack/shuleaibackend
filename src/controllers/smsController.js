@@ -1,5 +1,5 @@
 'use strict';
-const { Settings, sequelize, Parent, Teacher, Student, User } = require('../models');
+const { Settings, sequelize, Parent, Teacher, Student, User, School } = require('../models');
 const { getSchoolFeatures } = require('../services/schoolFeatureService');
 async function readSettings(key, fallback={}) { const row = await Settings.findOne({ where:{ key } }).catch(() => null); return row?.value || fallback; }
 async function writeSettings(key, value) { const [row] = await Settings.findOrCreate({ where:{ key }, defaults:{ value } }); row.value = value; await row.save(); return row.value; }
@@ -30,7 +30,10 @@ exports.getConfig = async (req, res) => {
     const schoolCode = req.user.schoolCode;
     const features = schoolCode ? await getSchoolFeatures(schoolCode).catch(() => null) : null;
     const enabled = isSuper || !!features?.features?.has?.('bulk_sms') || !!features?.featureList?.includes?.('bulk_sms') || !!features?.fullAccess;
-    res.json({ success:true, data:{ enabled, tokensRemaining: schoolCode ? schoolTokens(cfg, schoolCode) : null, senderId: cfg.senderId || 'SHULEAI', providerConfigured: !!(cfg.enabled && cfg.provider && cfg.apiKey), provider: isSuper ? cfg.provider || null : undefined, apiKeySet: !!cfg.apiKey, editable: isSuper, message:'School admins can compose/send SMS only. Provider credentials are managed by Super Admin.' } });
+    const allTokens = cfg.schoolTokens || {};
+    const allocatedTokens = Object.values(allTokens).reduce((sum, v) => sum + Number(v || 0), 0);
+    const superData = isSuper ? { schoolTokens: allTokens, allocatedTokens, totalRemainingTokens: allocatedTokens, enabledRaw: !!cfg.enabled } : {};
+    res.json({ success:true, data:{ enabled, tokensRemaining: schoolCode ? schoolTokens(cfg, schoolCode) : null, senderId: cfg.senderId || 'SHULEAI', providerConfigured: !!(cfg.enabled && cfg.provider && cfg.apiKey), provider: isSuper ? cfg.provider || null : undefined, apiKeySet: !!cfg.apiKey, editable: isSuper, message:'School admins can compose/send SMS only. Provider credentials are managed by Super Admin.', ...superData } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };
 exports.updateConfig = async (req, res) => {
@@ -72,7 +75,7 @@ exports.getHistory = async (req, res) => {
     const isSuper = ['super_admin','superadmin'].includes(String(req.user.role).toLowerCase());
     if (!schoolCode && !isSuper) return res.json({ success:true, data:[] });
     const sql = isSuper && !schoolCode
-      ? `SELECT * FROM "SmsOutbox" ORDER BY "createdAt" DESC LIMIT 100`
+      ? `SELECT sms.*, COALESCE(NULLIF(s."name", 'Shule AI'), s."shortCode", sms."schoolCode") AS "schoolName" FROM "SmsOutbox" sms LEFT JOIN "Schools" s ON s."schoolId" = sms."schoolCode" ORDER BY sms."createdAt" DESC LIMIT 200`
       : `SELECT * FROM "SmsOutbox" WHERE "schoolCode" = :schoolCode ORDER BY "createdAt" DESC LIMIT 100`;
     const [rows] = await sequelize.query(sql, { replacements:{ schoolCode } }).catch(() => [[]]);
     res.json({ success:true, data:rows || [] });

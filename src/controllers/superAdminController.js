@@ -5,6 +5,61 @@ const { Op } = require('sequelize');
 const { sequelize } = require('../models');
 const { generateTemporaryPassword } = require('../utils/passwords');
 
+
+function isRealSchoolNameCandidate(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (/^shule\s*ai$/i.test(text)) return false;
+  if (/^shule\s*ai\s*(demo\s*)?school$/i.test(text)) return false;
+  if (/^unnamed\s*school$/i.test(text)) return false;
+  return true;
+}
+
+function resolveOfficialSchoolName(school) {
+  const json = school?.toJSON ? school.toJSON() : (school || {});
+  const settings = json.settings || {};
+  const admins = Array.isArray(json.admins) ? json.admins : [];
+  const admin = admins[0] || {};
+  const candidates = [
+    json.officialSchoolName,
+    json.originalSignupName,
+    json.signupSchoolName,
+    settings.officialSchoolName,
+    settings.originalSignupName,
+    settings.signupSchoolName,
+    settings.organizationName,
+    settings.adminOrganizationName,
+    settings.schoolName,
+    settings.displayName,
+    settings.branding?.officialSchoolName,
+    settings.branding?.schoolName,
+    settings.branding?.displayName,
+    settings.profile?.schoolName,
+    json.schoolName,
+    json.displayName,
+    json.name,
+    admin.organizationName,
+    admin.schoolName,
+    admin.name
+  ];
+  const real = candidates.find(isRealSchoolNameCandidate);
+  if (real) return String(real).trim();
+  return json.shortCode || json.schoolId ? `School ${json.shortCode || json.schoolId}` : 'Unnamed School';
+}
+
+function serializeSchoolForSuperAdmin(school) {
+  const json = school?.toJSON ? school.toJSON() : (school || {});
+  const officialSchoolName = resolveOfficialSchoolName(json);
+  const settings = { ...(json.settings || {}), officialSchoolName };
+  return {
+    ...json,
+    officialSchoolName,
+    schoolName: officialSchoolName,
+    displayName: officialSchoolName,
+    settings
+  };
+}
+
 // @desc    Get platform overview
 // @route   GET /api/super-admin/overview
 // @access  Private/SuperAdmin
@@ -41,7 +96,7 @@ exports.getSchools = async (req, res) => {
                 required: false
             }]
         });
-        res.json({ success: true, data: schools });
+        res.json({ success: true, data: schools.map(serializeSchoolForSuperAdmin) });
     } catch (error) {
         console.error('Get schools error:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -64,7 +119,7 @@ exports.getPendingSchools = async (req, res) => {
             order: [['createdAt', 'DESC']]
         });
         
-        res.json({ success: true, data: schools });
+        res.json({ success: true, data: schools.map(serializeSchoolForSuperAdmin) });
     } catch (error) {
         console.error('Get pending schools error:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -570,7 +625,7 @@ exports.getSuspendedSchools = async (req, res) => {
       order: [['suspendedAt', 'DESC']]
     });
     
-    res.json({ success: true, data: schools });
+    res.json({ success: true, data: schools.map(serializeSchoolForSuperAdmin) });
   } catch (error) {
     console.error('Get suspended schools error:', error);
     res.status(500).json({ success: false, message: error.message });
