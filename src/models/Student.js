@@ -1,3 +1,14 @@
+function calculateStudentAge(dateOfBirth, now = new Date()) {
+  if (!dateOfBirth) return null;
+  const dob = new Date(dateOfBirth); if (Number.isNaN(dob.getTime()) || dob > now) return null;
+  let years = now.getFullYear() - dob.getFullYear();
+  let months = now.getMonth() - dob.getMonth();
+  let days = now.getDate() - dob.getDate();
+  if (days < 0) { const previousMonth = new Date(now.getFullYear(), now.getMonth(), 0); days += previousMonth.getDate(); months -= 1; }
+  if (months < 0) { months += 12; years -= 1; }
+  const compactDays = Math.floor((now - new Date(now.getFullYear() - years, dob.getMonth(), dob.getDate())) / 86400000);
+  return { years, months, days, compactDays:Math.max(0,compactDays), full:`${years} year${years===1?'':'s'}, ${months} month${months===1?'':'s'}, ${days} day${days===1?'':'s'} old`, compact:`${years} year${years===1?'':'s'}, ${Math.max(0,compactDays)} day${compactDays===1?'':'s'} old` };
+}
 module.exports = (sequelize, DataTypes) => {
   const Student = sequelize.define('Student', {
     userId: { type: DataTypes.INTEGER, allowNull: false, references: { model: 'Users', key: 'id' } },
@@ -7,6 +18,8 @@ module.exports = (sequelize, DataTypes) => {
     curriculum: { type: DataTypes.STRING, allowNull: true, defaultValue: 'cbc' },
     admissionNumber: { type: DataTypes.STRING, allowNull: true },
     dateOfBirth: DataTypes.DATE,
+    age: { type: DataTypes.VIRTUAL, get() { return calculateStudentAge(this.getDataValue('dateOfBirth')); } },
+    ageDisplay: { type: DataTypes.VIRTUAL, get() { return calculateStudentAge(this.getDataValue('dateOfBirth'))?.compact || null; } },
     gender: DataTypes.ENUM('male', 'female', 'other'),
     enrollmentDate: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     status: { type: DataTypes.ENUM('active', 'inactive', 'graduated', 'transferred'), defaultValue: 'active' },
@@ -27,7 +40,8 @@ module.exports = (sequelize, DataTypes) => {
     subscriptionExpiry: { type: DataTypes.DATE, allowNull: true },
     preferences: { type: DataTypes.JSONB, defaultValue: { theme: 'light', notifications: true } },
     approvalStatus: { type: DataTypes.ENUM('pending', 'approved', 'rejected'), defaultValue: 'approved' },
-    approvedBy: DataTypes.INTEGER
+    approvedBy: DataTypes.INTEGER,
+    activeEnrollmentId: { type: DataTypes.INTEGER, allowNull: true }
   }, {
     timestamps: true,
     hooks: {

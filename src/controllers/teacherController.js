@@ -4,6 +4,7 @@ const path = require('path');
 const csv = require('csv-parser');
 const { Op } = require('sequelize');
 const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School, Task, TeacherSubjectAssignment, ReportSnapshot, Admin, Fee } = require('../models');
+const reportSnapshotService = require('../services/reportSnapshotService');
 const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
 const moment = require('moment');
@@ -222,6 +223,8 @@ exports.getMyStudents = async (req, res) => {
         isClassTeacher: !!classItem,
         subjects: displaySubjects,
         classNames,
+        classId: classItem?.id || null,
+        class: classItem ? { id: classItem.id, name: classItem.name, grade: classItem.grade, stream: classItem.stream } : null,
         teacherName: req.user.name
       }
     });
@@ -385,55 +388,7 @@ exports.enterMarks = async (req, res) => {
 // @desc    Take attendance
 // @route   POST /api/teacher/attendance
 // @access  Private/Teacher
-exports.takeAttendance = async (req, res) => {
-  try {
-    const { studentId, date, status, reason } = req.body;
-    
-    const [attendance, created] = await Attendance.findOrCreate({
-      where: { studentId, date },
-      defaults: { 
-        studentId, 
-        date, 
-        status, 
-        reason, 
-        schoolCode: req.user.schoolCode, 
-        reportedBy: req.user.id 
-      }
-    });
-
-    if (!created) {
-      attendance.status = status;
-      attendance.reason = reason;
-      await attendance.save();
-    }
-
-    if (status === 'absent') {
-      const student = await Student.findByPk(studentId, { 
-        include: [{ model: User, attributes: ['id', 'name'] }] 
-      });
-      
-      if (student) {
-        await createAlert({
-          userId: student.userId,
-          role: 'student',
-          type: 'attendance',
-          severity: 'info',
-          title: 'Absence Recorded',
-          message: `You were marked absent on ${date}.`
-        });
-      }
-    }
-
-    res.json({ success: true, data: attendance });
-  } catch (error) {
-    console.error('Take attendance error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Add a comment about a student
-// @route   POST /api/teacher/comment
-// @access  Private/Teacher
+exports.takeAttendance = require('./attendanceLifecycleController').saveSingleDraft;
 exports.addComment = async (req, res) => {
   try {
     const { studentId, comment } = req.body;
@@ -2103,9 +2058,25 @@ async function v102BuildStudentTermReportSnapshot({ student, records, meta, cls,
     };
   });
   const summary = v102CurriculumEngine.summarizeReportRows(reportRows);
+  const classTeacher = cls?.teacherId ? await Teacher.findByPk(cls.teacherId, { include:[{ model:User, attributes:['id','name','preferences'] }] }).catch(() => null) : null;
+  const adminSigner = await Admin.findOne({ include:[{ model:User, attributes:['id','name','preferences'], where:{ schoolCode:cls.schoolCode, role:'admin', isActive:true }, required:true }], order:[['updatedAt','DESC']] }).catch(() => null);
+  const safeSignature = (profile, user) => user?.preferences?.signatureDataUrl || profile?.signatureUrl || profile?.signature || user?.preferences?.signatureUrl || '';
+  const attendance = await Attendance.findAll({ where:{ schoolCode:cls.schoolCode, studentId:student.id }, attributes:['status'] }).catch(() => []);
+  const present = attendance.filter(row => row.status === 'present').length;
+  const absent = attendance.filter(row => row.status === 'absent').length;
+  const late = attendance.filter(row => row.status === 'late').length;
+  const fee = await Fee.findOne({ where:{ studentId:student.id, status:{ [Op.ne]:'paid' } }, order:[['updatedAt','DESC']] }).catch(() => null);
+  const branding = school?.settings?.branding || {};
+  const schoolLogo = branding.logoDataUrl || branding.logoUrl || branding.logo || school?.settings?.logo || null;
+  const studentPhoto = student.User?.profileImage || student.profileImage || student.photo || null;
   return {
-    student: { id:student.id, name:student.User?.name || student.name || 'Student', elimuid:student.elimuid || null, admissionNumber:student.admissionNumber || null, grade:student.grade || cls?.name || null, classId:cls?.id || student.classId || null, className:cls?.name || student.grade || null },
+    student: { id:student.id, name:student.User?.name || student.name || 'Student', elimuid:student.elimuid || null, admissionNumber:student.admissionNumber || null, grade:student.grade || cls?.name || null, classId:cls?.id || student.classId || null, className:cls?.name || student.grade || null, photo:studentPhoto, dateOfBirth:student.dateOfBirth || null },
     class: cls ? { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream, curriculum:cls.curriculum, levelCode:cls.levelCode, curriculumLevel:cls.curriculumLevel } : null,
+    school: { name:school?.name || school?.schoolName || null, schoolCode:cls.schoolCode, logo:schoolLogo, branding, reportCardSettings:school?.settings?.reportCardSettings || school?.reportCardSettings || {} },
+    signatures: { classTeacher:{ name:classTeacher?.User?.name || null, image:safeSignature(classTeacher,classTeacher?.User) }, headteacher:{ name:adminSigner?.User?.name || null, image:safeSignature(adminSigner,adminSigner?.User) } },
+    attendance: { present, absent, late, total:attendance.length, rate:attendance.length ? Math.round((present / attendance.length) * 100) : 0 },
+    feeBalance: fee ? Math.max(0, Number(fee.totalAmount || 0) - Number(fee.paidAmount || 0)) : null,
+    comments: { classTeacher: records.find(r => r.teacherComment)?.teacherComment || null, general: records.find(r => r.remarks)?.remarks || null },
     term, year:Number(year), curriculum:meta.system, schoolLevel:meta.level, gradingProfile:v102CurriculumEngine.getGradingProfile(meta.system, cls.levelCode || v102CurriculumEngine.levelCodeFromGrade(meta.system, cls.grade || cls.name)), subjects, reportRows, totalMarks:summary.totalMarks, countedSubjects:summary.countedSubjects, pendingSubjects:summary.pendingSubjects, notTakenSubjects:summary.notTakenSubjects, overallAverage:summary.average, overallGrade:summary.average == null ? null : getGradeFromScore(summary.average, meta.system, meta.level, meta.gradingScale), generatedAt:new Date().toISOString(), analyticsReady:true, calculationRule:'Only valid completed subjects the student is taking are counted. Pending/null, Not Taken, Not Offered, and Exempted subjects are not counted.'
   };
 }
@@ -2222,12 +2193,14 @@ exports.publishMarks = async (req,res) => {
       const snapshot = await v102BuildStudentTermReportSnapshot({ student:st, records:studentRecords, meta, cls, term, year:Number(year) });
       const sourceRecordIds = studentRecords.map(r => r.id);
       const checksum = v66KChecksum(snapshot);
-      const [row, created] = await ReportSnapshot.findOrCreate({
-        where:{ schoolCode:req.user.schoolCode, studentId:st.id, term, year:Number(year), reportType:'academic' },
-        defaults:{ schoolCode:req.user.schoolCode, studentId:st.id, classId:cls.id, term, year:Number(year), curriculum:meta.system, reportType:'academic', status:'published', generatedBy:req.user.id, publishedBy:req.user.id, publishedAt:now, snapshot, sourceRecordIds, checksum, metadata:{ classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v102_curriculum_report_card' } }
+      const saved = await reportSnapshotService.createPublishedVersion({
+        schoolCode:req.user.schoolCode, studentId:st.id, classId:cls.id, term, year:Number(year),
+        curriculum:meta.system, reportType:'academic', generatedBy:req.user.id, publishedBy:req.user.id,
+        publishedAt:now, snapshot, sourceRecordIds, checksum,
+        assessmentType:assessmentType || null, assessmentName:assessmentName || null,
+        metadata:{ classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v143_immutable_curriculum_report_card' }
       });
-      if (!created) await row.update({ classId:cls.id, curriculum:meta.system, status:'published', generatedBy:req.user.id, publishedBy:req.user.id, publishedAt:now, snapshot, sourceRecordIds, checksum, metadata:{ ...(row.metadata || {}), classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v102_curriculum_report_card' } });
-      snapshots++;
+      if (saved.created || saved.unchanged) snapshots++;
     }
     res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. ${snapshots} curriculum-aware report card(s) saved.`, data:{ count, snapshots, classId:cls.id, term, year:Number(year), engine:'v102_curriculum_report_card' } });
   } catch(error) { console.error('V102 publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }

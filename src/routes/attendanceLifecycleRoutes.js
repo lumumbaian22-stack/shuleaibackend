@@ -1,0 +1,12 @@
+const router = require('express').Router();
+const { protect, authorize } = require('../middleware/auth');
+const ctrl = require('../controllers/attendanceLifecycleController');
+router.use(protect);
+router.get('/sessions/:classId/:date', authorize('teacher','admin','super_admin'), ctrl.getOrCreateSession);
+router.post('/sessions', authorize('teacher','admin','super_admin'), ctrl.getOrCreateSession);
+router.put('/sessions/:sessionId/draft', authorize('teacher','admin','super_admin'), ctrl.saveDraft);
+router.post('/sessions/:sessionId/lock', authorize('teacher','admin','super_admin'), ctrl.lockSession);
+router.post('/sessions/:sessionId/corrections', authorize('admin','super_admin'), ctrl.correctAttendance);
+router.get('/sessions/:sessionId/corrections', authorize('teacher','admin','super_admin'), ctrl.getCorrections);
+router.post('/sessions/:sessionId/release', authorize('teacher','admin','super_admin'), ctrl.releaseClass);
+module.exports = router;

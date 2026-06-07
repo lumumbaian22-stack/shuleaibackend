@@ -47,6 +47,12 @@ const smsRoutes = require('./routes/smsRoutes');
 const compatibilityRoutes = require('./routes/compatibilityRoutes');
 const feeStructureRoutes = require('./routes/feeStructureRoutes');
 const ownerHardeningRoutes = require('./routes/ownerHardeningRoutes');
+const realtimeRoutes = require('./routes/realtimeRoutes');
+const attendanceLifecycleRoutes = require('./routes/attendanceLifecycleRoutes');
+const reportHistoryRoutes = require('./routes/reportHistoryRoutes');
+const studentLifecycleRoutes = require('./routes/studentLifecycleRoutes');
+const advancedAnalyticsRoutes = require('./routes/advancedAnalyticsRoutes');
+const birthdayRoutes = require('./routes/birthdayRoutes');
 const { routeAwareApiLimiter } = require('./middleware/productionRateLimits');
 const { requestContext, productionErrorHandler } = require('./middleware/requestContext');
 const { ensureRuntimeSchema } = require('./utils/schemaSafety');
@@ -334,6 +340,13 @@ app.use('/api', nationalRolloutRoutes);
 app.use('/api/owner', ownerHardeningRoutes);
 app.use('/api/fee-structures', feeStructureRoutes);
 app.use('/api/fees/structures', feeStructureRoutes);
+// V143 canonical real-time cursor recovery and locked attendance lifecycle.
+app.use('/api/realtime', realtimeRoutes);
+app.use('/api/attendance', attendanceLifecycleRoutes);
+app.use('/api/report-cards', reportHistoryRoutes);
+app.use('/api/lifecycle/birthdays', birthdayRoutes);
+app.use('/api/lifecycle', studentLifecycleRoutes);
+app.use('/api/analytics/advanced', advancedAnalyticsRoutes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {

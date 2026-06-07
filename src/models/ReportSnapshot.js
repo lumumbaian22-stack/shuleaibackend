@@ -14,12 +14,18 @@ module.exports = (sequelize, DataTypes) => {
     snapshot: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
     sourceRecordIds: { type: DataTypes.ARRAY(DataTypes.INTEGER), defaultValue: [] },
     checksum: { type: DataTypes.STRING, allowNull: true },
-    metadata: { type: DataTypes.JSONB, defaultValue: {} }
+    metadata: { type: DataTypes.JSONB, defaultValue: {} },
+    version: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+    assessmentKey: { type: DataTypes.STRING(120), allowNull: false, defaultValue: 'term' },
+    supersedesId: { type: DataTypes.INTEGER, allowNull: true },
+    correctionReason: { type: DataTypes.TEXT, allowNull: true },
+    isCurrent: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    lockedAt: { type: DataTypes.DATE, allowNull: true },
+    formatVersion: { type: DataTypes.STRING(30), allowNull: false, defaultValue: 'v143' }
   }, {
-    defaultScope: { attributes: { exclude: ['classId'] } },
     timestamps: true,
     indexes: [
-      { unique: true, fields: ['schoolCode', 'studentId', 'term', 'year', 'reportType'] },
+      { unique: true, fields: ['schoolCode', 'studentId', 'term', 'year', 'reportType', 'assessmentKey', 'version'] },
       { fields: ['schoolCode', 'term', 'year'] },
       { fields: ['studentId'] }
     ]

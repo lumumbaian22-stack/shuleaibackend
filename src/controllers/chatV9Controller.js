@@ -1,8 +1,9 @@
 const { Op } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
+const realtime = require('../services/realtimeService');
 const {
-  User, Teacher, Student, Class,
+  User, Teacher, Student, Parent, StudentParent, Class,
   Department, DepartmentMember, TeacherSubjectAssignment,
   ChatGroup, ChatGroupMember, ChatMessage,
   ClassroomThread, ThreadReply, AchievementEvent
@@ -189,6 +190,40 @@ async function hydrateChatMessage(message) {
   return ChatMessage.findByPk(message.id, {
     include: [{ model: User, as: 'Sender', attributes: ['id','name','role','profileImage'] }]
   });
+}
+
+function directConversationKey(a,b) { return realtime.directConversationKey(a,b); }
+async function chatAudience(message) {
+  const row = message?.toJSON ? message.toJSON() : message;
+  if (row.groupId) {
+    const members = await ChatGroupMember.findAll({ where:{ groupId:row.groupId }, attributes:['userId'] });
+    return { key:realtime.groupConversationKey(row.groupId), userIds:[...new Set([row.senderId,...members.map(m=>m.userId)].filter(Boolean).map(Number))] };
+  }
+  return { key:directConversationKey(row.senderId,row.receiverId), userIds:[...new Set([row.senderId,row.receiverId].filter(Boolean).map(Number))] };
+}
+async function emitChatMessage(type, message, extra = {}) {
+  const hydrated = message?.Sender ? message : await hydrateChatMessage(message);
+  const audience = await chatAudience(hydrated || message);
+  const row = presentChatMessage(hydrated || message, null);
+  await realtime.emit({ type, schoolCode:row.schoolCode, audience:{ school:false, userIds:audience.userIds, conversations:[audience.key] }, entityType:'ChatMessage', entityId:row.id, version:Number(row.version||1), data:{ ...row, conversationId:audience.key, ...extra } });
+  return hydrated || message;
+}
+async function emitThreadEvent(type, thread, reply = null, extra = {}) {
+  const users = [];
+  if (thread.createdBy) users.push(Number(thread.createdBy));
+  const participants = thread.classId ? await getClassStudyParticipants({ schoolCode:thread.schoolCode, classId:thread.classId }) : [];
+  users.push(...participants.map(p=>Number(p.id)).filter(Boolean));
+  if (!thread.classId) {
+    const staff = await User.findAll({ where:{ schoolCode:thread.schoolCode, role:{ [Op.in]:['teacher','admin'] }, isActive:true }, attributes:['id'] });
+    users.push(...staff.map(person=>Number(person.id)).filter(Boolean));
+  }
+  const key = realtime.threadConversationKey(thread.id);
+  const row = reply ? presentThreadReply(reply,null) : (thread.toJSON ? thread.toJSON() : thread);
+  await realtime.emit({ type, schoolCode:thread.schoolCode, audience:{ school:false, userIds:[...new Set(users)], classIds:thread.classId?[thread.classId]:[], conversations:[key] }, entityType:reply?'ThreadReply':'ClassroomThread', entityId:row.id, version:Number(row.version||1), data:{ ...row, threadId:thread.id, conversationId:key, ...extra } });
+}
+async function existingClientMessage(schoolCode,senderId,clientMessageId) {
+  if (!clientMessageId) return null;
+  return ChatMessage.findOne({ where:{ schoolCode,senderId,clientMessageId }, include:[{model:User,as:'Sender',attributes:['id','name','role','profileImage']}] });
 }
 
 function chatMessageVisibleToUser(message, userId) {
@@ -454,7 +489,13 @@ exports.listTeacherDirectory = async (req, res) => {
       order: [['role','ASC'], ['name','ASC']]
     });
 
-    res.json({ success: true, data: users });
+    let visibleUsers = users;
+    if (req.user.role === 'parent') {
+      const classIds = await parentLinkedClassIds(req.user.id, schoolCodeOf(req));
+      const allowedTeacherIds = new Set(await classTeacherUserIdsForClasses(classIds, schoolCodeOf(req)));
+      visibleUsers = users.filter(user => user.role === 'admin' || (user.role === 'teacher' && allowedTeacherIds.has(Number(user.id))));
+    }
+    res.json({ success: true, data: visibleUsers });
   } catch (error) {
     console.error('listTeacherDirectory error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -530,6 +571,39 @@ async function canStudentDirectMessage(req, otherUser) {
   return Boolean(meGrade && otherGrade && meGrade === otherGrade);
 }
 
+
+async function parentLinkedClassIds(parentUserId, schoolCode) {
+  const parent = await Parent.findOne({ where:{ userId:parentUserId } });
+  if (!parent) return [];
+  const links = await StudentParent.findAll({ where:{ parentId:parent.id }, attributes:['studentId'] });
+  if (!links.length) return [];
+  const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({ where:{ id:{ [Op.in]:links.map(link=>link.studentId) }, status:'active' }, include:[{ model:User, where:{ schoolCode, role:'student', isActive:true }, attributes:['id'] }], attributes:['id','classId','grade'] });
+  const ids = students.map(student=>Number(student.classId)).filter(Boolean);
+  if (ids.length) return [...new Set(ids)];
+  const grades = [...new Set(students.map(student=>String(student.grade||'').trim()).filter(Boolean))];
+  if (!grades.length) return [];
+  const classes = await Class.findAll({ where:{ schoolCode, isActive:true, [Op.or]:[{ name:{ [Op.in]:grades } }, { grade:{ [Op.in]:grades } }] }, attributes:['id'] });
+  return [...new Set(classes.map(cls=>Number(cls.id)))];
+}
+
+async function classTeacherUserIdsForClasses(classIds, schoolCode) {
+  if (!classIds.length) return [];
+  const classes = await Class.findAll({ where:{ id:{ [Op.in]:classIds }, schoolCode, isActive:true }, attributes:['id','teacherId'] });
+  const teacherIds = classes.map(cls=>Number(cls.teacherId)).filter(Boolean);
+  const teachers = teacherIds.length ? await Teacher.findAll({ where:{ id:{ [Op.in]:teacherIds } }, attributes:['userId'] }) : [];
+  return [...new Set(teachers.map(teacher=>Number(teacher.userId)).filter(Boolean))];
+}
+
+async function parentCanContactTeacher(parentUserId, teacherUserId, schoolCode) {
+  const classIds = await parentLinkedClassIds(parentUserId, schoolCode);
+  const teacherUserIds = await classTeacherUserIdsForClasses(classIds, schoolCode);
+  return teacherUserIds.includes(Number(teacherUserId));
+}
+
+async function teacherCanContactParent(teacherUserId, parentUserId, schoolCode) {
+  return parentCanContactTeacher(parentUserId, teacherUserId, schoolCode);
+}
+
 async function canDirectMessage(req, otherUser) {
   if (!otherUser || otherUser.schoolCode !== schoolCodeOf(req)) return false;
   if (Number(otherUser.id) === Number(req.user.id)) return false;
@@ -538,18 +612,25 @@ async function canDirectMessage(req, otherUser) {
   // No private 1:1 teacher <-> student messages.
   // Teacher-student interaction is allowed only in auditable group/class/study/homework spaces.
   if (req.user.role === 'teacher') {
-    return ['teacher', 'admin', 'parent'].includes(otherUser.role);
+    if (['teacher','admin'].includes(otherUser.role)) return true;
+    if (otherUser.role === 'parent') return teacherCanContactParent(req.user.id, otherUser.id, schoolCodeOf(req));
+    return false;
   }
 
   if (req.user.role === 'student') {
     if (otherUser.role !== 'student') return false;
     const meStudent = await getStudentProfile(req.user.id);
     const otherStudent = await getStudentProfile(otherUser.id);
-    return Boolean(meStudent?.classId && otherStudent?.classId && Number(meStudent.classId) === Number(otherStudent.classId));
+    if (meStudent?.classId && otherStudent?.classId) return Number(meStudent.classId) === Number(otherStudent.classId);
+    const mine = String(meStudent?.grade || meStudent?.className || '').trim().toLowerCase();
+    const theirs = String(otherStudent?.grade || otherStudent?.className || '').trim().toLowerCase();
+    return Boolean(mine && theirs && mine === theirs);
   }
 
   if (req.user.role === 'parent') {
-    return ['teacher', 'admin'].includes(otherUser.role);
+    if (otherUser.role === 'admin') return true;
+    if (otherUser.role === 'teacher') return parentCanContactTeacher(req.user.id, otherUser.id, schoolCodeOf(req));
+    return false;
   }
 
   if (['admin', 'super_admin'].includes(req.user.role)) {
@@ -587,25 +668,24 @@ exports.getDirectMessages = async (req, res) => {
 
 exports.sendDirectMessage = async (req, res) => {
   try {
-    const { receiverId, content, attachmentUrl, attachment, replyToMessageId } = req.body;
-    if (!receiverId || !content) return res.status(400).json({ success: false, message: 'receiverId and content are required' });
-    const other = await User.findOne({ where: { id: receiverId, schoolCode: schoolCodeOf(req), isActive: true } });
-    if (!(await canDirectMessage(req, other))) return res.status(404).json({ success: false, message: 'Contact not found or not allowed' });
-
-    const message = await ChatMessage.create({
-      schoolCode: schoolCodeOf(req),
-      senderId: req.user.id,
-      receiverId,
-      content,
-      attachmentUrl: attachmentUrl || null,
-      messageType: attachmentUrl ? 'file' : 'text',
-      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), replyTo: await buildReplyPreview(replyToMessageId, schoolCodeOf(req)) }
-    });
-    const hydrated = await hydrateChatMessage(message);
-    res.status(201).json({ success: true, data: hydrated || message });
-  } catch (error) {
-    console.error('sendDirectMessage error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    const { receiverId, content, attachmentUrl, attachment, replyToMessageId, clientMessageId } = req.body;
+    const cleanContent=String(content||'').trim();
+    if (!receiverId || (!cleanContent && !attachmentUrl)) return res.status(400).json({ success:false, message:'receiverId and a message or attachment are required' });
+    const other=await User.findOne({where:{id:Number(receiverId),schoolCode:schoolCodeOf(req),isActive:true}});
+    if (!(await canDirectMessage(req,other))) return res.status(404).json({success:false,message:'Contact not found or not allowed'});
+    const duplicate=await existingClientMessage(schoolCodeOf(req),req.user.id,clientMessageId);
+    if(duplicate)return res.status(200).json({success:true,data:presentChatMessage(duplicate,req.user.id),reconciled:true});
+    const key=directConversationKey(req.user.id,receiverId);
+    const message=await ChatMessage.create({schoolCode:schoolCodeOf(req),senderId:req.user.id,receiverId:Number(receiverId),content:cleanContent||'Shared an attachment',attachmentUrl:attachmentUrl||null,messageType:attachmentUrl?'file':'text',clientMessageId:clientMessageId||null,conversationKey:key,deliveryStatus:'sent',metadata:{...(attachment?{attachmentName:attachment.name,attachmentType:attachment.mimeType,attachmentSize:attachment.size}:{}),replyTo:await buildReplyPreview(replyToMessageId,schoolCodeOf(req))}});
+    const hydrated=await emitChatMessage('chat:message_created',message);
+    res.status(201).json({success:true,data:presentChatMessage(hydrated,req.user.id)});
+  } catch(error){
+    console.error('sendDirectMessage error:',error);
+    if(error.name==='SequelizeUniqueConstraintError'&&req.body?.clientMessageId){
+      const duplicate=await existingClientMessage(schoolCodeOf(req),req.user.id,req.body.clientMessageId).catch(()=>null);
+      if(duplicate)return res.status(200).json({success:true,data:presentChatMessage(duplicate,req.user.id),reconciled:true});
+    }
+    res.status(500).json({success:false,message:error.message});
   }
 };
 
@@ -630,33 +710,22 @@ exports.getGroupMessages = async (req, res) => {
 
 exports.sendGroupMessage = async (req, res) => {
   try {
-    const groupId = Number(req.params.groupId);
-    const { content, attachmentUrl, attachment, replyToMessageId } = req.body;
-    if (!content) return res.status(400).json({ success: false, message: 'content is required' });
-
-    const group = await ChatGroup.findOne({ where: { id: groupId, schoolCode: schoolCodeOf(req), isActive: true } });
-    if (!group) return res.status(404).json({ success: false, message: 'Group not found' });
-
-    const member = await ChatGroupMember.findOne({ where: { groupId, userId: req.user.id } });
-    if (!member && !canManageSchool(req)) return res.status(403).json({ success: false, message: 'Not a group member' });
-    if (group.onlyAdminsCanSend && !['owner','admin'].includes(member?.role) && !canManageSchool(req)) {
-      return res.status(403).json({ success: false, message: 'Only group admins can send messages' });
+    const groupId=Number(req.params.groupId); const {content,attachmentUrl,attachment,replyToMessageId,clientMessageId}=req.body; const clean=String(content||'').trim();
+    if(!clean&&!attachmentUrl)return res.status(400).json({success:false,message:'A message or attachment is required'});
+    const group=await ChatGroup.findOne({where:{id:groupId,schoolCode:schoolCodeOf(req),isActive:true}}); if(!group)return res.status(404).json({success:false,message:'Group not found'});
+    const member=await ChatGroupMember.findOne({where:{groupId,userId:req.user.id}}); if(!member&&!canManageSchool(req))return res.status(403).json({success:false,message:'Not a group member'});
+    if(group.onlyAdminsCanSend&&!['owner','admin'].includes(member?.role)&&!canManageSchool(req))return res.status(403).json({success:false,message:'Only group admins can send messages'});
+    const duplicate=await existingClientMessage(schoolCodeOf(req),req.user.id,clientMessageId); if(duplicate)return res.json({success:true,data:presentChatMessage(duplicate,req.user.id),reconciled:true});
+    const key=realtime.groupConversationKey(groupId);
+    const message=await ChatMessage.create({schoolCode:schoolCodeOf(req),senderId:req.user.id,groupId,content:clean||'Shared an attachment',attachmentUrl:attachmentUrl||null,messageType:attachmentUrl?'file':'text',clientMessageId:clientMessageId||null,conversationKey:key,deliveryStatus:'sent',metadata:{...(attachment?{attachmentName:attachment.name,attachmentType:attachment.mimeType,attachmentSize:attachment.size}:{}),replyTo:await buildReplyPreview(replyToMessageId,schoolCodeOf(req))}});
+    const hydrated=await emitChatMessage('chat:message_created',message); res.status(201).json({success:true,data:presentChatMessage(hydrated,req.user.id)});
+  }catch(error){
+    console.error('sendGroupMessage error:',error);
+    if(error.name==='SequelizeUniqueConstraintError'&&req.body?.clientMessageId){
+      const duplicate=await existingClientMessage(schoolCodeOf(req),req.user.id,req.body.clientMessageId).catch(()=>null);
+      if(duplicate)return res.status(200).json({success:true,data:presentChatMessage(duplicate,req.user.id),reconciled:true});
     }
-
-    const message = await ChatMessage.create({
-      schoolCode: schoolCodeOf(req),
-      senderId: req.user.id,
-      groupId,
-      content,
-      attachmentUrl: attachmentUrl || null,
-      messageType: attachmentUrl ? 'file' : 'text',
-      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), replyTo: await buildReplyPreview(replyToMessageId, schoolCodeOf(req)) }
-    });
-    const hydrated = await hydrateChatMessage(message);
-    res.status(201).json({ success: true, data: hydrated || message });
-  } catch (error) {
-    console.error('sendGroupMessage error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({success:false,message:error.message});
   }
 };
 
@@ -783,33 +852,24 @@ exports.updateClassroomThread = async (req, res) => {
   }
 };
 
-exports.replyToThread = async (req, res) => {
-  try {
-    const threadId = Number(req.params.threadId);
-    const { content, parentReplyId, attachmentUrl, attachment } = req.body;
-    if (!content) return res.status(400).json({ success: false, message: 'content is required' });
-
-    const thread = await ClassroomThread.findOne({ where: { id: threadId, schoolCode: schoolCodeOf(req), isClosed: false } });
-    if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
-    if (!(await ensureUserMayUseThread(req, thread))) return res.status(403).json({ success: false, message: 'Not allowed in this study room' });
-
-    const reply = await ThreadReply.create({
-      threadId,
-      userId: req.user.id,
-      parentReplyId: parentReplyId || null,
-      content,
-      metadata: {
-        ...(attachmentUrl ? { attachmentUrl, attachmentName: attachment?.name, attachmentType: attachment?.mimeType, attachmentSize: attachment?.size } : {}),
-        replyTo: await buildThreadReplyPreview(parentReplyId)
-      }
-    });
-    thread.updatedAt = new Date();
-    await thread.save();
-    const hydrated = await ThreadReply.findByPk(reply.id, { include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }] });
-    res.status(201).json({ success: true, data: hydrated || reply });
-  } catch (error) {
-    console.error('replyToThread error:', error);
-    res.status(500).json({ success: false, message: error.message });
+exports.replyToThread = async (req,res)=>{
+  try{
+    const threadId=Number(req.params.threadId); const {content,parentReplyId,attachmentUrl,attachment,clientMessageId}=req.body; const clean=String(content||'').trim();
+    if(!clean&&!attachmentUrl)return res.status(400).json({success:false,message:'A reply or attachment is required'});
+    const thread=await ClassroomThread.findOne({where:{id:threadId,schoolCode:schoolCodeOf(req),isClosed:false}}); if(!thread)return res.status(404).json({success:false,message:'Thread not found'});
+    if(!(await ensureUserMayUseThread(req,thread)))return res.status(403).json({success:false,message:'Not allowed in this study room'});
+    if(clientMessageId){const old=await ThreadReply.findOne({where:{threadId,userId:req.user.id,clientMessageId},include:[{model:User,as:'Author',attributes:['id','name','role','profileImage']}]});if(old)return res.json({success:true,data:old,reconciled:true});}
+    const reply=await ThreadReply.create({threadId,userId:req.user.id,parentReplyId:parentReplyId||null,content:clean||'Shared an attachment',clientMessageId:clientMessageId||null,metadata:{...(attachmentUrl?{attachmentUrl,attachmentName:attachment?.name,attachmentType:attachment?.mimeType,attachmentSize:attachment?.size}:{}),replyTo:await buildThreadReplyPreview(parentReplyId)}});
+    await thread.update({updatedAt:new Date()},{silent:false});
+    const hydrated=await ThreadReply.findByPk(reply.id,{include:[{model:User,as:'Author',attributes:['id','name','role','profileImage']}]});
+    await emitThreadEvent('chat:message_created',thread,hydrated||reply); res.status(201).json({success:true,data:hydrated||reply});
+  }catch(error){
+    console.error('replyToThread error:',error);
+    if(error.name==='SequelizeUniqueConstraintError'&&req.body?.clientMessageId){
+      const duplicate=await ThreadReply.findOne({where:{threadId:Number(req.params.threadId),userId:req.user.id,clientMessageId:req.body.clientMessageId},include:[{model:User,as:'Author',attributes:['id','name','role','profileImage']}]}).catch(()=>null);
+      if(duplicate)return res.status(200).json({success:true,data:duplicate,reconciled:true});
+    }
+    res.status(500).json({success:false,message:error.message});
   }
 };
 
@@ -982,116 +1042,24 @@ exports.updateGroupMembers = async (req, res) => {
 
 
 
-exports.editChatMessage = async (req, res) => {
-  try {
-    const message = await ChatMessage.findOne({ where: { id: Number(req.params.messageId), schoolCode: schoolCodeOf(req) } });
-    if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
-    if (!canEditOrDeleteOwn(req.user, message.senderId)) return res.status(403).json({ success: false, message: 'You can only edit your own message' });
-    const content = String(req.body?.content || '').trim();
-    if (!content) return res.status(400).json({ success: false, message: 'content is required' });
-    const metadata = message.metadata || {};
-    if (metadata.deletedForEveryone) return res.status(400).json({ success: false, message: 'Deleted messages cannot be edited' });
-    const previousContent = message.content;
-    message.content = content;
-    message.metadata = {
-      ...metadata,
-      edited: true,
-      editedAt: new Date().toISOString(),
-      editHistory: [...(Array.isArray(metadata.editHistory) ? metadata.editHistory : []), { content: previousContent, editedAt: new Date().toISOString(), editedBy: req.user.id }].slice(-10)
-    };
-    await message.save();
-    const hydrated = await hydrateChatMessage(message);
-    res.json({ success: true, data: presentChatMessage(hydrated || message, req.user.id) });
-  } catch (error) {
-    console.error('editChatMessage error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+exports.editChatMessage = async (req,res)=>{
+  try{const message=await ChatMessage.findOne({where:{id:Number(req.params.messageId),schoolCode:schoolCodeOf(req)}});if(!message)return res.status(404).json({success:false,message:'Message not found'});if(!canEditOrDeleteOwn(req.user,message.senderId))return res.status(403).json({success:false,message:'You can only edit your own message'});const content=String(req.body?.content||'').trim();if(!content)return res.status(400).json({success:false,message:'content is required'});const metadata=message.metadata||{};if(metadata.deletedForEveryone)return res.status(400).json({success:false,message:'Deleted messages cannot be edited'});const previousContent=message.content;await message.update({content,version:Number(message.version||1)+1,metadata:{...metadata,edited:true,editedAt:new Date().toISOString(),editHistory:[...(Array.isArray(metadata.editHistory)?metadata.editHistory:[]),{content:previousContent,editedAt:new Date().toISOString(),editedBy:req.user.id}].slice(-10)}});const hydrated=await emitChatMessage('chat:message_edited',message);res.json({success:true,data:presentChatMessage(hydrated,req.user.id)});}catch(error){console.error('editChatMessage error:',error);res.status(500).json({success:false,message:error.message});}
 };
 
-exports.deleteChatMessage = async (req, res) => {
-  try {
-    const message = await ChatMessage.findOne({ where: { id: Number(req.params.messageId), schoolCode: schoolCodeOf(req) } });
-    if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
-    const mode = String(req.body?.mode || 'me').toLowerCase();
-    const metadata = message.metadata || {};
-    if (mode === 'everyone') {
-      if (!canDeleteForEveryone(req.user, message.senderId)) return res.status(403).json({ success: false, message: 'You can only delete your own message for everyone' });
-      message.content = 'This message was deleted';
-      message.attachmentUrl = null;
-      message.messageType = 'deleted';
-      message.metadata = { ...metadata, deletedForEveryone: true, deletedBy: req.user.id, deletedAt: new Date().toISOString(), attachmentName: null, attachmentType: null, attachmentSize: null };
-    } else {
-      const deletedFor = new Set([...(Array.isArray(metadata.deletedFor) ? metadata.deletedFor : []), req.user.id].map(Number));
-      message.metadata = { ...metadata, deletedFor: [...deletedFor], deletedForMeAt: new Date().toISOString() };
-    }
-    await message.save();
-    res.json({ success: true, data: presentChatMessage(message, req.user.id), mode });
-  } catch (error) {
-    console.error('deleteChatMessage error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+exports.deleteChatMessage = async (req,res)=>{
+  try{const message=await ChatMessage.findOne({where:{id:Number(req.params.messageId),schoolCode:schoolCodeOf(req)}});if(!message)return res.status(404).json({success:false,message:'Message not found'});const mode=String(req.body?.mode||'me').toLowerCase();const metadata=message.metadata||{};if(mode==='everyone'){if(!canDeleteForEveryone(req.user,message.senderId))return res.status(403).json({success:false,message:'You can only delete your own message for everyone'});message.content='This message was deleted';message.attachmentUrl=null;message.messageType='deleted';message.metadata={...metadata,deletedForEveryone:true,deletedBy:req.user.id,deletedAt:new Date().toISOString(),attachmentName:null,attachmentType:null,attachmentSize:null};}else{const deletedFor=new Set([...(Array.isArray(metadata.deletedFor)?metadata.deletedFor:[]),req.user.id].map(Number));message.metadata={...metadata,deletedFor:[...deletedFor],deletedForMeAt:new Date().toISOString()};}message.version=Number(message.version||1)+1;await message.save();await emitChatMessage('chat:message_deleted',message,{mode,deletedBy:req.user.id});res.json({success:true,data:mode==='me'?null:presentChatMessage(message,req.user.id),mode,messageId:message.id});}catch(error){console.error('deleteChatMessage error:',error);res.status(500).json({success:false,message:error.message});}
 };
 
-exports.editThreadReply = async (req, res) => {
-  try {
-    const reply = await ThreadReply.findByPk(Number(req.params.replyId), { include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }] });
-    if (!reply) return res.status(404).json({ success: false, message: 'Reply not found' });
-    const thread = await ClassroomThread.findOne({ where: { id: reply.threadId, schoolCode: schoolCodeOf(req) } });
-    if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
-    if (!canEditOrDeleteOwn(req.user, reply.userId)) return res.status(403).json({ success: false, message: 'You can only edit your own reply' });
-    const content = String(req.body?.content || '').trim();
-    if (!content) return res.status(400).json({ success: false, message: 'content is required' });
-    const metadata = reply.metadata || {};
-    if (metadata.deletedForEveryone) return res.status(400).json({ success: false, message: 'Deleted replies cannot be edited' });
-    reply.content = content;
-    reply.metadata = { ...metadata, edited: true, editedAt: new Date().toISOString() };
-    await reply.save();
-    res.json({ success: true, data: presentThreadReply(reply, req.user.id) });
-  } catch (error) {
-    console.error('editThreadReply error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+exports.editThreadReply = async (req,res)=>{
+  try{const reply=await ThreadReply.findByPk(Number(req.params.replyId),{include:[{model:User,as:'Author',attributes:['id','name','role','profileImage']}]});if(!reply)return res.status(404).json({success:false,message:'Reply not found'});const thread=await ClassroomThread.findOne({where:{id:reply.threadId,schoolCode:schoolCodeOf(req)}});if(!thread)return res.status(404).json({success:false,message:'Thread not found'});if(!canEditOrDeleteOwn(req.user,reply.userId))return res.status(403).json({success:false,message:'You can only edit your own reply'});const content=String(req.body?.content||'').trim();if(!content)return res.status(400).json({success:false,message:'content is required'});const metadata=reply.metadata||{};if(metadata.deletedForEveryone)return res.status(400).json({success:false,message:'Deleted replies cannot be edited'});await reply.update({content,version:Number(reply.version||1)+1,metadata:{...metadata,edited:true,editedAt:new Date().toISOString()}});await emitThreadEvent('chat:message_edited',thread,reply);res.json({success:true,data:presentThreadReply(reply,req.user.id)});}catch(error){console.error('editThreadReply error:',error);res.status(500).json({success:false,message:error.message});}
 };
 
-exports.deleteThreadReply = async (req, res) => {
-  try {
-    const reply = await ThreadReply.findByPk(Number(req.params.replyId), { include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }] });
-    if (!reply) return res.status(404).json({ success: false, message: 'Reply not found' });
-    const thread = await ClassroomThread.findOne({ where: { id: reply.threadId, schoolCode: schoolCodeOf(req) } });
-    if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
-    const mode = String(req.body?.mode || 'me').toLowerCase();
-    const metadata = reply.metadata || {};
-    if (mode === 'everyone') {
-      if (!canDeleteForEveryone(req.user, reply.userId)) return res.status(403).json({ success: false, message: 'You can only delete your own reply for everyone' });
-      reply.content = 'This reply was deleted';
-      reply.metadata = { ...metadata, attachmentUrl: null, attachmentName: null, attachmentType: null, attachmentSize: null, deletedForEveryone: true, deletedBy: req.user.id, deletedAt: new Date().toISOString() };
-    } else {
-      const deletedFor = new Set([...(Array.isArray(metadata.deletedFor) ? metadata.deletedFor : []), req.user.id].map(Number));
-      reply.metadata = { ...metadata, deletedFor: [...deletedFor], deletedForMeAt: new Date().toISOString() };
-    }
-    await reply.save();
-    res.json({ success: true, data: mode === 'me' ? null : presentThreadReply(reply, req.user.id), mode, replyId: reply.id, threadId: reply.threadId });
-  } catch (error) {
-    console.error('deleteThreadReply error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+exports.deleteThreadReply = async (req,res)=>{
+  try{const reply=await ThreadReply.findByPk(Number(req.params.replyId),{include:[{model:User,as:'Author',attributes:['id','name','role','profileImage']}]});if(!reply)return res.status(404).json({success:false,message:'Reply not found'});const thread=await ClassroomThread.findOne({where:{id:reply.threadId,schoolCode:schoolCodeOf(req)}});if(!thread)return res.status(404).json({success:false,message:'Thread not found'});const mode=String(req.body?.mode||'me').toLowerCase();const metadata=reply.metadata||{};if(mode==='everyone'){if(!canDeleteForEveryone(req.user,reply.userId))return res.status(403).json({success:false,message:'You can only delete your own reply for everyone'});reply.content='This reply was deleted';reply.metadata={...metadata,attachmentUrl:null,attachmentName:null,attachmentType:null,attachmentSize:null,deletedForEveryone:true,deletedBy:req.user.id,deletedAt:new Date().toISOString()};}else{const deletedFor=new Set([...(Array.isArray(metadata.deletedFor)?metadata.deletedFor:[]),req.user.id].map(Number));reply.metadata={...metadata,deletedFor:[...deletedFor],deletedForMeAt:new Date().toISOString()};}reply.version=Number(reply.version||1)+1;await reply.save();await emitThreadEvent('chat:message_deleted',thread,reply,{mode,deletedBy:req.user.id});res.json({success:true,data:mode==='me'?null:presentThreadReply(reply,req.user.id),mode,replyId:reply.id,threadId:reply.threadId});}catch(error){console.error('deleteThreadReply error:',error);res.status(500).json({success:false,message:error.message});}
 };
 
-exports.pinThreadReply = async (req, res) => {
-  try {
-    if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only teachers/admins can pin replies' });
-    const reply = await ThreadReply.findByPk(req.params.replyId, { include: [{ model: User, as: 'Author', attributes: ['id','name','role','profileImage'] }] });
-    if (!reply) return res.status(404).json({ success: false, message: 'Reply not found' });
-    const thread = await ClassroomThread.findOne({ where: { id: reply.threadId, schoolCode: schoolCodeOf(req) } });
-    if (!thread) return res.status(404).json({ success: false, message: 'Thread not found' });
-    const metadata = reply.metadata || {};
-    reply.metadata = { ...metadata, isPinned: req.body?.isPinned === undefined ? !metadata.isPinned : Boolean(req.body.isPinned), pinnedBy: req.user.id, pinnedAt: new Date().toISOString() };
-    await reply.save();
-    res.json({ success: true, data: reply });
-  } catch (error) {
-    console.error('pinThreadReply error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+exports.pinThreadReply = async (req,res)=>{
+  try{if(!['teacher','admin','super_admin'].includes(req.user.role))return res.status(403).json({success:false,message:'Only teachers/admins can pin replies'});const reply=await ThreadReply.findByPk(req.params.replyId,{include:[{model:User,as:'Author',attributes:['id','name','role','profileImage']}]});if(!reply)return res.status(404).json({success:false,message:'Reply not found'});const thread=await ClassroomThread.findOne({where:{id:reply.threadId,schoolCode:schoolCodeOf(req)}});if(!thread)return res.status(404).json({success:false,message:'Thread not found'});if(req.user.role==='teacher'&&!(await canTeacherModerateThread(req,thread)))return res.status(403).json({success:false,message:'Only the thread teacher or assigned class teacher can pin replies'});const metadata=reply.metadata||{};const isPinned=req.body?.isPinned===undefined?!metadata.isPinned:Boolean(req.body.isPinned);await reply.update({version:Number(reply.version||1)+1,metadata:{...metadata,isPinned,pinnedBy:req.user.id,pinnedAt:new Date().toISOString()}});await emitThreadEvent(isPinned?'chat:message_pinned':'chat:message_unpinned',thread,reply);res.json({success:true,data:reply});}catch(error){console.error('pinThreadReply error:',error);res.status(500).json({success:false,message:error.message});}
 };
 
 exports.uploadAttachment = async (req, res) => {
@@ -1286,33 +1254,6 @@ exports.getStudentDirectMessages = async (req, res) => {
   }
 };
 
-exports.sendStudentDirectMessage = async (req, res) => {
-  try {
-    if (req.user.role !== 'student') {
-      return res.status(403).json({ success: false, message: 'Student private chat is only for students' });
-    }
-    const { receiverId, content, attachmentUrl, attachment, replyToMessageId } = req.body;
-    const cleanContent = String(content || '').trim();
-    if (!receiverId || !cleanContent) return res.status(400).json({ success: false, message: 'receiverId and content are required' });
-
-    const other = await User.findOne({ where: { id: receiverId, schoolCode: schoolCodeOf(req), isActive: true, role: 'student' } });
-    if (!(await canStudentDirectMessage(req, other))) {
-      return res.status(404).json({ success: false, message: 'Classmate not found or not allowed' });
-    }
-
-    const message = await ChatMessage.create({
-      schoolCode: schoolCodeOf(req),
-      senderId: req.user.id,
-      receiverId,
-      content: cleanContent,
-      attachmentUrl: attachmentUrl || null,
-      messageType: attachmentUrl ? 'file' : 'text',
-      metadata: { ...(attachment ? { attachmentName: attachment.name, attachmentType: attachment.mimeType, attachmentSize: attachment.size } : {}), replyTo: await buildReplyPreview(replyToMessageId, schoolCodeOf(req)) }
-    });
-    const hydrated = await hydrateChatMessage(message);
-    res.status(201).json({ success: true, data: hydrated || message });
-  } catch (error) {
-    console.error('sendStudentDirectMessage error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+exports.sendStudentDirectMessage = async (req,res)=>{
+  try{if(req.user.role!=='student')return res.status(403).json({success:false,message:'Student private chat is only for students'});const {receiverId,content,attachmentUrl,attachment,replyToMessageId,clientMessageId}=req.body;const clean=String(content||'').trim();if(!receiverId||(!clean&&!attachmentUrl))return res.status(400).json({success:false,message:'receiverId and a message or attachment are required'});const other=await User.findOne({where:{id:Number(receiverId),schoolCode:schoolCodeOf(req),isActive:true,role:'student'}});if(!(await canStudentDirectMessage(req,other)))return res.status(404).json({success:false,message:'Classmate not found or not allowed'});const duplicate=await existingClientMessage(schoolCodeOf(req),req.user.id,clientMessageId);if(duplicate)return res.json({success:true,data:presentChatMessage(duplicate,req.user.id),reconciled:true});const key=directConversationKey(req.user.id,receiverId);const message=await ChatMessage.create({schoolCode:schoolCodeOf(req),senderId:req.user.id,receiverId:Number(receiverId),content:clean||'Shared an attachment',attachmentUrl:attachmentUrl||null,messageType:attachmentUrl?'file':'text',clientMessageId:clientMessageId||null,conversationKey:key,deliveryStatus:'sent',metadata:{...(attachment?{attachmentName:attachment.name,attachmentType:attachment.mimeType,attachmentSize:attachment.size}:{}),replyTo:await buildReplyPreview(replyToMessageId,schoolCodeOf(req))}});const hydrated=await emitChatMessage('chat:message_created',message);res.status(201).json({success:true,data:presentChatMessage(hydrated,req.user.id)});}catch(error){console.error('sendStudentDirectMessage error:',error);res.status(error.name==='SequelizeUniqueConstraintError'?409:500).json({success:false,message:error.message});}
 };

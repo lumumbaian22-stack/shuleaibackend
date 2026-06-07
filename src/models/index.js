@@ -61,6 +61,15 @@ const PlatformPaymentSetting = require('./PlatformPaymentSetting')(sequelize, Da
 const Subscription = require('./Subscription')(sequelize, DataTypes);
 const SubscriptionPayment = require('./SubscriptionPayment')(sequelize, DataTypes);
 const FeatureLock = require('./FeatureLock')(sequelize, DataTypes);
+const RealtimeEvent = require('./RealtimeEvent')(sequelize, DataTypes);
+const AttendanceSession = require('./AttendanceSession')(sequelize, DataTypes);
+const AttendanceCorrection = require('./AttendanceCorrection')(sequelize, DataTypes);
+const ClassRelease = require('./ClassRelease')(sequelize, DataTypes);
+const StudentEnrollment = require('./StudentEnrollment')(sequelize, DataTypes);
+const PromotionBatch = require('./PromotionBatch')(sequelize, DataTypes);
+const PromotionDecision = require('./PromotionDecision')(sequelize, DataTypes);
+const ReportShare = require('./ReportShare')(sequelize, DataTypes);
+const BirthdayEvent = require('./BirthdayEvent')(sequelize, DataTypes);
 
 // Add to associations: School.hasMany(SchoolCalendar)
 
@@ -324,6 +333,31 @@ TutorUsage.belongsTo(Student, { foreignKey: 'studentId' });
 
 Student.hasMany(ReportSnapshot, { foreignKey: 'studentId' });
 ReportSnapshot.belongsTo(Student, { foreignKey: 'studentId' });
+ReportSnapshot.hasMany(ReportShare, { foreignKey: 'reportSnapshotId' });
+ReportShare.belongsTo(ReportSnapshot, { foreignKey: 'reportSnapshotId' });
+Student.hasMany(ReportShare, { foreignKey: 'studentId' });
+ReportShare.belongsTo(Student, { foreignKey: 'studentId' });
+
+Class.hasMany(AttendanceSession, { foreignKey: 'classId' });
+AttendanceSession.belongsTo(Class, { foreignKey: 'classId' });
+AttendanceSession.hasMany(Attendance, { foreignKey: 'sessionId' });
+Attendance.belongsTo(AttendanceSession, { foreignKey: 'sessionId' });
+AttendanceSession.hasMany(AttendanceCorrection, { foreignKey: 'sessionId' });
+AttendanceCorrection.belongsTo(AttendanceSession, { foreignKey: 'sessionId' });
+AttendanceCorrection.belongsTo(Attendance, { foreignKey: 'attendanceId' });
+Class.hasMany(ClassRelease, { foreignKey: 'classId' });
+ClassRelease.belongsTo(Class, { foreignKey: 'classId' });
+
+Student.hasMany(StudentEnrollment, { foreignKey: 'studentId' });
+StudentEnrollment.belongsTo(Student, { foreignKey: 'studentId' });
+Class.hasMany(StudentEnrollment, { foreignKey: 'classId' });
+StudentEnrollment.belongsTo(Class, { foreignKey: 'classId' });
+PromotionBatch.hasMany(PromotionDecision, { foreignKey: 'batchId' });
+PromotionDecision.belongsTo(PromotionBatch, { foreignKey: 'batchId' });
+Student.hasMany(PromotionDecision, { foreignKey: 'studentId' });
+PromotionDecision.belongsTo(Student, { foreignKey: 'studentId' });
+Student.hasMany(BirthdayEvent, { foreignKey: 'studentId' });
+BirthdayEvent.belongsTo(Student, { foreignKey: 'studentId' });
 
 // Consent models associations
 UserConsent.belongsTo(User, { foreignKey: 'userId' });
@@ -355,82 +389,51 @@ SubscriptionPlan.hasMany(SubscriptionPayment, { foreignKey: 'planId' });
 SubscriptionPayment.belongsTo(SubscriptionPlan, { foreignKey: 'planId' });
 
 
-// --- Global realtime sync hooks ---
-// These hooks do not replace controller-specific business logic. They only notify dashboards
-// that relevant DB-backed records changed so clients can refetch the affected sections.
+// --- Canonical realtime hooks ---
+// Controller-owned transactions can set { realtimeHandled:true } to avoid duplicate events.
 function modelSchoolCode(instance) {
   const raw = instance?.toJSON ? instance.toJSON() : (instance || {});
   return raw.schoolCode || raw.schoolId || raw.school || raw.metadata?.schoolCode || raw.metadata?.schoolId || null;
 }
-
-function emitModelChange(modelName, action, instance) {
+const CANONICAL_MODEL_EVENTS = {
+  Payment: 'payment:recorded', Fee: 'fee_balance:updated', FeeStructure: 'fee_structure:updated',
+  AcademicRecord: 'marks:updated', ReportSnapshot: 'report_card:updated', Attendance: 'attendance:updated',
+  HomeTask: 'homework:assigned', HomeTaskAssignment: 'homework:updated', Alert: 'alert:created',
+  ApprovalRequest: 'approval:updated', Student: 'student:updated', Teacher: 'teacher:updated',
+  Parent: 'parent:updated', Class: 'class:updated', Timetable: 'timetable:published', Message: 'chat:message_created'
+};
+async function emitModelChange(modelName, action, instance, options = {}) {
   try {
-    if (!global.io) return;
-    const code = modelSchoolCode(instance);
-    if (!code) return;
-    const typeMap = {
-      Payment: 'payment:updated',
-      Fee: 'fees:updated',
-      FeeStructure: 'fees:updated',
-      AcademicRecord: 'grades:updated',
-      ReportSnapshot: 'reports:updated',
-      Attendance: 'attendance:updated',
-      HomeTask: 'homework:updated',
-      HomeTaskAssignment: 'homework:updated',
-      Alert: 'alerts:updated',
-      ApprovalRequest: 'approvals:updated',
-      Student: 'student:updated',
-      Teacher: 'teacher:updated',
-      Parent: 'parent:updated',
-      Class: 'class:updated',
-      Timetable: 'timetable:updated'
+    if (options.realtimeHandled) return;
+    const schoolCode = modelSchoolCode(instance);
+    if (!schoolCode) return;
+    const realtime = require('../services/realtimeService');
+    const type = CANONICAL_MODEL_EVENTS[modelName] || `${modelName.toLowerCase()}:updated`;
+    const raw = instance?.toJSON ? instance.toJSON() : instance;
+    const emit = () => {
+      if (modelName === 'Message') {
+        const conversation = raw?.metadata?.conversationKey || realtime.directConversationKey(raw?.senderId, raw?.receiverId);
+        return realtime.emit({ type: action === 'created' ? 'chat:message_created' : 'chat:message_updated', schoolCode:String(schoolCode), audience:{ school:false, userIds:[raw?.senderId,raw?.receiverId].filter(Boolean), conversations:[conversation] }, entityType:'Message', entityId:raw?.id, version:Number(raw?.version||1), data:{ ...raw, conversationId:conversation } });
+      }
+      return realtime.emitToSchool(String(schoolCode), type, { model:modelName, action, id:instance?.id||null, version:Number(instance?.version||1), updatedAt:instance?.updatedAt||new Date() });
     };
-    const type = typeMap[modelName] || `${modelName.toLowerCase()}:updated`;
-    const payload = {
-      type,
-      model: modelName,
-      action,
-      id: instance?.id,
-      schoolCode: String(code),
-      schoolId: String(code),
-      timestamp: new Date().toISOString()
-    };
-    global.io.to(`school-${code}`).emit('realtime:update', payload);
-    global.io.to(`school-${code}`).emit(type, payload);
-    if (['payment:updated','fees:updated','grades:updated','reports:updated','attendance:updated','homework:updated'].includes(type)) {
-      global.io.to(`school-${code}`).emit('analytics:updated', { ...payload, type: 'analytics:updated', sourceType: type });
-    }
-  } catch (error) {
-    console.error('[Realtime model hook failed]', modelName, action, error.message);
-  }
+    const safeEmit = () => emit().catch(error => console.error('[canonical realtime hook]', modelName, error.message));
+    if (options.transaction?.afterCommit) options.transaction.afterCommit(safeEmit); else await safeEmit();
+  } catch (error) { console.error('[Realtime model hook failed]', modelName, action, error.message); }
 }
-
 function attachRealtimeHooks(model, modelName) {
   if (!model || model.__realtimeHooksAttached) return;
   model.__realtimeHooksAttached = true;
-  model.addHook('afterCreate', (instance) => emitModelChange(modelName, 'created', instance));
-  model.addHook('afterUpdate', (instance) => emitModelChange(modelName, 'updated', instance));
-  model.addHook('afterDestroy', (instance) => emitModelChange(modelName, 'deleted', instance));
+  model.addHook('afterCreate', (instance, options) => emitModelChange(modelName, 'created', instance, options));
+  model.addHook('afterUpdate', (instance, options) => emitModelChange(modelName, 'updated', instance, options));
+  model.addHook('afterDestroy', (instance, options) => emitModelChange(modelName, 'deleted', instance, options));
 }
-
 [
-  [Payment, 'Payment'],
-  [Fee, 'Fee'],
-  [FeeStructure, 'FeeStructure'],
-  [AcademicRecord, 'AcademicRecord'],
-  [ReportSnapshot, 'ReportSnapshot'],
-  [Attendance, 'Attendance'],
-  [HomeTask, 'HomeTask'],
-  [HomeTaskAssignment, 'HomeTaskAssignment'],
-  [Alert, 'Alert'],
-  [ApprovalRequest, 'ApprovalRequest'],
-  [Student, 'Student'],
-  [Teacher, 'Teacher'],
-  [Parent, 'Parent'],
-  [Class, 'Class'],
-  [Timetable, 'Timetable']
-].forEach(([model, name]) => attachRealtimeHooks(model, name));
-
+  [Payment,'Payment'],[Fee,'Fee'],[FeeStructure,'FeeStructure'],[AcademicRecord,'AcademicRecord'],
+  [ReportSnapshot,'ReportSnapshot'],[Attendance,'Attendance'],[HomeTask,'HomeTask'],
+  [HomeTaskAssignment,'HomeTaskAssignment'],[Alert,'Alert'],[ApprovalRequest,'ApprovalRequest'],
+  [Student,'Student'],[Teacher,'Teacher'],[Parent,'Parent'],[Class,'Class'],[Timetable,'Timetable'],[Message,'Message']
+].forEach(([model,name]) => attachRealtimeHooks(model,name));
 
 
 // Production tenant guard: after a protected request is authenticated, all direct
@@ -459,7 +462,7 @@ function installTenantHooks(models) {
     });
   });
 }
-installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, AuditLog });
+installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, AuditLog });
 
 module.exports = {
     sequelize,
@@ -521,5 +524,14 @@ module.exports = {
     Subscription,
     SubscriptionPayment,
     FeatureLock,
+    RealtimeEvent,
+    AttendanceSession,
+    AttendanceCorrection,
+    ClassRelease,
+    StudentEnrollment,
+    PromotionBatch,
+    PromotionDecision,
+    ReportShare,
+    BirthdayEvent,
     StudentParent
 };

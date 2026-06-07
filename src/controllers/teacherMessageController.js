@@ -189,7 +189,7 @@ exports.markMessagesAsRead = async (req, res) => {
 // @access  Private/Teacher
 exports.replyToParent = async (req, res) => {
     try {
-        const { parentId, message, originalMessageId } = req.body;
+        const { parentId, message, originalMessageId, clientMessageId } = req.body;
 
         if (!parentId || !String(message || '').trim()) {
             return res.status(400).json({ success: false, message: 'Parent ID and message are required' });
@@ -220,6 +220,12 @@ exports.replyToParent = async (req, res) => {
             return res.status(403).json({ success: false, message: 'This parent is not linked to a student in your class teacher class.' });
         }
 
+        if (clientMessageId) {
+            const recentSent = await Message.findAll({ where: { senderId:req.user.id, receiverId:parentId }, order:[['createdAt','DESC']], limit:50 });
+            const duplicate = recentSent.find(item => messageMeta(item).clientMessageId === String(clientMessageId));
+            if (duplicate) return res.status(200).json({ success:true, data:duplicate, reconciled:true });
+        }
+
         const reply = await Message.create({
             senderId: req.user.id,
             receiverId: parentId,
@@ -230,7 +236,10 @@ exports.replyToParent = async (req, res) => {
                 inReplyTo: originalMessageId || baseMessage?.id || null,
                 type: 'teacher_reply',
                 teacherName: req.user.name,
-                teacherId: req.user.id
+                teacherId: req.user.id,
+                senderRole: 'teacher',
+                senderName: req.user.name,
+                clientMessageId: clientMessageId ? String(clientMessageId) : null
             }
         });
 
@@ -243,16 +252,6 @@ exports.replyToParent = async (req, res) => {
             message: String(message).substring(0, 100) + (String(message).length > 100 ? '...' : ''),
             data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: baseMeta.conversationType, conversationKey: baseMeta.conversationKey, messageId: reply.id }
         });
-
-        if (global.io) {
-            global.io.to(`user-${parentId}`).emit('new-message', {
-                from: req.user.id,
-                fromName: req.user.name,
-                fromRole: 'teacher',
-                content: message,
-                timestamp: new Date()
-            });
-        }
 
         res.status(201).json({ success: true, message: 'Reply sent successfully', data: reply });
     } catch (error) {

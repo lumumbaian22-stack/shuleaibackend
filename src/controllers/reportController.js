@@ -1,40 +1,132 @@
-const crypto = require('crypto');
-const { AcademicRecord, ReportSnapshot, Student, User, AuditLog } = require('../models');
-function grade(score){ const s=Number(score||0); if(s>=80)return 'EE'; if(s>=60)return 'ME'; if(s>=40)return 'AE'; return 'BE'; }
-function schoolCode(req){ return req.user?.schoolCode || req.body?.schoolCode || req.query?.schoolCode; }
-function checksum(obj){ return crypto.createHash('sha256').update(JSON.stringify(obj)).digest('hex'); }
-async function buildSnapshot({studentId, schoolCode, term, year}){ const student=await Student.findByPk(studentId,{include:[{model:User,attributes:['id','name','email','schoolCode']} ]}); if(!student) throw new Error('Student not found'); const records=await AcademicRecord.findAll({where:{studentId,schoolCode,term,year},order:[['subject','ASC'],['assessmentName','ASC']]}); const subjects={}; records.forEach(r=>{ const raw=r.toJSON(); subjects[raw.subject]=subjects[raw.subject]||[]; subjects[raw.subject].push(raw); }); const summary=Object.entries(subjects).map(([subject,rows])=>{ const avg=Math.round(rows.reduce((a,b)=>a+Number(b.score||0),0)/Math.max(rows.length,1)); return {subject,average:avg,grade:grade(avg),assessments:rows}; }); const overallAverage=summary.length?Math.round(summary.reduce((a,b)=>a+b.average,0)/summary.length):null; return { student: student.toJSON(), term, year, subjects:summary, overallAverage, overallGrade:overallAverage==null?null:grade(overallAverage), generatedAt:new Date().toISOString() }; }
-exports.generateReport = async(req,res)=>{ try{ const {studentId,term='Term 1',year=new Date().getFullYear(),publish=false}=req.body; if(!studentId) return res.status(400).json({success:false,message:'studentId is required'}); const sc=schoolCode(req); const snapshot=await buildSnapshot({studentId,schoolCode:sc,term,year:Number(year)}); const sourceRecordIds=snapshot.subjects.flatMap(s=>s.assessments.map(a=>a.id)); const [row]=await ReportSnapshot.findOrCreate({where:{schoolCode:sc,studentId,term,year:Number(year),reportType:'academic'},defaults:{schoolCode:sc,studentId,term,year:Number(year),curriculum:snapshot.student.curriculum,generatedBy:req.user.id,status:publish?'published':'draft',publishedBy:publish?req.user.id:null,publishedAt:publish?new Date():null,snapshot,sourceRecordIds,checksum:checksum(snapshot)}}); if(row.status==='published') return res.status(409).json({success:false,message:'Published report is locked. Archive it or create a new term/year snapshot.'}); await row.update({snapshot,sourceRecordIds,checksum:checksum(snapshot),status:publish?'published':'draft',publishedBy:publish?req.user.id:null,publishedAt:publish?new Date():null}); await AuditLog?.create({schoolCode:sc,actorUserId:req.user.id,actorRole:req.user.role,module:'reports',action:publish?'report_published':'report_generated',entityType:'ReportSnapshot',entityId:String(row.id),after:row.toJSON()}); res.json({success:true,data:row}); }catch(e){res.status(500).json({success:false,message:e.message});} };
-exports.listReports = async(req,res)=>{ try{ const where={schoolCode:schoolCode(req)}; if(req.query.studentId) where.studentId=req.query.studentId; if(req.query.term) where.term=req.query.term; if(req.query.year) where.year=Number(req.query.year); const rows=await ReportSnapshot.findAll({where,order:[['updatedAt','DESC']],limit:500}); res.json({success:true,data:rows}); }catch(e){res.status(500).json({success:false,message:e.message});} };
-exports.getReport = async(req,res)=>{ try{ const row=await ReportSnapshot.findOne({where:{id:req.params.id,schoolCode:schoolCode(req)}}); if(!row)return res.status(404).json({success:false,message:'Report not found'}); res.json({success:true,data:row}); }catch(e){res.status(500).json({success:false,message:e.message});} };
+const { Op } = require('sequelize');
+const {
+  AcademicRecord, ReportSnapshot, Student, User, AuditLog,
+  School, Class, Parent, StudentParent, Teacher, Attendance
+} = require('../models');
+const curriculumEngine = require('../services/curriculumStructureEngine');
+const selectionsService = require('../services/studentSubjectSelectionService');
+const snapshotService = require('../services/reportSnapshotService');
+const { getGradeFromScore } = require('../utils/curriculumHelper');
 
-// ============ V102 CURRICULUM-AWARE MANUAL REPORT GENERATION ============
-const v102CurriculumEngine = require('../services/curriculumStructureEngine');
-const v102Selections = require('../services/studentSubjectSelectionService');
-const { School, Class } = require('../models');
+function schoolCode(req) { return req.user?.schoolCode; }
+function numberOrNull(value) { const n = Number(value); return Number.isFinite(n) ? n : null; }
+function gradingLevel(cls, school) { return cls?.levelCode || cls?.grade || cls?.name || school?.settings?.schoolLevel || school?.schoolStructure || 'primary'; }
+function gradeFor(score, school, cls) {
+  if (score === null || score === undefined) return null;
+  return getGradeFromScore(Number(score), school?.system || 'cbc', gradingLevel(cls, school), school?.settings?.gradingScale || null);
+}
 
-exports.generateReport = async(req,res)=>{
-  try{
-    const { studentId, term='Term 1', year=new Date().getFullYear(), publish=false } = req.body;
-    if(!studentId) return res.status(400).json({success:false,message:'studentId is required'});
-    const sc=schoolCode(req);
-    const student=await Student.findByPk(studentId,{include:[{model:User,attributes:['id','name','email','schoolCode']} ]});
-    if(!student) return res.status(404).json({success:false,message:'Student not found'});
-    if(student.User?.schoolCode && student.User.schoolCode !== sc) return res.status(403).json({success:false,message:'Forbidden'});
-    const school = await School.findOne({ where:{ schoolId:sc } });
-    const cls = student.classId ? await Class.findOne({ where:{ id:student.classId, schoolCode:sc } }) : await Class.findOne({ where:{ schoolCode:sc, [require('sequelize').Op.or]:[{ name:student.grade }, { grade:student.grade }] } });
-    const records=await AcademicRecord.findAll({where:{studentId,schoolCode:sc,term,year:Number(year)},order:[['subject','ASC'],['assessmentName','ASC']]});
-    const selections = cls ? await v102Selections.listStudentSubjectSelections({ schoolCode:sc, studentId, classId:cls.id }).catch(() => []) : [];
-    const reportRows = school && cls ? v102CurriculumEngine.buildSubjectRowsForReport({ school, classItem:cls, student, records, studentSubjectSelections:selections }) : [];
-    const summary = v102CurriculumEngine.summarizeReportRows(reportRows);
-    const subjects = reportRows.length ? reportRows.map(r => ({ subject:r.subject, average:r.score, grade:r.score == null ? null : grade(r.score), status:r.status, counted:r.counted, assessments:r.assessments })) : Object.entries(records.reduce((acc,r)=>{ const raw=r.toJSON(); acc[raw.subject]=acc[raw.subject]||[]; acc[raw.subject].push(raw); return acc; },{})).map(([subject,rows])=>{ const avg=Math.round(rows.reduce((a,b)=>a+Number(b.score||0),0)/Math.max(rows.length,1)); return {subject,average:avg,grade:grade(avg),status:'Completed',counted:true,assessments:rows}; });
-    const overallAverage = reportRows.length ? summary.average : (subjects.length ? Math.round(subjects.reduce((a,b)=>a+Number(b.average||0),0)/subjects.length) : null);
-    const snapshot={ student:student.toJSON(), class:cls, term, year:Number(year), curriculum:school?.system || student.curriculum, subjects, reportRows, totalMarks:summary.totalMarks, countedSubjects:summary.countedSubjects, pendingSubjects:summary.pendingSubjects, notTakenSubjects:summary.notTakenSubjects, overallAverage, overallGrade:overallAverage==null?null:grade(overallAverage), generatedAt:new Date().toISOString(), calculationRule:'Only valid completed subjects the student is taking are counted. Pending/null and Not Taken subjects are not counted.' };
-    const sourceRecordIds=records.map(r=>r.id);
-    const [row]=await ReportSnapshot.findOrCreate({where:{schoolCode:sc,studentId,term,year:Number(year),reportType:'academic'},defaults:{schoolCode:sc,studentId,term,year:Number(year),curriculum:snapshot.curriculum,generatedBy:req.user.id,status:publish?'published':'draft',publishedBy:publish?req.user.id:null,publishedAt:publish?new Date():null,snapshot,sourceRecordIds,checksum:checksum(snapshot),metadata:{engine:'v102_curriculum_report_card'}}});
-    if(row.status==='published') return res.status(409).json({success:false,message:'Published report is locked. Archive it or create a new term/year snapshot.'});
-    await row.update({snapshot,sourceRecordIds,checksum:checksum(snapshot),status:publish?'published':'draft',publishedBy:publish?req.user.id:null,publishedAt:publish?new Date():null,metadata:{...(row.metadata||{}),engine:'v102_curriculum_report_card'}});
-    await AuditLog?.create({schoolCode:sc,actorUserId:req.user.id,actorRole:req.user.role,module:'reports',action:publish?'report_published':'report_generated',entityType:'ReportSnapshot',entityId:String(row.id),after:row.toJSON()}).catch(() => null);
-    res.json({success:true,data:row});
-  }catch(e){ console.error('V102 generate report error:', e); res.status(500).json({success:false,message:e.message}); }
+async function studentForUser(userId) {
+  return (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ userId } });
+}
+
+async function teacherOwnsClass(req, classId) {
+  const teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
+  if (!teacher || !classId) return false;
+  if (Number(teacher.classId) === Number(classId)) return true;
+  return Boolean(await Class.findOne({ where:{ id:Number(classId), schoolCode:schoolCode(req), teacherId:teacher.id } }));
+}
+
+async function canRead(req, report) {
+  if (!report || String(report.schoolCode) !== String(schoolCode(req))) return false;
+  if (['admin','super_admin'].includes(req.user.role)) return true;
+  if (req.user.role === 'student') return Number((await studentForUser(req.user.id))?.id) === Number(report.studentId);
+  if (req.user.role === 'parent') {
+    const parent = await Parent.findOne({ where:{ userId:req.user.id } });
+    return Boolean(parent && await StudentParent.findOne({ where:{ parentId:parent.id, studentId:report.studentId } }));
+  }
+  if (req.user.role === 'teacher') return teacherOwnsClass(req, report.classId);
+  return false;
+}
+
+async function buildSnapshot({ studentId, schoolCode:code, term, year, assessmentType, assessmentName }) {
+  const student = await (Student.unscoped ? Student.unscoped() : Student).findOne({
+    where:{ id:Number(studentId) },
+    include:[{ model:User, required:true, where:{ schoolCode:code, role:'student' }, attributes:['id','name','email','schoolCode','profileImage'] }]
+  });
+  if (!student) { const error = new Error('Student not found'); error.status = 404; throw error; }
+  const school = await School.findOne({ where:{ schoolId:code } });
+  const cls = student.classId
+    ? await Class.findOne({ where:{ id:student.classId, schoolCode:code } })
+    : await Class.findOne({ where:{ schoolCode:code, [Op.or]:[{ name:student.grade }, { grade:student.grade }] } });
+  const where = { studentId:student.id, schoolCode:code, term, year:Number(year) };
+  if (assessmentType) where.assessmentType = assessmentType;
+  if (assessmentName) where.assessmentName = assessmentName;
+  const records = await AcademicRecord.unscoped().findAll({ where, order:[['subject','ASC'],['assessmentName','ASC'],['date','ASC']] });
+  const selections = cls ? await selectionsService.listStudentSubjectSelections({ schoolCode:code, studentId:student.id, classId:cls.id }).catch(() => []) : [];
+  const reportRows = school && cls ? curriculumEngine.buildSubjectRowsForReport({ school, classItem:cls, student, records, studentSubjectSelections:selections }) : [];
+  const summary = reportRows.length ? curriculumEngine.summarizeReportRows(reportRows) : null;
+  const grouped = new Map();
+  records.forEach(record => { const raw=record.toJSON(); if(!grouped.has(raw.subject))grouped.set(raw.subject,[]);grouped.get(raw.subject).push(raw); });
+  const fallbackSubjects = [...grouped].map(([subject,rows]) => {
+    const valid=rows.map(row=>numberOrNull(row.score)).filter(score=>score!==null);
+    const average=valid.length?Math.round(valid.reduce((a,b)=>a+b,0)/valid.length):null;
+    return { subject, average, grade:gradeFor(average,school,cls), status:average===null?'Pending':'Completed', counted:average!==null, assessments:rows };
+  });
+  const subjects = reportRows.length ? reportRows.map(row => ({
+    subject:row.subject,
+    average:row.score,
+    grade:row.score == null ? null : gradeFor(row.score,school,cls),
+    status:row.status,
+    counted:row.counted,
+    assessments:row.assessments || []
+  })) : fallbackSubjects;
+  const overallAverage = reportRows.length
+    ? summary.average
+    : (subjects.filter(row=>row.counted&&row.average!==null).length ? Math.round(subjects.filter(row=>row.counted&&row.average!==null).reduce((sum,row)=>sum+Number(row.average),0)/subjects.filter(row=>row.counted&&row.average!==null).length) : null);
+  const attendanceRows = await Attendance.findAll({ where:{ schoolCode:code, studentId:student.id }, attributes:['status'] }).catch(()=>[]);
+  const attendance = { present:0, absent:0, late:0, total:attendanceRows.length, rate:0 };
+  attendanceRows.forEach(row => { if(Object.prototype.hasOwnProperty.call(attendance,row.status))attendance[row.status]++; });
+  attendance.rate = attendance.total ? Math.round((attendance.present / attendance.total) * 1000) / 10 : 0;
+  const snapshot = {
+    student:{ id:student.id, userId:student.userId, name:student.User?.name, photo:student.User?.profileImage || student.profileImage || null, dateOfBirth:student.dateOfBirth, elimuid:student.elimuid, grade:student.grade, className:cls?.name || student.grade },
+    school:{ name:school?.name || 'School', logo:school?.settings?.branding?.logo || school?.settings?.logo || null, branding:school?.settings?.branding || {} },
+    class:cls ? { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream, levelCode:cls.levelCode } : null,
+    term, year:Number(year), curriculum:school?.system || student.curriculum || null,
+    assessmentType:assessmentType || null, assessmentName:assessmentName || null,
+    subjects, totalMarks:summary?.totalMarks ?? subjects.filter(row=>row.counted&&row.average!==null).reduce((sum,row)=>sum+Number(row.average),0),
+    countedSubjects:summary?.countedSubjects ?? subjects.filter(row=>row.counted&&row.average!==null).length,
+    pendingSubjects:summary?.pendingSubjects ?? subjects.filter(row=>row.average===null&&row.status!=='Not Taken').length,
+    notTakenSubjects:summary?.notTakenSubjects ?? subjects.filter(row=>row.counted===false).length,
+    overallAverage, overallGrade:gradeFor(overallAverage,school,cls), attendance,
+    generatedAt:new Date().toISOString(),
+    calculationRule:'Only valid completed subjects the learner is taking are counted. Pending, exempted and Not Taken subjects remain visible but are excluded from the mean.'
+  };
+  return { student, school, cls, records, snapshot };
+}
+
+exports.generateReport = async (req,res) => {
+  try {
+    const { studentId, term='Term 1', year=new Date().getFullYear(), publish=false, assessmentType=null, assessmentName=null } = req.body;
+    if (!studentId) return res.status(400).json({ success:false, message:'studentId is required' });
+    const built = await buildSnapshot({ studentId, schoolCode:schoolCode(req), term, year, assessmentType, assessmentName });
+    if (req.user.role === 'teacher' && !(await teacherOwnsClass(req,built.cls?.id))) return res.status(403).json({ success:false, message:'Only the assigned class teacher can generate or publish this report card' });
+    if (!publish) return res.json({ success:true, message:'Draft preview generated. It is visible only to authorised school staff until publication.', data:{ status:'draft', snapshot:built.snapshot } });
+    const result = await snapshotService.createPublishedVersion({
+      schoolCode:schoolCode(req), studentId:Number(studentId), classId:built.cls?.id || null,
+      term, year:Number(year), curriculum:built.snapshot.curriculum, reportType:'academic',
+      assessmentType, assessmentName, snapshot:built.snapshot, sourceRecordIds:built.records.map(record=>record.id),
+      generatedBy:req.user.id, publishedBy:req.user.id, publishedAt:new Date(),
+      metadata:{ engine:'v143_immutable_curriculum_report_card' }
+    });
+    await AuditLog.create({ schoolCode:schoolCode(req), actorUserId:req.user.id, actorRole:req.user.role, module:'reports', action:'report_published', entityType:'ReportSnapshot', entityId:String(result.row.id), after:{ version:result.row.version, studentId:Number(studentId), term, year:Number(year) } }).catch(()=>null);
+    res.status(result.created?201:200).json({ success:true, message:result.unchanged?'The identical published report already exists.':'Report card published as an immutable historical version.', data:result.row });
+  } catch (error) { res.status(error.status||500).json({ success:false, message:error.message }); }
+};
+
+exports.listReports = async (req,res) => {
+  try {
+    const where={ schoolCode:schoolCode(req), status:{ [Op.in]:['published','archived'] } };
+    if(req.query.studentId)where.studentId=Number(req.query.studentId);if(req.query.term)where.term=req.query.term;if(req.query.year)where.year=Number(req.query.year);
+    if(req.user.role==='student')where.studentId=(await studentForUser(req.user.id))?.id||-1;
+    if(req.user.role==='parent'){const parent=await Parent.findOne({where:{userId:req.user.id}});const links=parent?await StudentParent.findAll({where:{parentId:parent.id}}):[];where.studentId={ [Op.in]:links.map(link=>link.studentId) };}
+    if(req.user.role==='teacher'){const teacher=await Teacher.findOne({where:{userId:req.user.id}});const classes=teacher?await Class.findAll({where:{schoolCode:schoolCode(req),[Op.or]:[{teacherId:teacher.id},{id:teacher.classId||-1}]},attributes:['id']}):[];where.classId={ [Op.in]:classes.map(cls=>cls.id) };}
+    const rows=await ReportSnapshot.findAll({where,order:[['year','DESC'],['term','DESC'],['version','DESC']],limit:500,attributes:{exclude:['sourceRecordIds']}});
+    res.json({success:true,data:rows});
+  } catch(error){res.status(500).json({success:false,message:error.message});}
+};
+
+exports.getReport = async (req,res) => {
+  try { const row=await ReportSnapshot.findOne({where:{id:Number(req.params.id),schoolCode:schoolCode(req)}});if(!(await canRead(req,row)))return res.status(403).json({success:false,message:'You are not allowed to view this report card'});res.json({success:true,data:row}); }
+  catch(error){res.status(500).json({success:false,message:error.message});}
 };

@@ -1,0 +1,1 @@
+const router=require('express').Router();const {protect,authorize}=require('../middleware/auth');const ctrl=require('../controllers/birthdayController');router.use(protect);router.get('/upcoming',authorize('admin','super_admin','teacher'),ctrl.upcoming);router.post('/process',authorize('admin','super_admin'),ctrl.process);module.exports=router;

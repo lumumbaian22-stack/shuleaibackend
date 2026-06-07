@@ -11,7 +11,19 @@ module.exports = (sequelize, DataTypes) => {
     pointsAwarded: { type: DataTypes.INTEGER, defaultValue: 0 },
     streakAwarded: { type: DataTypes.INTEGER, defaultValue: 0 },
     metadata: { type: DataTypes.JSONB, defaultValue: {} },
-    isRead: { type: DataTypes.BOOLEAN, defaultValue: false }
-  }, { timestamps: true });
+    isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
+    clientMessageId: { type: DataTypes.STRING(120), allowNull: true },
+    conversationKey: { type: DataTypes.STRING(220), allowNull: true },
+    deliveryStatus: { type: DataTypes.STRING(30), allowNull: false, defaultValue: 'sent' },
+    deliveredAt: { type: DataTypes.DATE, allowNull: true },
+    readAt: { type: DataTypes.DATE, allowNull: true },
+    version: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 }
+  }, {
+    timestamps: true,
+    indexes: [
+      { fields: ['schoolCode', 'conversationKey', 'createdAt'] },
+      { unique: true, fields: ['schoolCode', 'senderId', 'clientMessageId'] }
+    ]
+  });
   return ChatMessage;
 };

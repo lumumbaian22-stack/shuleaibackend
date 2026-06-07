@@ -26,9 +26,11 @@ module.exports = (sequelize, DataTypes) => {
     markedBy: { type: DataTypes.INTEGER, allowNull: true },
     editedBy: { type: DataTypes.INTEGER, allowNull: true },
     editReason: { type: DataTypes.TEXT, allowNull: true },
-    auditTrail: { type: DataTypes.JSONB, defaultValue: [] }
+    auditTrail: { type: DataTypes.JSONB, defaultValue: [] },
+    sessionId: { type: DataTypes.INTEGER, allowNull: true },
+    version: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+    lockedAt: { type: DataTypes.DATE, allowNull: true }
   }, {
-    defaultScope: { attributes: { exclude: ['classId'] } },
     timestamps: true,
     indexes: [
       { unique: true, fields: ['schoolCode', 'studentId', 'date'] }

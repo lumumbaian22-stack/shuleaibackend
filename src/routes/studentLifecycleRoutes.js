@@ -1,0 +1,14 @@
+const router=require('express').Router();
+const { protect, authorize }=require('../middleware/auth');
+const ctrl=require('../controllers/studentLifecycleController');
+router.use(protect,authorize('admin','super_admin'));
+router.get('/promotions',ctrl.listBatches);
+router.post('/promotions/preview',ctrl.preview);
+router.get('/promotions/:id/export/:format',ctrl.exportBatch);
+router.get('/promotions/:id',ctrl.getBatch);
+router.patch('/promotions/:id/decisions/:decisionId',ctrl.updateDecision);
+router.post('/promotions/:id/confirm',ctrl.confirm);
+router.post('/promotions/:id/rollback',ctrl.rollback);
+router.post('/promotions/apply-due',ctrl.applyDue);
+router.get('/students/:studentId/enrollments',ctrl.enrollmentHistory);
+module.exports=router;
