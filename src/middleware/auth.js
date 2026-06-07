@@ -1,8 +1,23 @@
 const jwt = require('jsonwebtoken');
+const { Op } = require('sequelize');
 const { User, School, Teacher, Student, Parent, Admin } = require('../models');
 const { computeSchoolAccess } = require('../services/schoolAccessEngine');
 const { setTenantUser } = require('./requestContext');
 
+
+async function findSchoolByAnyCode(code) {
+  const value = String(code || '').trim();
+  if (!value) return null;
+  return School.findOne({
+    where: {
+      [Op.or]: [
+        { schoolId: value },
+        { shortCode: value },
+        { lookupCodes: { [Op.contains]: [value] } }
+      ]
+    }
+  }).catch(() => null);
+}
 
 async function resolveSchoolScopeForUser(user) {
   if (!user || user.role === 'super_admin') return null;
@@ -57,9 +72,25 @@ const protect = async (req, res, next) => {
       return res.status(403).json({ success: false, code: 'SCHOOL_SCOPE_REQUIRED', message: 'User is not attached to a school tenant' });
     }
     if (user.role !== 'super_admin' && user.schoolCode) {
-      const school = await School.findOne({ where: { schoolId: user.schoolCode } }).catch(() => null);
+      let school = await findSchoolByAnyCode(user.schoolCode);
+      // If the token/user row has a stale or wrong schoolCode, recover from the role profile.
+      // This prevents /api/admin/settings from returning "School not found" for approved admins/teachers.
+      if (!school) {
+        const resolved = await resolveSchoolScopeForUser({ ...user.toJSON(), schoolCode: null });
+        if (resolved) {
+          school = await findSchoolByAnyCode(resolved);
+          if (school) {
+            user.schoolCode = school.schoolId;
+            await User.update({ schoolCode: school.schoolId }, { where: { id: user.id } }).catch(() => null);
+          }
+        }
+      }
       req.school = school || null;
       if (school) {
+        if (user.schoolCode !== school.schoolId) {
+          user.schoolCode = school.schoolId;
+          await User.update({ schoolCode: school.schoolId }, { where: { id: user.id } }).catch(() => null);
+        }
         const access = computeSchoolAccess(school);
         req.schoolAccess = access;
         const path = String(req.originalUrl || req.url || '').toLowerCase();

@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');
 const { Op } = require('sequelize');
-const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School, Task, TeacherSubjectAssignment, ReportSnapshot } = require('../models');
+const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School, Task, TeacherSubjectAssignment, ReportSnapshot, Admin, Fee } = require('../models');
 const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
 const moment = require('moment');
@@ -2109,6 +2109,97 @@ async function v102BuildStudentTermReportSnapshot({ student, records, meta, cls,
     term, year:Number(year), curriculum:meta.system, schoolLevel:meta.level, gradingProfile:v102CurriculumEngine.getGradingProfile(meta.system, cls.levelCode || v102CurriculumEngine.levelCodeFromGrade(meta.system, cls.grade || cls.name)), subjects, reportRows, totalMarks:summary.totalMarks, countedSubjects:summary.countedSubjects, pendingSubjects:summary.pendingSubjects, notTakenSubjects:summary.notTakenSubjects, overallAverage:summary.average, overallGrade:summary.average == null ? null : getGradeFromScore(summary.average, meta.system, meta.level, meta.gradingScale), generatedAt:new Date().toISOString(), analyticsReady:true, calculationRule:'Only valid completed subjects the student is taking are counted. Pending/null, Not Taken, Not Offered, and Exempted subjects are not counted.'
   };
 }
+
+
+// Class-teacher-only draft report-card preview. This intentionally includes draft/submitted
+// marks for the selected term/year so the class teacher can verify the report card before
+// publishing. Parent/student report routes remain published-only.
+exports.getClassTeacherReportPreviewDetails = async (req, res) => {
+  try {
+    await ensureRuntimeSchema().catch(() => null);
+    const { studentId } = req.params;
+    const { classId, term='Term 1', year=new Date().getFullYear(), assessmentType, assessmentName } = req.query;
+    const teacher = await v3Teacher(req.user.id);
+    if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
+
+    const student = await Student.unscoped().findOne({
+      where:{ id: Number(studentId) || 0, status:{ [Op.ne]:'inactive' } },
+      include:[{ model:User, attributes:['id','name','email','phone','profileImage','profilePicture','schoolCode'], required:true }]
+    });
+    if (!student || student.User?.schoolCode !== req.user.schoolCode) {
+      return res.status(404).json({ success:false, message:'Student not found in your school' });
+    }
+
+    let cls = null;
+    if (classId) cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } });
+    if (!cls) cls = await Class.findOne({ where:{ schoolCode:req.user.schoolCode, isActive:true, [Op.or]:[{ id:student.classId || 0 }, { name:student.grade }, { grade:student.grade }] } });
+    if (!cls) return res.status(404).json({ success:false, message:'Class not found for this student' });
+
+    const access = await v66CanEnterMarks(teacher, cls, null);
+    const studentBelongs = await Student.unscoped().count({ where:{ id:student.id, ...v66StudentClassWhere(cls) } });
+    if (!access.isClassTeacher || !studentBelongs) {
+      return res.status(403).json({ success:false, message:'Only this student’s class teacher can preview the draft report card before publishing' });
+    }
+
+    const school = await v102School(req.user.schoolCode);
+    const meta = await v66SchoolMeta(req.user.schoolCode);
+    const schoolLevel = school?.settings?.schoolLevel || meta.level || 'secondary';
+    const where = { schoolCode:req.user.schoolCode, studentId:student.id, term, year:Number(year), status:{ [Op.ne]:'locked' } };
+    if (assessmentType) where.assessmentType = assessmentType;
+    if (assessmentName) where.assessmentName = assessmentName;
+    const records = await AcademicRecord.findAll({ where, order:[['subject','ASC'], ['assessmentName','ASC'], ['date','DESC']] });
+
+    const selections = await v102StudentSubjectSelectionService.listStudentSubjectSelections({ schoolCode:req.user.schoolCode, studentId:student.id, classId:cls.id }).catch(() => []);
+    const reportRows = school ? v102CurriculumEngine.buildSubjectRowsForReport({ school, classItem:cls, student, records, studentSubjectSelections:selections }) : [];
+    const summary = school ? v102CurriculumEngine.summarizeReportRows(reportRows) : { average:null, totalMarks:0, countedSubjects:0, pendingSubjects:0, notTakenSubjects:0 };
+
+    const gradeFromScore = (score) => getGradeFromScore(Number(score || 0), meta.system, schoolLevel, meta.gradingScale);
+    const subjects = reportRows.length ? reportRows.map(row => ({
+      subject: row.subject,
+      average: row.score,
+      grade: row.score == null ? '-' : gradeFromScore(row.score),
+      status: row.status,
+      counted: row.counted,
+      components: (row.assessments || []).map(r => ({ subject:r.subject, assessment:r.assessmentName || r.assessmentType || r.assessment, score:r.score, grade:r.grade || gradeFromScore(r.score), term:r.term, year:r.year, date:r.date, status:r.status || (r.isPublished ? 'published' : 'draft') }))
+    })) : Object.entries(records.reduce((acc,r)=>{ const subject=r.subject || 'Subject'; (acc[subject]=acc[subject]||[]).push(r); return acc; },{})).map(([subject, rows]) => {
+      const avg = rows.length ? Math.round(rows.reduce((sum,r)=>sum+Number(r.score || 0),0)/rows.length) : null;
+      return { subject, average:avg, grade:avg == null ? '-' : gradeFromScore(avg), status: rows.some(r => r.status === 'published' || r.isPublished) ? 'published' : 'draft', counted:true, components: rows.map(r => ({ subject:r.subject, assessment:r.assessmentName || r.assessmentType || r.assessment, score:r.score, grade:r.grade || gradeFromScore(r.score), term:r.term, year:r.year, date:r.date, status:r.status || (r.isPublished ? 'published' : 'draft') })) };
+    });
+
+    const attendance = await Attendance.findAll({ where:{ studentId:student.id, schoolCode:req.user.schoolCode }, order:[['date','DESC']] }).catch(() => []);
+    const present = attendance.filter(a => a.status === 'present').length;
+    const absent = attendance.filter(a => a.status === 'absent').length;
+    const late = attendance.filter(a => a.status === 'late').length;
+    const rate = attendance.length ? Math.round((present / attendance.length) * 100) : 0;
+    const classTeacher = await Teacher.findByPk(teacher.id, { include:[{ model:User, attributes:['id','name','email','phone','preferences'] }] }).catch(() => null);
+    const adminSigner = await Admin.findOne({ include:[{ model:User, attributes:['id','name','email','phone','preferences'], where:{ schoolCode:req.user.schoolCode, role:'admin' }, required:true }], order:[['updatedAt','DESC']] }).catch(() => null);
+    const safeSig = (model, user) => user?.preferences?.signatureDataUrl || model?.signatureUrl || model?.signature || user?.preferences?.signatureUrl || user?.preferences?.signatureAbsoluteUrl || '';
+    const fee = await Fee.findOne({ where:{ studentId:student.id, status:{ [Op.ne]:'paid' } }, order:[['updatedAt','DESC']] }).catch(() => null);
+    const feeBalance = fee ? Math.max(0, Number(fee.totalAmount || 0) - Number(fee.paidAmount || 0)) : null;
+
+    const overallAverage = summary.average ?? (subjects.length ? Math.round(subjects.map(s=>Number(s.average)).filter(Number.isFinite).reduce((a,b)=>a+b,0) / Math.max(1, subjects.map(s=>Number(s.average)).filter(Number.isFinite).length)) : 0);
+    res.json({ success:true, data:{
+      draftPreview:true,
+      visibility:'class_teacher_preview',
+      message:'Class teacher draft preview only. Parent/student dashboards see the report card only after publishing.',
+      student:{ id:student.id, elimuid:student.elimuid, grade:student.grade || cls.name, status:student.status, classId:student.classId || cls.id, photo:student.User?.profileImage || student.profileImage || student.photo, curriculum:meta.system },
+      user:{ name:student.User?.name, email:student.User?.email, phone:student.User?.phone },
+      classTeacher: classTeacher?.User ? { name:classTeacher.User.name, email:classTeacher.User.email, phone:classTeacher.User.phone, signature:safeSig(classTeacher, classTeacher.User), signatureUrl:safeSig(classTeacher, classTeacher.User) } : null,
+      headteacher: adminSigner?.User ? { name:adminSigner.User.name, email:adminSigner.User.email, phone:adminSigner.User.phone, signature:safeSig(adminSigner, adminSigner.User), signatureUrl:safeSig(adminSigner, adminSigner.User) } : null,
+      principal: adminSigner?.User ? { name:adminSigner.User.name, email:adminSigner.User.email, phone:adminSigner.User.phone, signature:safeSig(adminSigner, adminSigner.User), signatureUrl:safeSig(adminSigner, adminSigner.User) } : null,
+      reportSignatures:{ classTeacher:safeSig(classTeacher, classTeacher?.User), headteacher:safeSig(adminSigner, adminSigner?.User), principal:safeSig(adminSigner, adminSigner?.User) },
+      academicSummary:{ overallAverage: overallAverage || 0, subjects, totalMarks:summary.totalMarks, countedSubjects:summary.countedSubjects, pendingSubjects:summary.pendingSubjects, notTakenSubjects:summary.notTakenSubjects },
+      attendanceSummary:{ rate, present, absent, late },
+      feeBalance,
+      ranking:{ classPosition:null, classSize:null, streamPosition:null, streamSize:null, showClassPosition:false, showStreamPosition:false },
+      recentAssessments:records.slice(0, 12).map(r => ({ subject:r.subject, assessment:r.assessmentName || r.assessmentType || r.assessment, score:r.score, grade:r.grade || gradeFromScore(r.score), term:r.term, year:r.year, date:r.date, status:r.status || (r.isPublished ? 'published' : 'draft') })),
+      school:{ name:school?.name || null, schoolName:school?.name || null, schoolCode:req.user.schoolCode, curriculum:meta.system, system:meta.system, schoolLevel, logo:school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null, branding:school?.settings?.branding || {}, reportCardSettings:school?.settings?.reportCardSettings || school?.reportCardSettings || {} }
+    }});
+  } catch(error) {
+    console.error('Class teacher report preview error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
+};
 
 exports.publishMarks = async (req,res) => {
   try {

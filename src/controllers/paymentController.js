@@ -1,3 +1,4 @@
+const { Op } = require('sequelize');
 const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, Subscription, SubscriptionPayment, SchoolPaymentSetting, Class } = require('../models');
 const daraja = require('../services/darajaService');
 const subscriptionController = require('./subscriptionController');
@@ -9,6 +10,13 @@ function cleanAmount(v){ const n = Math.round(Number(v)); if(!Number.isFinite(n)
 function schoolCode(req){ return req.user?.schoolCode || req.body?.schoolCode || req.query?.schoolCode || null; }
 function auditEntry(action, actor, extra={}){ return { action, actorUserId: actor?.id || null, actorRole: actor?.role || null, at: new Date().toISOString(), ...extra }; }
 async function writeAudit(req, data){ try { await AuditLog?.create({ schoolCode: schoolCode(req) || data.schoolCode || 'platform', actorUserId:req.user?.id, actorRole:req.user?.role, ipAddress:req.ip, userAgent:req.get?.('user-agent'), ...data }); } catch(e){ console.error('Payment audit failed:', e.message); } }
+
+async function findSchoolByAnyCode(code) {
+  const value = String(code || '').trim();
+  if (!value) return null;
+  return School.findOne({ where: { [Op.or]: [{ schoolId: value }, { shortCode: value }, { lookupCodes: { [Op.contains]: [value] } }] } }).catch(() => null);
+}
+
 async function currentParent(req){ return Parent.findOne({ where:{ userId:req.user.id } }); }
 async function findStudentForParent(req, studentId){
   const rawId = Number(studentId) || 0;
@@ -38,7 +46,7 @@ async function findStudentForParent(req, studentId){
 }
 
 async function currentSchool(req){
-  return School.findOne({ where:{ schoolId:req.user.schoolCode } });
+  return findSchoolByAnyCode(req.user.schoolCode);
 }
 
 function feeBalance(fee){ return Math.max(0, Number(fee?.totalAmount || 0) - Number(fee?.paidAmount || 0)); }
@@ -167,7 +175,7 @@ async function syncPlatformSubscriptionPlans(value) {
 }
 
 async function getSchoolPaymentConfig(schoolCodeValue){
-  const school = await School.findOne({ where:{ schoolId:schoolCodeValue } });
+  const school = await findSchoolByAnyCode(schoolCodeValue);
   const existingSettings = school?.settings?.paymentSettings || {};
   const modelRow = await SchoolPaymentSetting?.findOne({ where:{ schoolCode:schoolCodeValue } }).catch(()=>null);
   const merged = {

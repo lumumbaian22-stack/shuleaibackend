@@ -795,7 +795,17 @@ const { sequelize } = require('../models');
 const TeacherSubjectAssignmentModel = require('../models').TeacherSubjectAssignment;
 
 async function v102GetSchool(schoolCode) {
-  return School.findOne({ where: { schoolId: schoolCode } });
+  const value = String(schoolCode || '').trim();
+  if (!value) return null;
+  return School.findOne({
+    where: {
+      [Op.or]: [
+        { schoolId: value },
+        { shortCode: value },
+        { lookupCodes: { [Op.contains]: [value] } }
+      ]
+    }
+  });
 }
 
 function v102BuildCurriculumSettings(school, patch = {}) {

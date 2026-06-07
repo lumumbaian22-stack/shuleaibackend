@@ -42,6 +42,7 @@ router.get('/my-subjects', teacherController.getMySubjects);
 router.get('/classes/:classId/students', teacherController.getClassStudents);
 router.get('/gradebook', teacherController.getClassGradebook);
 router.get('/reports/snapshots', teacherController.listClassReportSnapshots);
+router.get('/students/:studentId/report-card-preview', teacherController.getClassTeacherReportPreviewDetails);
 router.get('/performance', teacherController.getPerformanceData);
 router.get('/subject-selection-requests', subjectSelectionController.listTeacherSubjectRequests);
 router.get('/subject-requests', subjectSelectionController.listTeacherSubjectRequests);
