@@ -1,4 +1,6 @@
 const { Op } = require('sequelize');
+const crypto = require('crypto');
+const QRCode = require('qrcode');
 
 function v87IsValidISODate(value) {
   if (!value || typeof value !== 'string') return false;
@@ -93,7 +95,9 @@ function getDutyVerificationSettings(school) {
     dutyGraceMinutes: Number(duty.dutyGraceMinutes || duty.checkInWindow || 15),
     checkInWindow: Number(duty.checkInWindow || duty.dutyGraceMinutes || 15),
     studentReportingTime: duty.studentReportingTime || '07:30',
-    studentGraceMinutes: Number(duty.studentGraceMinutes || 10)
+    studentGraceMinutes: Number(duty.studentGraceMinutes || 10),
+    dutyPoints: Array.isArray(duty.dutyPoints) ? duty.dutyPoints.filter(p => p && p.active !== false) : [],
+    dutySlots: Array.isArray(duty.dutySlots) ? duty.dutySlots.filter(slot => slot && slot.active !== false) : []
   };
 }
 
@@ -114,17 +118,25 @@ function checkLateStatus(expectedMoment, actualMoment, graceMinutes) {
   };
 }
 
-function buildDutyQrToken(schoolCode, date, dutyIdOrType) {
-  return `SHULEAI-DUTY:${schoolCode}:${date}:${dutyIdOrType || 'ALL'}`;
+function dutyQrSecret() {
+  return process.env.DUTY_QR_SECRET || process.env.JWT_SECRET || 'shule-ai-duty-development-secret';
 }
-
+function buildDutyQrToken(schoolCode, date, dutyIdOrType) {
+  const point = String(dutyIdOrType || 'ALL');
+  const payload = `${schoolCode}|${date}|${point}`;
+  const signature = crypto.createHmac('sha256', dutyQrSecret()).update(payload).digest('hex').slice(0, 24);
+  return Buffer.from(JSON.stringify({ schoolCode:String(schoolCode), date:String(date), point, signature })).toString('base64url');
+}
 function verifyQrToken(token, schoolCode, date, dutyIdOrType) {
   if (!token) return false;
-  const accepted = [
-    buildDutyQrToken(schoolCode, date, dutyIdOrType),
-    buildDutyQrToken(schoolCode, date, 'ALL')
-  ];
-  return accepted.includes(String(token).trim());
+  try {
+    const decoded = JSON.parse(Buffer.from(String(token).trim(), 'base64url').toString('utf8'));
+    if (String(decoded.schoolCode) !== String(schoolCode) || String(decoded.date) !== String(date)) return false;
+    const requested = String(dutyIdOrType || 'ALL');
+    if (![requested, 'ALL'].includes(String(decoded.point))) return false;
+    const expected = buildDutyQrToken(schoolCode, date, decoded.point);
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(token).trim()));
+  } catch (_) { return false; }
 }
 
 function verifyGeo(settings, gps) {
@@ -201,7 +213,13 @@ exports.generateDutyRoster = async (req, res) => {
     if (days < 1 || days > 31) {
       return res.status(400).json({ success:false, message:'Duty rosters can cover between 1 and 31 days.' });
     }
-    const dutySlots = ['morning', 'lunch', 'afternoon'];
+    const dutySettings = getDutyVerificationSettings(school);
+    const configuredSlots = dutySettings.dutySlots.length ? dutySettings.dutySlots : [
+      { id:'morning', label:'Morning Duty', start:'07:00', end:'08:00', teachersPerSlot:2, pointId:dutySettings.dutyPoints[0]?.id || 'main-gate' },
+      { id:'lunch', label:'Lunch Duty', start:'12:30', end:'14:00', teachersPerSlot:3, pointId:dutySettings.dutyPoints[1]?.id || dutySettings.dutyPoints[0]?.id || 'dining-area' },
+      { id:'afternoon', label:'Afternoon Duty', start:'15:30', end:'16:30', teachersPerSlot:2, pointId:dutySettings.dutyPoints[2]?.id || dutySettings.dutyPoints[0]?.id || 'school-compound' }
+    ];
+    const configuredPoints = new Map(dutySettings.dutyPoints.map(point => [String(point.id), point]));
     const rosters = [];
     const alerts = [];
     const understaffedAlerts = [];
@@ -225,8 +243,10 @@ exports.generateDutyRoster = async (req, res) => {
       }
       const dayDuties = [];
 
-      for (const slot of dutySlots) {
-        const required = school.settings?.dutyManagement?.teachersPerSlot?.[slot] || (slot === 'lunch' ? 3 : 2);
+      for (const slotConfig of configuredSlots) {
+        const slot = String(slotConfig.id || slotConfig.label || 'duty').toLowerCase().replace(/[^a-z0-9]+/g,'-');
+        const required = Math.max(1, Number(slotConfig.teachersPerSlot || 1));
+        const point = configuredPoints.get(String(slotConfig.pointId)) || { id:slotConfig.pointId || slot, name:slotConfig.pointName || slotConfig.label || 'Duty Point' };
         const { assigned, conflicts, shortage } = await dutyFairness.assignDutyFairly(school.schoolId, dateStr, slot, required);
 
         assigned.forEach(teacher => {
@@ -234,8 +254,9 @@ exports.generateDutyRoster = async (req, res) => {
             teacherId: teacher.id,
             teacherName: teacher.User?.name || 'Unknown',
             type: slot,
-            area: DUTY_AREAS[slot],
-            timeSlot: DUTY_TIME_SLOTS[slot],
+            area: point.name || slotConfig.label || 'Duty Point',
+            pointId: point.id || slotConfig.pointId || slot,
+            timeSlot: { start:String(slotConfig.start || slotConfig.startTime || '07:00').slice(0,5), end:String(slotConfig.end || slotConfig.endTime || '08:00').slice(0,5) },
             status: 'scheduled'
           });
           dutyFairness.updateTeacherDutyStats(teacher.id, 'assign', slot);
@@ -245,8 +266,8 @@ exports.generateDutyRoster = async (req, res) => {
             type: 'duty',
             severity: 'info',
             title: 'Duty Assignment',
-            message: `You are assigned to ${slot} duty on ${currentDate.format('MMM Do')}`,
-            data: { date: dateStr, dutyType: slot, area: DUTY_AREAS[slot] }
+            message: `You are assigned to ${point.name || slotConfig.label || slot} on ${currentDate.format('MMM Do')} from ${slotConfig.start || '07:00'} to ${slotConfig.end || '08:00'}`,
+            data: { date: dateStr, dutyType: slot, area: point.name || slotConfig.label, pointId: point.id, startTime:slotConfig.start, endTime:slotConfig.end }
           });
         });
 
@@ -725,14 +746,9 @@ exports.getDutyVerificationConfig = async (req, res) => {
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
     const settings = getDutyVerificationSettings(school);
     const today = moment().format('YYYY-MM-DD');
-    res.json({
-      success: true,
-      data: {
-        settings,
-        todayQrToken: buildDutyQrToken(school.schoolId, today, 'ALL'),
-        serverTime: new Date().toISOString()
-      }
-    });
+    const todayQrToken = buildDutyQrToken(school.schoolId, today, 'ALL');
+    const todayQrDataUrl = settings.requireQr ? await QRCode.toDataURL(todayQrToken, { errorCorrectionLevel:'M', margin:1, width:320 }) : null;
+    res.json({ success:true, data:{ settings, todayQrToken, todayQrDataUrl, serverTime:new Date().toISOString() } });
   } catch (error) {
     console.error('getDutyVerificationConfig error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -768,6 +784,8 @@ exports.updateDutyVerificationConfig = async (req, res) => {
         dutyGraceMinutes: Number(req.body.dutyGraceMinutes || duty.dutyGraceMinutes || duty.checkInWindow || 15),
         studentReportingTime: req.body.studentReportingTime || duty.studentReportingTime || '07:30',
         studentGraceMinutes: Number(req.body.studentGraceMinutes || duty.studentGraceMinutes || 10),
+        dutyPoints: Array.isArray(req.body.dutyPoints) ? req.body.dutyPoints.map((point,index)=>({ id:String(point.id || `point-${index+1}`), name:String(point.name || '').trim(), description:String(point.description || '').trim(), latitude:point.latitude==null?null:Number(point.latitude), longitude:point.longitude==null?null:Number(point.longitude), active:point.active !== false })).filter(point=>point.name) : (duty.dutyPoints || []),
+        dutySlots: Array.isArray(req.body.dutySlots) ? req.body.dutySlots.map((slot,index)=>({ id:String(slot.id || `slot-${index+1}`), label:String(slot.label || '').trim(), pointId:String(slot.pointId || ''), start:String(slot.start || slot.startTime || '07:00').slice(0,5), end:String(slot.end || slot.endTime || '08:00').slice(0,5), teachersPerSlot:Math.max(1,Number(slot.teachersPerSlot || 1)), active:slot.active !== false })).filter(slot=>slot.label && slot.pointId) : (duty.dutySlots || []),
         geoFence: nextGeoFence
       }
     };

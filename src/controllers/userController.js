@@ -212,7 +212,7 @@ exports.uploadProfilePicture = async (req, res) => {
     const preferences = { ...(req.user.preferences || {}) };
     if (durableProfileImageDataUrl) preferences.profileImageDataUrl = durableProfileImageDataUrl;
 
-    await req.user.update({ profileImage: durableProfileImageDataUrl || absoluteUrl, preferences });
+    await req.user.update({ profileImage: absoluteUrl, preferences });
 
     res.json({ success: true, data: { profileImage: durableProfileImageDataUrl || absoluteUrl, profileImagePath: relativeUrl, durable: !!durableProfileImageDataUrl } });
   } catch (error) {

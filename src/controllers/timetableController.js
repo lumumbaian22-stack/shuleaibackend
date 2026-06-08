@@ -276,6 +276,45 @@ function classBlockFromGlobalSlots(tt, cls) {
   });
   return count ? block : null;
 }
+function validateTimetablePayload(slots = []) {
+  const errors = [];
+  const teacherBusy = new Map();
+  const classBusy = new Map();
+  const roomBusy = new Map();
+  for (const dayBlock of slots || []) {
+    const day = normalizeDay(dayBlock.day);
+    for (const period of dayBlock.periods || []) {
+      const start = String(period.startTime || '').slice(0,5);
+      const end = String(period.endTime || '').slice(0,5);
+      if (start && end && start >= end) errors.push({ type:'invalid_time', day, start, end, message:`${day}: period end time must be after start time.` });
+      if (period.break) continue;
+      for (const lesson of period.classes || []) {
+        if (!String(lesson.subject || '').trim()) continue;
+        const slotKey = `${day}|${start}|${end}`;
+        const teacherId = Number(lesson.teacherId || 0) || null;
+        const classId = String(lesson.classId || lesson.className || lesson.grade || '').trim();
+        const room = norm(lesson.room || '');
+        if (teacherId) {
+          const key = `${slotKey}|${teacherId}`;
+          if (teacherBusy.has(key)) errors.push({ type:'teacher_conflict', teacherId, day, start, message:`${lesson.teacherName || 'Teacher'} is assigned to two classes at ${start} on ${day}.` });
+          teacherBusy.set(key, true);
+        }
+        if (classId) {
+          const key = `${slotKey}|${classId}`;
+          if (classBusy.has(key)) errors.push({ type:'class_conflict', classId, day, start, message:`${lesson.className || lesson.grade || 'Class'} has two lessons at ${start} on ${day}.` });
+          classBusy.set(key, true);
+        }
+        if (room) {
+          const key = `${slotKey}|${room}`;
+          if (roomBusy.has(key)) errors.push({ type:'room_conflict', room:lesson.room, day, start, message:`Room ${lesson.room} is assigned twice at ${start} on ${day}.` });
+          roomBusy.set(key, true);
+        }
+      }
+    }
+  }
+  return errors;
+}
+
 function countLessonsFromSlots(slots = []) {
   let total = 0;
   (slots || []).forEach(day => (day.periods || []).forEach(p => {
@@ -318,6 +357,8 @@ exports.manualUpdate = async (req,res)=>{ try{
   }
   const slots=Array.isArray(req.body.slots)?req.body.slots:tt.slots;
   const classes=Array.isArray(req.body.classes)&&req.body.classes.length?req.body.classes:tt.classes;
+  const conflicts=validateTimetablePayload(slots);
+  if(conflicts.length)return res.status(400).json({success:false,message:'Resolve timetable conflicts before saving.',data:{conflicts}});
   await tt.update({slots,classes,warnings:req.body.warnings||tt.warnings||[],term:req.body.term||tt.term,year:req.body.year?Number(req.body.year):tt.year,scope:req.body.scope||tt.scope,status:'draft',isPublished:false},{realtimeHandled:true});
   await realtime.emitToRole(req.user.schoolCode,'admin','timetable:draft_updated',{timetableId:tt.id,term:tt.term,year:tt.year,scope:tt.scope},{entityType:'Timetable',entityId:tt.id,version:tt.version||1}).catch(()=>{});
   res.json({success:true,data:tt,message:'Timetable draft saved'});
@@ -328,6 +369,8 @@ exports.publish = async (req,res)=>{ const transaction=await sequelize.transacti
   const scope=req.body.scope||tt.scope||'term',term=req.body.term||tt.term||'Term 1',year=req.body.year?Number(req.body.year):(tt.year||new Date().getFullYear());
   const lessonCount = countLessonsFromSlots(tt.slots || []);
   if (!lessonCount) { await transaction.rollback(); return res.status(400).json({success:false,message:'Add at least one lesson before publishing the timetable.'}); }
+  const conflicts=validateTimetablePayload(tt.slots||[]);
+  if(conflicts.length){await transaction.rollback();return res.status(400).json({success:false,message:'Resolve timetable conflicts before publishing.',data:{conflicts}});}
   await Timetable.update({isPublished:false,status:'archived'},{where:{schoolId:req.user.schoolCode,scope,term,year,isPublished:true,id:{[Op.ne]:tt.id}},transaction,realtimeHandled:true});
   await tt.update({isPublished:true,status:'published',scope,term,year,publishedAt:new Date(),publishedBy:req.user.id},{transaction,realtimeHandled:true});
   await transaction.commit();

@@ -27,7 +27,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true
     },
-    profileImage: DataTypes.STRING,
+    profileImage: DataTypes.TEXT,
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true

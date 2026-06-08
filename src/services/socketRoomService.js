@@ -89,7 +89,31 @@ async function directPairAllowed(first, second, schoolCode) {
 }
 
 async function canJoinConversation(socket, key) {
-  const [kind, a, b] = String(key || '').split(':');
+  const raw = String(key || '');
+  const parts = raw.split(':');
+  // Parent conversations use a school-scoped canonical key:
+  // schoolCode:parent_class_teacher|parent_admin:parentUserId:studentId:classId:receiverUserId
+  if (['parent_class_teacher','parent_admin'].includes(parts[1])) {
+    const [schoolCode,type,parentUserId,studentId,classId,receiverUserId] = [parts[0],parts[1],parts[2],parts[3],parts[4],parts[5]];
+    if (!sameSchool(socket, schoolCode)) return false;
+    if (![String(parentUserId), String(receiverUserId)].includes(String(socket.userId))) return false;
+    const parentUser = await User.findOne({ where:{ id:Number(parentUserId), role:'parent', schoolCode, isActive:true }, attributes:['id'] });
+    if (!parentUser) return false;
+    if (String(socket.userId) === String(parentUserId)) {
+      const parent = await Parent.findOne({ where:{ userId:Number(parentUserId) } });
+      if (!parent) return false;
+      const where={ id:Number(studentId), status:'active' };
+      if(type==='parent_class_teacher' && Number(classId)) where.classId=Number(classId);
+      const student = await Student.findOne({ where, include:[{model:User,where:{schoolCode},attributes:['id']}] }).catch(()=>null);
+      return Boolean(student && await StudentParent.findOne({ where:{ parentId:parent.id, studentId:student.id } }));
+    }
+    const receiver = await User.findOne({ where:{ id:Number(receiverUserId), schoolCode, isActive:true }, attributes:['id','role'] });
+    if (!receiver || Number(receiver.id)!==Number(socket.userId)) return false;
+    if (type === 'parent_admin') return receiver.role === 'admin';
+    if (receiver.role !== 'teacher') return false;
+    return isParentClassTeacherPair(Number(parentUserId), Number(receiverUserId), schoolCode);
+  }
+  const [kind, a, b] = parts;
   if (kind === 'direct') {
     if (![String(a), String(b)].includes(String(socket.userId))) return false;
     const participants = await User.findAll({ where:{ id:{ [Op.in]:[Number(a),Number(b)] }, schoolCode:socket.schoolCode, isActive:true }, attributes:['id','role','schoolCode'] });

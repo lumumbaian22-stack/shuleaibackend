@@ -7,6 +7,7 @@ const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Messa
 const reportSnapshotService = require('../services/reportSnapshotService');
 const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
+const realtime = require('../services/realtimeService');
 const moment = require('moment');
 const crypto = require('crypto');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
@@ -637,12 +638,15 @@ exports.deleteMessage = async (req, res) => {
       }
     }
 
-    if (global.io) {
-      global.io.to(`user-${message.receiverId}`).emit('message-deleted', { messageId: message.id, deleteFor });
-      if (message.senderId !== req.user.id) {
-        global.io.to(`user-${message.senderId}`).emit('message-deleted', { messageId: message.id, deleteFor });
-      }
-    }
+    const md = message.metadata || {};
+    const userIds = deleteFor === 'everyone' ? [message.senderId, message.receiverId] : [req.user.id];
+    await realtime.emit({
+      type:'chat:message_deleted',
+      schoolCode:md.schoolCode || req.user.schoolCode,
+      audience:{ school:false, userIds, conversationIds:md.conversationKey ? [md.conversationKey] : [] },
+      entityType:'Message', entityId:message.id, version:Number(message.updatedAt?.getTime?.() || Date.now()),
+      data:{ ...message.toJSON(), messageId:message.id, conversationId:md.conversationKey || null, conversationKey:md.conversationKey || null, deleteFor }
+    }).catch(()=>{});
 
     res.json({ success: true, message: 'Message deleted' });
   } catch (error) {

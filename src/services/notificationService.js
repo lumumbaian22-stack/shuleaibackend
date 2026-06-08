@@ -16,11 +16,13 @@ function roleValue(value) {
 }
 function semanticKey({ userId, type, title, message, data = {}, dedupeKey }) {
   if (dedupeKey) return String(dedupeKey).slice(0, 250);
-  const identity = data.eventId || data.sourceId || data.messageId || data.paymentId || data.reportId || data.attendanceId || data.studentId || data.classId || '';
-  // The short bucket prevents duplicate writes caused by retries/double listeners while
-  // allowing a legitimate identical reminder to be sent later.
-  const bucket = Math.floor(Date.now() / 30000);
-  return `auto:${crypto.createHash('sha256').update(JSON.stringify([Number(userId),dbType(type),String(title||'').trim(),String(message||'').trim(),String(identity),bucket])).digest('hex')}`;
+  const identity = data.eventId || data.sourceId || data.messageId || data.paymentId || data.reportId || data.attendanceId || data.releaseId || data.timetableId || data.homeworkId || data.studentId || data.classId || '';
+  const context = data.eventDate || data.date || data.term || data.year || data.assessmentKey || data.version || data.status || '';
+  // Entity-backed alerts use a stable key so retries, reconnects and repeated workers cannot
+  // create duplicates. Unscoped informational notices use a short bucket so a genuinely new
+  // notice with the same wording can still be sent later.
+  const bucket = identity || context ? '' : Math.floor(Date.now() / 30000);
+  return `auto:${crypto.createHash('sha256').update(JSON.stringify([Number(userId),dbType(type),String(title||'').trim(),String(message||'').trim(),String(identity),String(context),bucket])).digest('hex')}`;
 }
 
 async function createAlert({ userId, role, type, severity = 'info', title, message, data = {}, dedupeKey, sourceType, sourceLabel, categoryLabel, studentId, classId, actionUrl, actionLabel, transaction }) {

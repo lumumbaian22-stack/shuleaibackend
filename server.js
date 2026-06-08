@@ -2,7 +2,7 @@ require('dotenv').config();
 const app = require('./src/app');
 const http = require('http');
 const socketio = require('socket.io');
-const { sequelize, ChatMessage, ChatGroupMember } = require('./src/models');
+const { sequelize, ChatMessage, Message, ChatGroupMember } = require('./src/models');
 const { ensureRuntimeSchema } = require('./src/utils/schemaSafety');
 const socketAuthMiddleware = require('./src/middleware/socketAuthMiddleware');
 const socketRoomService = require('./src/services/socketRoomService');
@@ -44,8 +44,14 @@ global.io = io;
 
 io.use(socketAuthMiddleware);
 
+function messageSchoolCode(message){ return message?.schoolCode || message?.metadata?.schoolCode || null; }
+async function findRealtimeMessage(messageId){
+  const id=Number(messageId); if(!id)return null;
+  const chat=await ChatMessage.findByPk(id).catch(()=>null); if(chat)return { message:chat, kind:'ChatMessage' };
+  const direct=await Message.findByPk(id).catch(()=>null); return direct ? { message:direct, kind:'Message' } : null;
+}
 async function canAcknowledgeMessage(socket, message) {
-  if (!message || String(message.schoolCode) !== String(socket.schoolCode)) return false;
+  if (!message || String(messageSchoolCode(message)) !== String(socket.schoolCode)) return false;
   if (message.groupId) {
     if (Number(message.senderId) === Number(socket.userId)) return false;
     if (['admin','super_admin'].includes(socket.userRole)) return true;
@@ -104,26 +110,28 @@ io.on('connection', async (socket) => {
 
   socket.on('chat:message_delivered', async ({ messageId } = {}, ack = () => {}) => {
     try {
-      const message = await ChatMessage.findByPk(Number(messageId));
+      const found = await findRealtimeMessage(messageId); const message=found?.message;
       if (!(await canAcknowledgeMessage(socket, message))) return ack({ success:false, message:'Message access denied' });
-      const now = new Date();
-      if (!message.deliveredAt) await message.update({ deliveredAt:now, deliveryStatus:'delivered', version:Number(message.version || 1) + 1 }, { hooks:false });
-      const key = message.conversationKey || (message.groupId ? realtimeService.groupConversationKey(message.groupId) : realtimeService.directConversationKey(message.senderId, message.receiverId));
-      await realtimeService.emitToConversation(message.schoolCode, key, 'chat:message_delivered', { messageId:message.id, conversationKey:key, deliveredAt:message.deliveredAt || now }, { entityType:'ChatMessage', entityId:message.id, version:message.version, audience:{ userIds:[message.senderId, message.receiverId].filter(Boolean) } });
+      const now = new Date(); const md=message.metadata||{};
+      if(found.kind==='ChatMessage') await message.update({ deliveredAt:message.deliveredAt||now, deliveryStatus:'delivered', version:Number(message.version || 1) + 1 }, { hooks:false });
+      else await message.update({ metadata:{...md,deliveryStatus:'delivered',deliveredAt:md.deliveredAt||now.toISOString()} }, { hooks:false });
+      const key = message.conversationKey || md.conversationKey || (message.groupId ? realtimeService.groupConversationKey(message.groupId) : realtimeService.directConversationKey(message.senderId, message.receiverId));
+      await realtimeService.emitToConversation(messageSchoolCode(message), key, 'chat:message_delivered', { messageId:message.id, conversationKey:key, deliveredAt:message.deliveredAt || md.deliveredAt || now }, { entityType:found.kind, entityId:message.id, version:Number(message.version||message.updatedAt?.getTime?.()||Date.now()), audience:{ userIds:[message.senderId, message.receiverId].filter(Boolean) } });
       ack({ success:true });
     } catch (error) { ack({ success:false, message:error.message }); }
   });
 
   socket.on('chat:message_read', async ({ messageId } = {}, ack = () => {}) => {
     try {
-      const message = await ChatMessage.findByPk(Number(messageId));
+      const found = await findRealtimeMessage(messageId); const message=found?.message;
       if (!(await canAcknowledgeMessage(socket, message))) return ack({ success:false, message:'Message access denied' });
       const now = new Date();
       const metadata = message.metadata || {};
       const readBy = [...new Set([...(Array.isArray(metadata.readBy) ? metadata.readBy : []), socket.userId].map(Number))];
-      await message.update({ isRead:true, readAt:now, deliveryStatus:'read', version:Number(message.version || 1) + 1, metadata:{ ...metadata, readBy } }, { hooks:false });
-      const key = message.conversationKey || (message.groupId ? realtimeService.groupConversationKey(message.groupId) : realtimeService.directConversationKey(message.senderId, message.receiverId));
-      await realtimeService.emitToConversation(message.schoolCode, key, 'chat:message_read', { messageId:message.id, conversationKey:key, readAt:now, readBy }, { entityType:'ChatMessage', entityId:message.id, version:message.version, audience:{ userIds:[message.senderId, message.receiverId].filter(Boolean) } });
+      if(found.kind==='ChatMessage') await message.update({ isRead:true, readAt:now, deliveryStatus:'read', version:Number(message.version || 1) + 1, metadata:{ ...metadata, readBy } }, { hooks:false });
+      else await message.update({ isRead:true, readAt:now, metadata:{ ...metadata, readBy, deliveryStatus:'read' } }, { hooks:false });
+      const key = message.conversationKey || metadata.conversationKey || (message.groupId ? realtimeService.groupConversationKey(message.groupId) : realtimeService.directConversationKey(message.senderId, message.receiverId));
+      await realtimeService.emitToConversation(messageSchoolCode(message), key, 'chat:message_read', { messageId:message.id, conversationKey:key, readAt:now, readBy }, { entityType:found.kind, entityId:message.id, version:Number(message.version||message.updatedAt?.getTime?.()||Date.now()), audience:{ userIds:[message.senderId, message.receiverId].filter(Boolean) } });
       ack({ success:true });
     } catch (error) { ack({ success:false, message:error.message }); }
   });

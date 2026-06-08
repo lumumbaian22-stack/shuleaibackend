@@ -32,7 +32,9 @@ exports.getConfig = async (req, res) => {
     const enabled = isSuper || !!features?.features?.has?.('bulk_sms') || !!features?.featureList?.includes?.('bulk_sms') || !!features?.fullAccess;
     const allTokens = cfg.schoolTokens || {};
     const allocatedTokens = Object.values(allTokens).reduce((sum, v) => sum + Number(v || 0), 0);
-    const superData = isSuper ? { schoolTokens: allTokens, allocatedTokens, totalRemainingTokens: allocatedTokens, enabledRaw: !!cfg.enabled } : {};
+    let allocationHistory=[];
+    if(isSuper){ const [rows]=await sequelize.query(`SELECT a.*, COALESCE(NULLIF(s."name", 'Shule AI'), s."shortCode", a."schoolCode") AS "schoolName", u."name" AS "allocatedByName" FROM "SmsAllocations" a LEFT JOIN "Schools" s ON s."schoolId"=a."schoolCode" LEFT JOIN "Users" u ON u."id"=a."allocatedBy" ORDER BY a."createdAt" DESC LIMIT 100`).catch(()=>[[]]);allocationHistory=rows||[];}
+    const superData = isSuper ? { schoolTokens: allTokens, allocatedTokens, totalRemainingTokens: allocatedTokens, enabledRaw: !!cfg.enabled, allocationHistory } : {};
     res.json({ success:true, data:{ enabled, tokensRemaining: schoolCode ? schoolTokens(cfg, schoolCode) : null, senderId: cfg.senderId || 'SHULEAI', providerConfigured: !!(cfg.enabled && cfg.provider && cfg.apiKey), provider: isSuper ? cfg.provider || null : undefined, apiKeySet: !!cfg.apiKey, editable: isSuper, message:'School admins can compose/send SMS only. Provider credentials are managed by Super Admin.', ...superData } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };
@@ -41,7 +43,13 @@ exports.updateConfig = async (req, res) => {
     if (!['super_admin','superadmin'].includes(String(req.user.role).toLowerCase())) return res.status(403).json({ success:false, message:'Only Super Admin can manage SMS provider credentials and token allocations.' });
     const current = await platformSms();
     const next = { ...current, provider:req.body.provider ?? current.provider, apiKey:req.body.apiKey ?? current.apiKey, senderId:req.body.senderId ?? current.senderId, enabled:req.body.enabled !== undefined ? !!req.body.enabled : current.enabled, schoolTokens:{ ...(current.schoolTokens || {}), ...(req.body.schoolTokens || {}) } };
-    if (req.body.schoolCode && req.body.tokens !== undefined) next.schoolTokens[req.body.schoolCode] = Number(req.body.tokens || 0);
+    if (req.body.schoolCode && req.body.tokens !== undefined) {
+      const code=String(req.body.schoolCode);
+      const previous=Number((current.schoolTokens||{})[code]||0);
+      const nextBalance=Math.max(0,Number(req.body.tokens||0));
+      next.schoolTokens[code]=nextBalance;
+      await sequelize.query(`INSERT INTO "SmsAllocations" ("schoolCode","quantity","allocationType","previousBalance","newBalance","reason","reference","allocatedBy","expiresAt","createdAt","updatedAt") VALUES (:schoolCode,:quantity,'set_balance',:previousBalance,:newBalance,:reason,:reference,:allocatedBy,:expiresAt,NOW(),NOW())`,{replacements:{schoolCode:code,quantity:nextBalance-previous,previousBalance:previous,newBalance:nextBalance,reason:String(req.body.reason||'SMS balance updated').slice(0,1000),reference:req.body.reference||null,allocatedBy:req.user.id,expiresAt:req.body.expiresAt||null}}).catch(()=>{});
+    }
     await writeSettings('platform_sms_settings', next);
     res.json({ success:true, message:'Platform SMS settings saved', data:{ ...next, apiKey: next.apiKey ? '***set***' : null } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
