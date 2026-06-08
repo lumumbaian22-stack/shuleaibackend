@@ -1,6 +1,8 @@
 const { Alert, User, School, Student, Parent, Teacher, TeacherSubjectAssignment, sequelize } = require('../models');
+const realtime = require('../services/realtimeService');
 const { generateParentAlertSuggestion } = require('../services/aiProviderService');
 const { getAlertsForUser } = require('../services/alertReceiverEngine');
+const { createAlert: createNotification } = require('../services/notificationService');
 
 async function userCanViewStudentAlert(req, studentId) {
   if (!studentId) return true;
@@ -102,7 +104,10 @@ exports.getMyAlerts = async (req, res) => {
 exports.markAlertAsRead = async (req, res) => {
   try {
     const { id } = req.params;
-    await Alert.update({ isRead: true, readAt: new Date() }, { where: { id, userId: req.user.id } });
+    const alert = await Alert.findOne({ where: { id, userId: req.user.id } });
+    if (!alert) return res.status(404).json({ success:false, message:'Alert not found' });
+    if (!alert.isRead) await alert.update({ isRead: true, readAt: new Date() }, { realtimeHandled:true });
+    await realtime.emitToUser(req.user.id, 'alert:updated', { id:alert.id, isRead:true, readAt:alert.readAt || new Date() }, { entityType:'Alert', entityId:alert.id, version:Number(alert.updatedAt?.getTime?.() || Date.now()) }).catch(()=>{});
     res.json({ success: true });
   } catch (error) {
     console.error('Mark read error:', error);
@@ -112,8 +117,10 @@ exports.markAlertAsRead = async (req, res) => {
 
 exports.markAllAsRead = async (req, res) => {
   try {
-    await Alert.update({ isRead: true, readAt: new Date() }, { where: { userId: req.user.id, isRead: false } });
-    res.json({ success: true });
+    const readAt = new Date();
+    const [updated] = await Alert.update({ isRead: true, readAt }, { where: { userId: req.user.id, isRead: false }, realtimeHandled:true });
+    await realtime.emitToUser(req.user.id, 'alerts:read_all', { userId:req.user.id, readAt, updated }, { entityType:'Alert', entityId:String(req.user.id), version:readAt.getTime() }).catch(()=>{});
+    res.json({ success: true, data:{ updated } });
   } catch (error) {
     console.error('Mark all read error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -380,31 +387,24 @@ exports.createAlert = async (req, res) => {
         eventDate: eventDate || data?.eventDate || scheduledAt || null
       };
       const finalDedupeKey = dedupeKey || buildDedupeKey({ req, recipient, type, category: finalCategory, title, data: finalData });
-      let alert = await Alert.findOne({ where: { userId: recipient.id, dedupeKey: finalDedupeKey } }).catch(() => null);
-      const payload = {
+      const alert = await createNotification({
         userId: recipient.id,
         role: recipient.role === 'superadmin' ? 'super_admin' : recipient.role,
         type: normalizeAlertDbType(type || category || finalCategory),
         categoryLabel: finalCategory,
         sourceType: finalData.sourceType,
         sourceLabel: finalData.sourceLabel,
-        targetRole: recipient.role,
-        targetUserId: recipient.id,
         studentId: studentId || data?.studentId || null,
         classId: classId || data?.classId || null,
-        priority: priority || rawSeverity,
         dedupeKey: finalDedupeKey,
         actionUrl: actionUrl || data?.actionUrl || null,
         actionLabel: actionLabel || data?.actionLabel || null,
         severity: dbSeverity,
         title,
         message,
-        data: finalData
-      };
-      if (alert) alert = await alert.update({ ...payload, isRead: false, readAt: null });
-      else alert = await Alert.create(payload);
-      created.push(alert);
-      if (global.io) global.io.to(`user-${recipient.id}`).emit('alert', alert);
+        data: { ...finalData, priority: priority || rawSeverity }
+      });
+      if (alert) created.push(alert);
     }
 
     if (!created.length) {

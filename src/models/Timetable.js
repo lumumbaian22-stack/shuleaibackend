@@ -8,7 +8,12 @@ module.exports = (sequelize, DataTypes) => {
     slots: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
     classes: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
     warnings: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
-    isPublished: { type: DataTypes.BOOLEAN, defaultValue: false }
+    isPublished: { type: DataTypes.BOOLEAN, defaultValue:false },
+    status: { type:DataTypes.STRING(24), allowNull:false, defaultValue:'draft' },
+    version: { type:DataTypes.INTEGER, allowNull:false, defaultValue:1 },
+    publishedAt: { type:DataTypes.DATE, allowNull:true },
+    publishedBy: { type:DataTypes.INTEGER, allowNull:true },
+    supersedesId: { type:DataTypes.INTEGER, allowNull:true }
   }, { timestamps: true });
   return Timetable;
 };

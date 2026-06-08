@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
-const { User, Teacher, School, ApprovalRequest, Alert } = require('../models');
+const { User, Teacher, School, ApprovalRequest } = require('../models');
 const QRCode = require('qrcode');
+const { createAlert } = require('../services/notificationService');
 
 exports.teacherSignup = async (req, res) => {
   try {
@@ -80,14 +81,14 @@ exports.teacherSignup = async (req, res) => {
       });
       
       for (const admin of admins) {
-        await Alert.create({
+        await createAlert({
           userId: admin.id,
           role: 'admin',
           type: 'approval',
           severity: 'info',
           title: 'New Teacher Signup',
           message: `${name} requested to join.`,
-          data: { teacherId: teacher.id }
+          data: { schoolCode: school.schoolId, teacherId: teacher.id }
         });
       }
     }
@@ -193,14 +194,14 @@ exports.approveTeacher = async (req, res) => {
         { where: { userId: teacher.User.id } }
       );
 
-      await Alert.create({
+      await createAlert({
         userId: teacher.User.id,
         role: 'teacher',
         type: 'system',
         severity: 'success',
         title: 'Account Approved',
         message: `Your account has been approved. Your Employee ID is: ${teacher.employeeId}`,
-        data: { employeeId: teacher.employeeId }
+        data: { schoolCode: school.schoolId, employeeId: teacher.employeeId }
       });
     } else {
       teacher.approvalStatus = 'rejected';
@@ -216,13 +217,14 @@ exports.approveTeacher = async (req, res) => {
         { where: { userId: teacher.User.id } }
       );
 
-      await Alert.create({
+      await createAlert({
         userId: teacher.User.id,
         role: 'teacher',
         type: 'system',
         severity: 'warning',
         title: 'Account Rejected',
-        message: `Your account was rejected. Reason: ${rejectionReason || 'Not specified'}`
+        message: `Your account was rejected. Reason: ${rejectionReason || 'Not specified'}`,
+        data: { schoolCode: school.schoolId, teacherId: teacher.id }
       });
     }
     

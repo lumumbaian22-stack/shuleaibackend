@@ -53,9 +53,9 @@ function computeSchoolAccess(school) {
   if (suspended) return { accessMode:'suspended', accessStatus:'locked', planCode:plan, plan, fullAccess:false, brandingAllowed:false, reason:s.suspensionReason || 'School suspended', featureLevel:'none' };
   if (hasFullOverride(s)) return { accessMode:'pilot_demo_free_full_access', accessStatus:'active', planCode:'enterprise', plan:'enterprise', fullAccess:true, brandingAllowed:true, reason:'Full access override is active', featureLevel:'full' };
   if (trial) return { accessMode:'trial', accessStatus:'active', planCode:'enterprise', plan:'enterprise', fullAccess:true, brandingAllowed:true, reason:'Trial access is active', featureLevel:'full' };
-  if ((manual || paidStatus) && subscriptionValid) return { accessMode: manual ? 'manual_paid' : 'paid_subscription', accessStatus:'active', planCode:plan, plan, fullAccess:false, brandingAllowed:['growth','enterprise'].includes(plan), reason:'Subscription is active', featureLevel:plan, subscriptionEndsAt:subscriptionEnd };
+  if ((manual || paidStatus) && subscriptionValid) return { accessMode:manual?'manual_paid':'paid_subscription',accessStatus:'active',planCode:plan,plan,fullAccess:true,brandingAllowed:true,reason:'Subscription is active; plan controls capacity and allowances only',featureLevel:'full_core',subscriptionEndsAt:subscriptionEnd };
   if ((manual || paidStatus) && subscriptionEnd && !subscriptionValid) return { accessMode:'expired_subscription', accessStatus:'locked', planCode:plan, plan, fullAccess:false, brandingAllowed:false, reason:'Subscription period has expired', featureLevel:'expired', subscriptionEndsAt:subscriptionEnd };
-  return { accessMode:'plan_limited', accessStatus:'active', planCode:plan || 'starter', plan:plan || 'starter', fullAccess:false, brandingAllowed:['growth','enterprise'].includes(plan), reason:'Plan access is active', featureLevel:plan || 'starter' };
+  return { accessMode:'size_based_plan',accessStatus:'active',planCode:plan||'starter',plan:plan||'starter',fullAccess:true,brandingAllowed:true,reason:'All core school modules are included; plan is based on active student count',featureLevel:'full_core' };
 }
 function withAccessFields(schoolJson) { return { ...schoolJson, access: computeSchoolAccess(schoolJson) }; }
 module.exports = { computeSchoolAccess, withAccessFields, normalizePlanCode, hasFullOverride };

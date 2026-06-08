@@ -171,8 +171,9 @@ exports.uploadSchoolLogo = async (req, res) => {
 exports.getAgentToolkit = async (req, res) => {
   const toolkit = {
     pricing: [
-      { name: 'School Starter', target: 'Small schools', includes: ['Core school OS', 'Parents portal', 'Finance & Fees', 'Alerts'], note: 'Use as entry package.' },
-      { name: 'School Growth', target: 'Growing schools', includes: ['Everything in Starter', 'Analytics', 'AI announcement suggestions', 'Advanced reports'], note: 'Best pilot-to-rollout option.' },
+      { name: 'School Starter', target: '1–400 active students', includes: ['Complete Shule AI school platform'], note: 'Pricing is based on active student count, not feature access.' },
+      { name: 'School Growth', target: '401–800 active students', includes: ['Complete Shule AI school platform'], note: 'Adds capacity, allowances and priority support—not locked features.' },
+      { name: 'School Enterprise', target: '801+ active students', includes: ['Complete Shule AI school platform'], note: 'Adds scale, support and custom service options—not locked features.' },
       { name: 'Parent Child Plans', target: 'Parents/students', includes: ['Basic: reports/attendance/progress', 'Premium: AI Tutor 6/day', 'Ultimate: extended AI + recommendations'], note: 'Parent subscriptions are paid per child. Basic does not include AI Tutor.' }
     ],
     pitchScript: 'Shule AI gives schools one intelligent platform for fees, attendance, academics, communication, alerts, AI tutoring, and student success — built for Kenyan schools and mobile-first usage.',

@@ -12,8 +12,8 @@ const {
 } = require('../models');
 const schoolFeatures = require('../services/schoolFeatureService');
 
-const SCHOOL_CORE_FEATURES = ['attendance', 'marks', 'students', 'teachers', 'basic_reports', 'fees'];
-const SCHOOL_PREMIUM_FEATURES = ['school_branding', 'ai_analytics', 'advanced_reports', 'advanced_timetable', 'smart_alerts', 'premium_dashboards', 'full_ai_tutor'];
+const SCHOOL_CORE_FEATURES = schoolFeatures.CORE_SCHOOL_FEATURES || ['dashboard','students','teachers','attendance','marks','report_cards','fees','calendar','timetable','homework','duty','departments','school_branding','alerts','bulk_sms'];
+const SCHOOL_PREMIUM_FEATURES = [];
 
 function normalizeCycle(cycle) {
   const value = String(cycle || 'monthly').toLowerCase();
@@ -63,8 +63,8 @@ function normalizeSettingsPlan(raw, ownerType, index = 0) {
     yearlyPriceKes: raw.yearlyPriceKes ?? raw.yearly ?? null,
     setupFeeMinKes: raw.setupFeeMinKes ?? raw.setupMin ?? null,
     setupFeeMaxKes: raw.setupFeeMaxKes ?? raw.setupMax ?? null,
-    features: Array.isArray(raw.features) ? raw.features : [],
-    lockedFeatures: Array.isArray(raw.lockedFeatures) ? raw.lockedFeatures : [],
+    features: ownerType === 'school' ? SCHOOL_CORE_FEATURES : (Array.isArray(raw.features) ? raw.features : []),
+    lockedFeatures: ownerType === 'school' ? [] : (Array.isArray(raw.lockedFeatures) ? raw.lockedFeatures : []),
     limits: raw.limits && typeof raw.limits === 'object' ? raw.limits : { days: Number(raw.days || 30) || 30 },
     sortOrder: Number(raw.sortOrder ?? index ?? 0),
     isActive: raw.isActive !== false,
@@ -243,7 +243,11 @@ exports.getPlans = async (req, res) => {
     // This prevents the admin/parent dashboards from showing old seeded Monthly/Termly/Yearly or Starter/Growth/Enterprise cards beside the new live cards.
     if (ownerType === 'school' || ownerType === 'child') {
       const configured = await getPlatformConfiguredPlans(ownerType);
-      if (configured && configured.length) return res.json({ success: true, data: configured });
+      if (configured && configured.length) {
+        const ranges={school_starter:[1,400],school_growth:[401,800],school_enterprise:[801,null]};
+        const data=ownerType==='school'?configured.map(p=>{const r=ranges[p.code]||ranges[`school_${String(p.code||'').replace(/^school_/,'')}`]||[1,null];return {...p,features:SCHOOL_CORE_FEATURES,lockedFeatures:[],limits:{...(p.limits||{}),minStudents:r[0],maxStudents:r[1]},pricingBasis:'active_students'};}):configured;
+        return res.json({success:true,data});
+      }
     }
     const where = { isActive: true };
     if (ownerType) where.ownerType = ownerType;
@@ -266,10 +270,11 @@ exports.getSchoolStatus = async (req, res) => {
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
     const featureInfo = await schoolFeatures.getSchoolFeatures(school.schoolId);
     const subscription = await Subscription.findOne({ where: { ownerType: 'school', schoolCode: school.schoolId }, include: [{ model: SubscriptionPlan }] });
-    const studentCount = await User.count({ where: { schoolCode: school.schoolId, role: 'student' } }).catch(() => 0);
+    const studentCount = await Student.count({ include:[{ model:User, where:{ schoolCode:school.schoolId, role:'student', isActive:true }, required:true }], where:{ status:{ [Op.in]:['active','enrolled'] } } }).catch(async () => User.count({ where:{ schoolCode:school.schoolId, role:'student', isActive:true } }).catch(() => 0));
     const subActive = subscription?.status === 'active' && subscription.endDate && new Date(subscription.endDate) > new Date();
-    const override = !!featureInfo.fullAccess || !!featureInfo.override;
-    const active = override || subActive;
+    const override = !!featureInfo.override || ['pilot_demo_free_full_access','trial'].includes(featureInfo.accessMode);
+    const accessActive = featureInfo.access?.accessStatus !== 'locked';
+    const active = accessActive || subActive;
     const tier = featureInfo.plan?.name || subscription?.planName || 'Starter';
     res.json({
       success: true,
@@ -286,13 +291,16 @@ exports.getSchoolStatus = async (req, res) => {
         studentCount,
         schoolTier: tier,
         features: featureInfo.featureList || [],
-        fullAccess: override,
+        fullAccess: featureInfo.access?.accessStatus !== 'locked',
         override,
-        accessMode: override ? 'pilot_full_access' : (featureInfo.planCode || 'starter'),
+        accessMode: featureInfo.accessMode || (override ? 'pilot_full_access' : 'size_based_plan'),
+        pricingBasis: 'active_students',
+        suggestedPlanCode: studentCount <= 400 ? 'starter' : (studentCount <= 800 ? 'growth' : 'enterprise'),
+        suggestedPlanName: studentCount <= 400 ? 'Starter' : (studentCount <= 800 ? 'Growth' : 'Enterprise'),
         coreFeatures: featureInfo.featureList || SCHOOL_CORE_FEATURES,
-        premiumLocked: !active,
-        lockedFeatures: active ? [] : SCHOOL_PREMIUM_FEATURES,
-        gracefulMode: !active && !override,
+        premiumLocked:false,
+        lockedFeatures:[],
+        gracefulMode:false,
         subscription
       }
     });

@@ -7,10 +7,11 @@ function v87IsValidISODate(value) {
   return Number.isFinite(d.getTime()) && d.toISOString().slice(0,10) === value;
 }
 
-const { User, Teacher, School, DutyRoster, Alert } = require('../models');
+const { User, Teacher, School, DutyRoster } = require('../models');
 const moment = require('moment');
 const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
-const { createAlert } = require('../services/notificationService');
+const { createAlert, createBulkAlerts } = require('../services/notificationService');
+const realtime = require('../services/realtimeService');
 const dutyFairness = require('../utils/dutyFairness');
 
 // ============ HELPER FUNCTIONS ============
@@ -189,16 +190,24 @@ exports.generateDutyRoster = async (req, res) => {
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
     
-    const start = moment(startDate || new Date());
-    const end = moment(endDate || moment().add(7, 'days'));
+    const normalizedStart = startDate ? String(startDate).slice(0, 10) : moment().format('YYYY-MM-DD');
+    const normalizedEnd = endDate ? String(endDate).slice(0, 10) : moment(normalizedStart).add(7, 'days').format('YYYY-MM-DD');
+    if (!v87IsValidISODate(normalizedStart) || !v87IsValidISODate(normalizedEnd)) {
+      return res.status(400).json({ success:false, message:'Choose valid roster start and end dates.' });
+    }
+    const start = moment(normalizedStart, 'YYYY-MM-DD', true);
+    const end = moment(normalizedEnd, 'YYYY-MM-DD', true);
     const days = end.diff(start, 'days') + 1;
+    if (days < 1 || days > 31) {
+      return res.status(400).json({ success:false, message:'Duty rosters can cover between 1 and 31 days.' });
+    }
     const dutySlots = ['morning', 'lunch', 'afternoon'];
     const rosters = [];
     const alerts = [];
     const understaffedAlerts = [];
 
     if (moment().day() === 1) {
-      const teachers = await Teacher.findAll({ where: { approvalStatus: 'approved' } });
+      const teachers = await Teacher.findAll({ where: { approvalStatus: 'approved' }, include:[{ model:User, where:{ schoolCode:school.schoolId, role:'teacher' }, required:true, attributes:['id','name','schoolCode'] }] });
       for (const teacher of teachers) {
         teacher.statistics = { ...teacher.statistics, weeklyDutyCount: 0 };
         await teacher.save();
@@ -258,7 +267,7 @@ exports.generateDutyRoster = async (req, res) => {
       }
     }
 
-    if (alerts.length > 0) await Alert.bulkCreate(alerts);
+    if (alerts.length > 0) await createBulkAlerts(alerts.map(a => ({ ...a, data:{ ...(a.data||{}), schoolCode:school.schoolId, sourceType:'duty_engine', sourceLabel:'Duty management' } })));
 
     const understaffed = await dutyFairness.checkUnderstaffedAreas(school.schoolId, moment().format('YYYY-MM-DD'));
     if (understaffed.length > 0) {
@@ -273,12 +282,9 @@ exports.generateDutyRoster = async (req, res) => {
       }
     }
 
-    if (global.io) {
-      global.io.to(`school-${school.schoolId}`).emit('duty-roster-updated', {
-        message: 'New duty roster generated',
-        count: rosters.length
-      });
-    }
+    await realtime.emitToSchool(school.schoolId, 'duty:roster_updated', {
+      message:'New duty roster generated', count:rosters.length, startDate:start.format('YYYY-MM-DD'), endDate:end.format('YYYY-MM-DD')
+    }, { entityType:'DutyRoster', entityId:String(rosters[0]?.id || ''), version:1 }).catch(e => console.error('[duty realtime]', e.message));
 
     res.json({ success: true, message: `Generated ${rosters.length} rosters`, data: { rosters, understaffed: understaffedAlerts, stats: { totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0), totalAlerts: alerts.length, understaffedCount: understaffedAlerts.length } } });
   } catch (error) {
@@ -363,6 +369,8 @@ exports.getFairnessReport = async (req, res) => {
 exports.manualAdjustDuty = async (req, res) => {
   try {
     const { date, teacherId, newTeacherId, dutyType, reason } = req.body;
+    if (!v87IsValidISODate(String(date || '').slice(0, 10))) return res.status(400).json({ success:false, message:'Choose a valid duty date.' });
+    if (!String(reason || '').trim()) return res.status(400).json({ success:false, message:'Enter the reason for this duty adjustment.' });
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
 
@@ -372,21 +380,26 @@ exports.manualAdjustDuty = async (req, res) => {
     const dutyIndex = roster.duties.findIndex(d => d.teacherId === parseInt(teacherId) && d.type === dutyType);
     if (dutyIndex === -1) return res.status(404).json({ success: false, message: 'Duty not found' });
 
-    const oldTeacherId = roster.duties[dutyIndex].teacherId;
-    roster.duties[dutyIndex].teacherId = parseInt(newTeacherId);
-    roster.duties[dutyIndex].teacherName = req.body.newTeacherName;
+    const oldTeacherId = Number(roster.duties[dutyIndex].teacherId);
+    const replacementTeacher = await Teacher.findOne({ where:{ id:Number(newTeacherId) }, include:[{ model:User, where:{ schoolCode:school.schoolId, role:'teacher' }, required:true, attributes:['id','name','schoolCode'] }] });
+    if (!replacementTeacher) return res.status(404).json({ success:false, message:'Replacement teacher not found in this school' });
+    const previousTeacher = await Teacher.findOne({ where:{ id:oldTeacherId }, include:[{ model:User, where:{ schoolCode:school.schoolId, role:'teacher' }, required:true, attributes:['id','name','schoolCode'] }] }).catch(()=>null);
+    roster.duties[dutyIndex].teacherId = replacementTeacher.id;
+    roster.duties[dutyIndex].teacherName = replacementTeacher.User?.name || req.body.newTeacherName || 'Teacher';
     roster.duties[dutyIndex].adjustedBy = req.user.id;
     roster.duties[dutyIndex].adjustedAt = new Date();
-    roster.duties[dutyIndex].adjustmentReason = reason;
+    roster.duties[dutyIndex].adjustmentReason = reason || 'Administrative adjustment';
+    roster.changed('duties', true);
     await roster.save();
 
     await dutyFairness.updateTeacherDutyStats(oldTeacherId, 'unassign');
-    await dutyFairness.updateTeacherDutyStats(newTeacherId, 'assign', dutyType);
+    await dutyFairness.updateTeacherDutyStats(replacementTeacher.id, 'assign', dutyType);
 
-    await Alert.bulkCreate([
-      { userId: oldTeacherId, role: 'teacher', type: 'duty', severity: 'info', title: 'Duty Adjustment', message: `Your duty on ${moment(date).format('MMM Do')} has been reassigned.` },
-      { userId: newTeacherId, role: 'teacher', type: 'duty', severity: 'info', title: 'New Duty Assignment', message: `You have been assigned to ${dutyType} duty on ${moment(date).format('MMM Do')}.` }
-    ]);
+    await createBulkAlerts([
+      previousTeacher?.User?.id ? { userId:previousTeacher.User.id, role:'teacher', type:'duty', severity:'info', title:'Duty adjustment', message:`Your duty on ${moment(date).format('MMM Do')} has been reassigned.`, dedupeKey:`duty-adjusted:${roster.id}:${oldTeacherId}:${replacementTeacher.id}`, data:{schoolCode:school.schoolId,rosterId:roster.id,date,dutyType} } : null,
+      { userId:replacementTeacher.User.id, role:'teacher', type:'duty', severity:'info', title:'New duty assignment', message:`You have been assigned to ${dutyType} duty on ${moment(date).format('MMM Do')}.`, dedupeKey:`duty-assigned:${roster.id}:${replacementTeacher.id}:${dutyType}`, data:{schoolCode:school.schoolId,rosterId:roster.id,date,dutyType} }
+    ].filter(Boolean));
+    await realtime.emitToSchool(school.schoolId,'duty:roster_updated',{rosterId:roster.id,date,duty:roster.duties[dutyIndex]},{entityType:'DutyRoster',entityId:roster.id,version:Number(roster.updatedAt?.getTime?.()||Date.now())}).catch(()=>{});
 
     res.json({ success: true, message: 'Duty adjusted successfully', data: roster.duties[dutyIndex] });
   } catch (error) {
@@ -446,64 +459,60 @@ exports.getTeacherWorkload = async (req, res) => {
 
 exports.getTodayDuty = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
-
+    const school = await School.findOne({ where:{ schoolId:req.user.schoolCode } });
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
     const today = moment().format('YYYY-MM-DD');
-    const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
-    if (!roster) return res.json({ success: true, data: { duties: [], message: 'No duty today' } });
-
-    const duties = roster.duties.map(d => ({
-      ...d,
-      isOnDuty: req.user.role === 'teacher' && d.teacherId === req.user.id,
-      checkedIn: !!d.checkedIn,
-      checkedOut: !!d.checkedOut
-    }));
-    res.json({ success: true, data: { date: today, duties } });
+    const roster = await DutyRoster.findOne({ where:{ schoolId:school.schoolId, date:today } });
+    let teacher = null;
+    if (req.user.role === 'teacher') teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
+    const all = Array.isArray(roster?.duties) ? roster.duties : [];
+    const duties = req.user.role === 'teacher'
+      ? all.filter(d => Number(d.teacherId) === Number(teacher?.id)).map(d => ({ ...d, isOnDuty:true, checkedIn:!!d.checkedIn, checkedOut:!!d.checkedOut }))
+      : all.map(d => ({ ...d, isOnDuty:false, checkedIn:!!d.checkedIn, checkedOut:!!d.checkedOut }));
+    const duty = duties[0] || null;
+    return res.json({ success:true, data:{ date:today, duty, duties, hasDuty:!!duty, message:duty ? null : 'No duty assigned today' } });
   } catch (error) {
     console.error('Get today duty error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success:false, message:error.message });
   }
 };
 
 exports.getWeeklyDuty = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
-
-    const startOfWeek = moment().startOf('week');
-    const endOfWeek = moment().endOf('week');
-    const rosters = await DutyRoster.findAll({
-      where: { schoolId: school.schoolId, date: { [Op.between]: [startOfWeek.format('YYYY-MM-DD'), endOfWeek.format('YYYY-MM-DD')] } },
-      order: [['date', 'ASC']]
-    });
-
+    const school = await School.findOne({ where:{ schoolId:req.user.schoolCode } });
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const startOfWeek = moment().startOf('isoWeek');
+    const endOfWeek = moment().endOf('isoWeek');
+    const rosters = await DutyRoster.findAll({ where:{ schoolId:school.schoolId, date:{ [Op.between]:[startOfWeek.format('YYYY-MM-DD'),endOfWeek.format('YYYY-MM-DD')] } }, order:[['date','ASC']] });
+    let teacher = null;
+    if (req.user.role === 'teacher') teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
     const weekly = [];
-    for (let i = 0; i < 7; i++) {
-      const day = moment().startOf('week').add(i, 'days');
-      const dayRoster = rosters.find(r => r.date === day.format('YYYY-MM-DD'));
-      weekly.push({
-        date: day.format('YYYY-MM-DD'),
-        dayName: day.format('dddd'),
-        isToday: day.isSame(moment(), 'day'),
-        duties: dayRoster ? dayRoster.duties : []
-      });
+    for (let i=0;i<7;i++) {
+      const day=startOfWeek.clone().add(i,'days');
+      const dayRoster=rosters.find(r => String(r.date) === day.format('YYYY-MM-DD'));
+      let duties=Array.isArray(dayRoster?.duties)?dayRoster.duties:[];
+      if (req.user.role === 'teacher') duties=duties.filter(d => Number(d.teacherId)===Number(teacher?.id));
+      weekly.push({ date:day.format('YYYY-MM-DD'), dayName:day.format('dddd'), isToday:day.isSame(moment(),'day'), duties });
     }
-    res.json({ success: true, data: weekly });
+    res.json({ success:true, data:weekly });
   } catch (error) {
     console.error('Get weekly duty error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success:false, message:error.message });
   }
 };
 
 exports.checkInDuty = async (req, res) => {
   try {
     const { location, notes } = req.body;
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const teacher = await Teacher.findOne({ where:{ userId:req.user.id }, include:[{ model:User, attributes:['id','name','schoolCode'] }] });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    const verification = getDutyVerificationSettings(school);
+    if (verification.requireGps || verification.requireQr) {
+      return res.status(400).json({ success:false, code:'DUTY_VERIFICATION_REQUIRED', message:'This school requires verified duty check-in. Use the verified check-in button.' });
+    }
 
     const today = moment().format('YYYY-MM-DD');
     const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
@@ -511,10 +520,11 @@ exports.checkInDuty = async (req, res) => {
 
     const dutyIndex = roster.duties.findIndex(d => Number(d.teacherId) === Number(teacher.id) || Number(d.teacherId) === Number(req.user.id));
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
+    if (roster.duties[dutyIndex].checkedIn) return res.json({ success:true, message:'You are already checked in.', data:roster.duties[dutyIndex] });
 
     const currentTime = moment();
-    const slot = roster.duties[dutyIndex].timeSlot;
-    const start = moment(slot.start, 'HH:mm');
+    const slot = roster.duties[dutyIndex].timeSlot || {};
+    const start = moment(slot.start || roster.duties[dutyIndex].startTime || '07:00', 'HH:mm');
     const window = school.settings?.dutyManagement?.checkInWindow || 15;
     const enforceWindow = school.settings?.dutyManagement?.enforceCheckInWindow === true;
     if (enforceWindow && !currentTime.isBetween(start.clone().subtract(window, 'minutes'), start.clone().add(window, 'minutes'))) {
@@ -522,17 +532,21 @@ exports.checkInDuty = async (req, res) => {
     }
 
     roster.duties[dutyIndex].checkedIn = { at: new Date(), by: req.user.id, location: location || 'School' };
-    roster.duties[dutyIndex].status = 'completed';
+    roster.duties[dutyIndex].status = 'checked_in';
     roster.duties[dutyIndex].notes = notes || '';
+    roster.changed('duties', true);
     await roster.save();
+    await realtime.emitToSchool(school.schoolId, 'duty:checked_in', { rosterId:roster.id, date:today, teacherId:teacher.id, userId:req.user.id, duty:roster.duties[dutyIndex] }, { entityType:'DutyRoster', entityId:roster.id, version:Number(roster.updatedAt?.getTime?.() || Date.now()) }).catch(()=>{});
 
     const teacherDuty = (teacher.duties || []).find(d => moment(d.date).isSame(moment(), 'day'));
     if (teacherDuty) {
-      teacherDuty.status = 'completed';
-      teacherDuty.completedAt = new Date();
+      teacherDuty.status = 'checked_in';
+      teacherDuty.checkedInAt = new Date();
       teacherDuty.checkedIn = { at: new Date(), location };
-      teacher.statistics.dutiesCompleted = (teacher.statistics.dutiesCompleted || 0) + 1;
-      teacher.updateReliabilityScore();
+      const stats = { ...(teacher.statistics || {}) };
+      stats.dutiesCheckedIn = (stats.dutiesCheckedIn || 0) + 1;
+      teacher.statistics = stats;
+      if (typeof teacher.updateReliabilityScore === 'function') teacher.updateReliabilityScore();
       await teacher.save();
     }
 
@@ -540,7 +554,8 @@ exports.checkInDuty = async (req, res) => {
     for (const admin of admins) {
       await createAlert({
         userId: admin.id, role: 'admin', type: 'duty', severity: 'info',
-        title: 'Teacher Checked In', message: `${teacher.User?.name || 'Teacher'} checked in for ${roster.duties[dutyIndex].type} duty.`
+        title:'Teacher Checked In', message:`${teacher.User?.name || 'Teacher'} checked in for ${roster.duties[dutyIndex].type} duty.`,
+        data:{ schoolCode:school.schoolId, teacherId:teacher.id, rosterId:roster.id, sourceType:'duty_engine', sourceLabel:'Duty management' }
       });
     }
     res.json({ success: true, message: 'Checked in successfully' });
@@ -553,9 +568,14 @@ exports.checkInDuty = async (req, res) => {
 exports.checkOutDuty = async (req, res) => {
   try {
     const { location, notes } = req.body;
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const teacher = await Teacher.findOne({ where:{ userId:req.user.id }, include:[{ model:User, attributes:['id','name','schoolCode'] }] });
+    if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    const verification = getDutyVerificationSettings(school);
+    if (verification.requireGps || verification.requireQr) {
+      return res.status(400).json({ success:false, code:'DUTY_VERIFICATION_REQUIRED', message:'This school requires verified duty check-out. Use the verified check-out button.' });
+    }
 
     const today = moment().format('YYYY-MM-DD');
     const roster = await DutyRoster.findOne({ where: { schoolId: school.schoolId, date: today } });
@@ -564,8 +584,13 @@ exports.checkOutDuty = async (req, res) => {
     const dutyIndex = roster.duties.findIndex(d => Number(d.teacherId) === Number(teacher.id) || Number(d.teacherId) === Number(req.user.id));
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
 
-    roster.duties[dutyIndex].checkedOut = { at: new Date(), by: req.user.id, location: location || 'School' };
+    if (!roster.duties[dutyIndex].checkedIn) return res.status(400).json({ success:false, message:'Check in before checking out.' });
+    if (roster.duties[dutyIndex].checkedOut) return res.json({ success:true, message:'You are already checked out.', data:roster.duties[dutyIndex] });
+    roster.duties[dutyIndex].checkedOut = { at:new Date(), by:req.user.id, location:location || 'School', notes:notes || '' };
+    roster.duties[dutyIndex].status = 'completed';
+    roster.changed('duties', true);
     await roster.save();
+    await realtime.emitToSchool(school.schoolId, 'duty:checked_out', { rosterId:roster.id, date:today, teacherId:teacher.id, userId:req.user.id, duty:roster.duties[dutyIndex] }, { entityType:'DutyRoster', entityId:roster.id, version:Number(roster.updatedAt?.getTime?.() || Date.now()) }).catch(()=>{});
     res.json({ success: true, message: 'Checked out successfully' });
   } catch (error) {
     console.error('Check out error:', error);
@@ -575,7 +600,7 @@ exports.checkOutDuty = async (req, res) => {
 
 exports.updateDutyPreferences = async (req, res) => {
   try {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const teacher = await Teacher.findOne({ where:{ userId:req.user.id }, include:[{ model:User, attributes:['id','name','schoolCode'] }] });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
     teacher.dutyPreferences = { ...teacher.dutyPreferences, ...req.body };
@@ -593,7 +618,7 @@ exports.requestDutySwap = async (req, res) => {
     const dutyDate = String(rawDutyDate || '').slice(0, 10);
     const { reason, targetTeacherId } = req.body;
     if (!v87IsValidISODate(dutyDate)) return res.status(400).json({ success:false, message:'Please select a valid duty date.' });
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const teacher = await Teacher.findOne({ where:{ userId:req.user.id }, include:[{ model:User, attributes:['id','name','schoolCode'] }] });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
@@ -637,7 +662,7 @@ exports.requestDutySwap = async (req, res) => {
         userId: admin.id, role: 'admin', type: 'duty', severity: 'info',
         title: 'Duty Swap Request',
         message: `${teacher.User?.name} requests to swap duty on ${moment(dutyDate).format('MMM Do')}. Reason: ${reason}`,
-        data: { swapRequest }
+        data:{ swapRequest, schoolCode:school.schoolId, sourceType:'duty_engine', sourceLabel:'Duty management' }
       });
     }
     res.json({ success: true, message: 'Swap request sent to admin', data: swapRequest });
@@ -649,7 +674,7 @@ exports.requestDutySwap = async (req, res) => {
 
 exports.getAvailableSwaps = async (req, res) => {
   try {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const teacher = await Teacher.findOne({ where:{ userId:req.user.id }, include:[{ model:User, attributes:['id','name','schoolCode'] }] });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
@@ -670,7 +695,7 @@ exports.getAvailableSwaps = async (req, res) => {
 
 exports.getTeacherPoints = async (req, res) => {
   try {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const teacher = await Teacher.findOne({ where:{ userId:req.user.id }, include:[{ model:User, attributes:['id','name','schoolCode'] }] });
     res.json({ success: true, data: { points: teacher.statistics?.points || 0 } });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -680,7 +705,7 @@ exports.getTeacherPoints = async (req, res) => {
 exports.updateTeacherPoints = async (req, res) => {
   try {
     const { points, reason } = req.body;
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const teacher = await Teacher.findOne({ where:{ userId:req.user.id }, include:[{ model:User, attributes:['id','name','schoolCode'] }] });
     if (!teacher) return res.status(404).json({ success: false });
     const stats = teacher.statistics || {};
     stats.points = (stats.points || 0) + points;
@@ -726,7 +751,7 @@ exports.updateDutyVerificationConfig = async (req, res) => {
     const nextGeoFence = {
       ...geoFence,
       enabled: req.body.enabled !== undefined ? !!req.body.enabled : geoFence.enabled !== false,
-      requireGps: req.body.requireGps !== undefined ? !!req.body.requireGps : geoFence.requireGps !== false,
+      requireGps: req.body.requireGps !== undefined ? !!req.body.requireGps : geoFence.requireGps === true,
       requireQr: req.body.requireQr !== undefined ? !!req.body.requireQr : geoFence.requireQr === true,
       radiusMeters: Number(req.body.radiusMeters || geoFence.radiusMeters || 150),
       center: {
@@ -758,7 +783,7 @@ exports.updateDutyVerificationConfig = async (req, res) => {
 exports.verifiedCheckInDuty = async (req, res) => {
   try {
     const { gps, qrToken, notes, deviceInfo } = req.body;
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const teacher = await Teacher.findOne({ where:{ userId:req.user.id }, include:[{ model:User, attributes:['id','name','schoolCode'] }] });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
@@ -772,6 +797,7 @@ exports.verifiedCheckInDuty = async (req, res) => {
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
 
     const duty = roster.duties[dutyIndex];
+    if (duty.checkedIn?.accepted === true || ['checked_in','late','completed'].includes(duty.status)) return res.json({ success:true, message:'You are already checked in.', data:duty.checkedIn || duty });
     const settings = getDutyVerificationSettings(school);
     const geo = verifyGeo(settings, gps);
     const qrOk = !settings.requireQr || verifyQrToken(qrToken, school.schoolId, today, duty.id || duty.type || duty.area);
@@ -800,9 +826,10 @@ exports.verifiedCheckInDuty = async (req, res) => {
     roster.duties[dutyIndex] = duty;
     roster.changed('duties', true);
     await roster.save();
+    await realtime.emitToSchool(school.schoolId, 'duty:checked_in', { rosterId:roster.id, date:today, teacherId:teacher.id, userId:req.user.id, duty }, { entityType:'DutyRoster', entityId:roster.id, version:Number(roster.updatedAt?.getTime?.() || Date.now()) }).catch(()=>{});
 
     if (!accepted) {
-      return res.status(400).json({ success: false, message: verification.geo.reason || 'Duty check-in rejected', data: verification });
+      return res.status(400).json({ success:false, message:!qrOk?'The duty QR token is invalid.':(verification.geo.reason||'Duty check-in rejected'), data:verification });
     }
 
     res.json({ success: true, message: late.isLate ? `Checked in late by ${late.lateMinutes} min` : 'Verified check-in successful', data: verification });
@@ -815,7 +842,7 @@ exports.verifiedCheckInDuty = async (req, res) => {
 exports.verifiedCheckOutDuty = async (req, res) => {
   try {
     const { gps, qrToken, notes, deviceInfo } = req.body;
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const teacher = await Teacher.findOne({ where:{ userId:req.user.id }, include:[{ model:User, attributes:['id','name','schoolCode'] }] });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
@@ -829,6 +856,8 @@ exports.verifiedCheckOutDuty = async (req, res) => {
     if (dutyIndex === -1) return res.status(403).json({ success: false, message: 'Not on duty today' });
 
     const duty = roster.duties[dutyIndex];
+    if (!duty.checkedIn || duty.checkedIn?.accepted === false || duty.status === 'rejected') return res.status(400).json({ success:false, message:'Check in successfully before checking out.' });
+    if (duty.checkedOut?.accepted === true || duty.status === 'completed') return res.json({ success:true, message:'You are already checked out.', data:duty.checkedOut || duty });
     const settings = getDutyVerificationSettings(school);
     const geo = verifyGeo(settings, gps);
     const qrOk = !settings.requireQr || verifyQrToken(qrToken, school.schoolId, today, duty.id || duty.type || duty.area);
@@ -854,9 +883,10 @@ exports.verifiedCheckOutDuty = async (req, res) => {
     roster.duties[dutyIndex] = duty;
     roster.changed('duties', true);
     await roster.save();
+    await realtime.emitToSchool(school.schoolId, 'duty:checked_out', { rosterId:roster.id, date:today, teacherId:teacher.id, userId:req.user.id, duty }, { entityType:'DutyRoster', entityId:roster.id, version:Number(roster.updatedAt?.getTime?.() || Date.now()) }).catch(()=>{});
 
     if (!accepted) {
-      return res.status(400).json({ success: false, message: verification.geo.reason || 'Duty check-out rejected', data: verification });
+      return res.status(400).json({ success:false, message:!qrOk?'The duty QR token is invalid.':(verification.geo.reason||'Duty check-out rejected'), data:verification });
     }
 
     res.json({ success: true, message: 'Verified check-out successful', data: verification });
@@ -878,6 +908,8 @@ exports.getDutyComplianceReport = async (req, res) => {
     const summary = {
       date,
       total: duties.length,
+      checkedIn: duties.filter(d => !!d.checkedIn && d.status !== 'rejected').length,
+      completed: duties.filter(d => !!d.checkedOut || d.status === 'completed').length,
       verified: duties.filter(d => d.checkedIn?.accepted === true).length,
       late: duties.filter(d => d.checkedIn?.late?.isLate || d.status === 'late').length,
       rejected: duties.filter(d => d.checkedIn?.accepted === false || d.status === 'rejected').length,

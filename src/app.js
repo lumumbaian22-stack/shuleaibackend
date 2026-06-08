@@ -4,7 +4,6 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
-const session = require('express-session');
 const fileUpload = require('express-fileupload');
 const path = require('path');
 const fs = require('fs');
@@ -128,17 +127,7 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'session-secret',
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-    httpOnly: true,
-    sameSite: 'lax'
-  }
-}));
+// Authentication is stateless JWT-based; no in-memory session store is used in production.
 
 const uploadDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadDir)) {
@@ -298,7 +287,7 @@ app.post('/api/system/repair-schema', (req, res, next) => {
 // ============ MOUNT ROUTES ============
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/duty', protect, requireFeature('duty'), dutyRoutes);
+app.use('/api/duty', protect, dutyRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/teacher', teacherRoutes);
@@ -323,9 +312,9 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/sms', smsRoutes);
 // V27 compatibility routes fix old frontend/test endpoints and role-safe aliases.
 app.use('/api', compatibilityRoutes);
-app.use('/api/calendar', protect, requireFeature('calendar'), calendarRoutes);
-app.use('/api/timetable', protect, requireFeature('timetable'), timetableRoutes);
-app.use('/api/homework', protect, requireFeature('homework'), homeworkRoutes);
+app.use('/api/calendar', protect, calendarRoutes);
+app.use('/api/timetable', protect, timetableRoutes);
+app.use('/api/homework', protect, homeworkRoutes);
 app.use('/api/gamification', gamificationRoutes);
 app.use('/api/chat-v9', chatV9Routes);
 app.use('/api/scale', scaleRoutes);

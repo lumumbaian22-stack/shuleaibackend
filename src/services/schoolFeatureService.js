@@ -5,14 +5,15 @@ const { computeSchoolAccess, normalizePlanCode, hasFullOverride } = require('./s
 const FEATURE_KEYS = {
   dashboard:'dashboard', teachers:'teachers', teacher_approvals:'teacher_approvals', students:'students', analytics:'analytics', alerts:'alerts', finance_fees:'finance_fees', parent_messages:'parent_messages', school_settings:'school_settings', billing:'billing', classes:'classes', report_cards:'report_cards', calendar:'calendar', school_branding:'school_branding', timetable:'timetable', homework:'homework', duty:'duty', fairness_report:'fairness_report', departments:'departments', bulk_sms:'bulk_sms', senior_subject_choice:'senior_subject_choice'
 };
-const STARTER = ['dashboard','teachers','teacher_approvals','students','analytics','alerts','finance_fees','parent_messages','school_settings','billing','classes','report_cards'];
-const GROWTH = [...STARTER, 'calendar','school_branding','timetable','homework'];
-const ENTERPRISE = [...GROWTH, 'duty','fairness_report','departments','bulk_sms','senior_subject_choice'];
+const CORE_SCHOOL_FEATURES = ['dashboard','teachers','teacher_approvals','students','analytics','alerts','announcements','finance_fees','fees','payments','parent_messages','chat','school_settings','billing','subscriptions','classes','attendance','attendance_corrections','marks','grading','report_cards','report_history','calendar','school_branding','timetable','homework','duty','fairness_report','departments','bulk_sms','birthdays','curriculum','subject_selection','senior_subject_choice','academic_year_transition','promotions','transfers'];
+const STARTER = [...CORE_SCHOOL_FEATURES];
+const GROWTH = [...CORE_SCHOOL_FEATURES];
+const ENTERPRISE = [...CORE_SCHOOL_FEATURES];
 const ALL_FEATURES = [...new Set([...ENTERPRISE, '*', 'ai_tutor', 'ai_tutor_limited', 'ai_tutor_extended', 'live_child_analytics', 'advanced_alerts', 'child_recommendations', 'advanced_report_cards'])];
 const DEFAULT_PLANS = {
-  starter: { code:'starter', name:'Starter', minStudents:50, maxStudents:400, features:STARTER, branding:'shule_ai_default' },
-  growth: { code:'growth', name:'Growth', minStudents:401, maxStudents:500, features:GROWTH, branding:'school_custom_allowed' },
-  enterprise: { code:'enterprise', name:'Enterprise', minStudents:501, maxStudents:null, features:ENTERPRISE, branding:'school_custom_allowed' }
+  starter: { code:'starter', name:'Starter', minStudents:1, maxStudents:400, features:STARTER, branding:'school_custom_allowed', supportLevel:'standard' },
+  growth: { code:'growth', name:'Growth', minStudents:401, maxStudents:800, features:GROWTH, branding:'school_custom_allowed', supportLevel:'priority' },
+  enterprise: { code:'enterprise', name:'Enterprise', minStudents:801, maxStudents:null, features:ENTERPRISE, branding:'school_custom_allowed', supportLevel:'dedicated' }
 };
 function normalizeFeatures(plan) {
   if (!plan) return [];
@@ -35,7 +36,7 @@ async function getPlanDefinitions() {
   const rawPlans = Array.isArray(settings.schoolPlans) ? settings.schoolPlans : [];
   const map = new Map(Object.entries(DEFAULT_PLANS));
   rawPlans.map(normalizeSchoolPlan).filter(p => ['starter','growth','enterprise'].includes(p.code)).forEach(p => map.set(p.code, p));
-  return Object.fromEntries([...map.entries()].map(([k,v]) => [k,{...v,features:normalizeFeatures(v).length?normalizeFeatures(v):(DEFAULT_PLANS[k]?.features||[])}]));
+  return Object.fromEntries([...map.entries()].map(([k,v]) => [k,{...v,...DEFAULT_PLANS[k],features:CORE_SCHOOL_FEATURES}]));
 }
 async function getSchool(schoolCode) {
   if (!schoolCode) return null;
@@ -57,7 +58,8 @@ async function getSchoolFeatures(schoolCode) {
   const defs = await getPlanDefinitions();
   const school = await getSchool(schoolCode);
   const access = school ? computeSchoolAccess(school) : { planCode:'starter', plan:'starter', accessStatus:'active', fullAccess:false, brandingAllowed:false };
-  if (school && (access.fullAccess || hasFullOverride(school))) {
+  const specialFullAccess = !!school && (hasFullOverride(school) || ['pilot_demo_free_full_access','trial'].includes(access.accessMode));
+  if (specialFullAccess) {
     const set = new Set(ALL_FEATURES);
     return { planCode:'enterprise', plan:{...defs.enterprise, code:'enterprise', name:'Enterprise / Full Access', override:true, fullAccess:true, features:ALL_FEATURES}, features:set, featureList:[...set], override:true, fullAccess:true, accessMode:access.accessMode, access, brandingAllowed:true };
   }
@@ -66,9 +68,12 @@ async function getSchoolFeatures(schoolCode) {
     return { planCode:access.planCode || 'starter', plan:defs.starter, features:set, featureList:[...set], fullAccess:false, accessMode:access.accessMode, access, brandingAllowed:false };
   }
   const code = normalizePlanCode(access.planCode || await getSchoolPlanCode(schoolCode));
-  const plan = defs[code] || defs.starter;
-  const set = new Set(normalizeFeatures(plan));
-  return { planCode:code, plan, features:set, featureList:[...set], fullAccess:false, accessMode:access.accessMode, access, brandingAllowed: access.brandingAllowed || set.has('school_branding') };
+  const configured = defs[code] || defs.starter;
+  // Plans determine capacity, billing, support and allowances only. Core school features
+  // are identical for Starter, Growth and Enterprise.
+  const plan = { ...configured, features: CORE_SCHOOL_FEATURES };
+  const set = new Set(CORE_SCHOOL_FEATURES);
+  return { planCode:code, plan, features:set, featureList:[...set], fullAccess:true, accessMode:access.accessMode, access, brandingAllowed:true };
 }
 async function hasFeature(schoolCode, feature) {
   const key = String(feature || '').trim();
@@ -89,4 +94,4 @@ async function getSchoolStructure(schoolCode) {
   const school = await getSchool(schoolCode);
   return { school, seniorEnabled: schoolHasSeniorEnabled(school) };
 }
-module.exports = { DEFAULT_PLANS, FEATURE_KEYS, ALL_FEATURES, STARTER, GROWTH, ENTERPRISE, getPlanDefinitions, getSchoolPlanCode, getSchoolFeatures, hasFeature, getSchoolStructure, schoolHasSeniorEnabled, normalizePlanCode };
+module.exports = { DEFAULT_PLANS, FEATURE_KEYS, CORE_SCHOOL_FEATURES, ALL_FEATURES, STARTER, GROWTH, ENTERPRISE, getPlanDefinitions, getSchoolPlanCode, getSchoolFeatures, hasFeature, getSchoolStructure, schoolHasSeniorEnabled, normalizePlanCode };

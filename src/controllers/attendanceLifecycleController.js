@@ -1,9 +1,10 @@
 const { Op } = require('sequelize');
 const {
   sequelize, AttendanceSession, AttendanceCorrection, Attendance, Class, Student,
-  User, Teacher, Parent, StudentParent, ClassRelease, Alert, AuditLog
+  User, Teacher, Parent, StudentParent, ClassRelease, AuditLog
 } = require('../models');
 const realtime = require('../services/realtimeService');
+const { createAlert } = require('../services/notificationService');
 
 const VALID_STATUSES = new Set(['present','absent','late','holiday','sick']);
 const RELEASE_TYPES = new Set(['normal','early','delayed','transport_delayed','custom']);
@@ -210,7 +211,7 @@ exports.releaseClass = async (req, res) => {
 
     const release = await ClassRelease.create({ schoolCode:schoolCode(req), classId:cls.id, date:session.date, updateNumber, releaseType, message, channel, releasedBy:req.user.id, releasedAt:now, parentTargetCount:parentUserIds.length, successCount:parentUserIds.length, failedCount:0, metadata:{ sessionId:session.id, isUpdate:updateNumber > 1, smsStatus:channel === 'platform' ? 'not_requested' : 'queued' } }, { transaction });
     for (const userId of parentUserIds) {
-      await Alert.create({ userId, role:'parent', type:'attendance', severity:releaseType.includes('delayed') ? 'warning' : 'info', title:updateNumber > 1 ? `${cls.name} release update` : `${cls.name} released`, message, categoryLabel:'Class release', sourceType:'class_release', sourceLabel:'School release notice', targetRole:'parent', targetUserId:userId, classId:cls.id, priority:releaseType.includes('delayed') ? 'high' : 'normal', dedupeKey:`class-release:${cls.id}:${session.date}:${updateNumber}`, data:{ releaseId:release.id, classId:cls.id, date:session.date, updateNumber, channel } }, { transaction, hooks:false });
+      await createAlert({ userId, role:'parent', type:'attendance', severity:releaseType.includes('delayed') ? 'warning' : 'info', title:updateNumber > 1 ? `${cls.name} release update` : `${cls.name} released`, message, categoryLabel:'Class release', sourceType:'class_release', sourceLabel:'School release notice', classId:cls.id, dedupeKey:`class-release:${cls.id}:${session.date}:${updateNumber}:${userId}`, data:{ schoolCode:schoolCode(req), releaseId:release.id, classId:cls.id, date:session.date, updateNumber, channel }, transaction });
     }
     await realtime.emit({ type:'class:released', schoolCode:schoolCode(req), audience:{ school:false, userIds:parentUserIds, classIds:[cls.id], roles:['admin'] }, entityType:'ClassRelease', entityId:release.id, version:updateNumber, data:{ releaseId:release.id, sessionId:session.id, classId:cls.id, className:cls.name, date:session.date, releaseType, message, channel, updateNumber, releasedAt:now }, transaction });
     await transaction.commit();

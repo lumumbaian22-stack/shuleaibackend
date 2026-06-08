@@ -2,10 +2,11 @@
 
 const { Op } = require('sequelize');
 const {
-  sequelize, Student, User, Parent, Class, School, Teacher, TeacherSubjectAssignment, Alert
+  sequelize, Student, User, Parent, Class, School, Teacher, TeacherSubjectAssignment
 } = require('../models');
 const curriculumEngine = require('../services/curriculumStructureEngine');
 const { listStudentSubjectSelections, replaceStudentSubjectSelections } = require('../services/studentSubjectSelectionService');
+const { createAlert } = require('../services/notificationService');
 
 function schoolCodeOf(user) { return user?.schoolCode || user?.schoolId || null; }
 function norm(v) { return String(v || '').trim().toLowerCase(); }
@@ -80,7 +81,7 @@ async function notify({ schoolCode, student, classItem, selections, actor, sourc
       }
     }
     for (const user of recipients.values()) {
-      const dedupeKey = [schoolCode, user.id, 'subject-selection', student.id, Date.now()].join(':');
+      const dedupeKey = [schoolCode, user.id, 'subject-selection', student.id, subjects.slice().sort().join('|')].join(':');
       const payload = {
         userId: user.id,
         role: user.role,
@@ -98,8 +99,7 @@ async function notify({ schoolCode, student, classItem, selections, actor, sourc
         actionLabel: 'Review choices',
         data: { studentId: student.id, classId: classItem?.id || null, source, subjects, actorUserId: actor?.id || null }
       };
-      const alert = await Alert.create(payload).catch(() => null);
-      if (alert && global.io) global.io.to(`user-${user.id}`).emit('alert', alert);
+      await createAlert({ ...payload, data:{ ...payload.data, schoolCode } });
     }
   } catch (err) {
     console.warn('Subject-selection notification failed:', err.message);

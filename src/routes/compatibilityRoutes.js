@@ -4,6 +4,7 @@ const { Op } = require('sequelize');
 const { protect, authorize } = require('../middleware/auth');
 const { User, Teacher, Student, Parent, Class, AcademicRecord, Attendance, Payment, Alert, SchoolCalendar, Timetable, School, ReportSnapshot } = require('../models');
 const tutorController = require('../controllers/tutorController');
+const { createBulkAlerts } = require('../services/notificationService');
 
 const router = express.Router();
 function ok(res, data = null, message = 'OK') { return res.json({ success: true, message, data }); }
@@ -61,7 +62,15 @@ router.get('/announcements', async (req,res)=>{
   try { const where={}; if(req.user.role !== 'super_admin') where.schoolCode = schoolCode(req); const rows = await Alert.findAll({ where, limit:100, order:[['createdAt','DESC']] }).catch(()=>[]); return ok(res, rows); } catch(e){ return fail(res,500,e.message); }
 });
 router.post('/announcements', authorize('admin','super_admin'), async (req,res)=>{
-  try { const row = await Alert.create({ title:req.body.title || 'Announcement', message:req.body.message || '', type:'announcement', role:req.body.audience || 'all', schoolCode:schoolCode(req) }); return ok(res,row,'Announcement created'); } catch(e){ return fail(res,500,e.message); }
+  try {
+    const code=schoolCode(req); const audience=String(req.body.audience||'all').toLowerCase();
+    const where=req.user.role==='super_admin'&&!code?{isActive:true}:{schoolCode:code,isActive:true};
+    if(audience!=='all'&&['admin','teacher','parent','student'].includes(audience)) where.role=audience;
+    const users=await User.findAll({where,attributes:['id','role','schoolCode'],limit:5000});
+    const title=req.body.title||'Announcement', message=req.body.message||'';
+    const result=await createBulkAlerts(users.map(u=>({userId:u.id,role:u.role,type:'announcement',severity:'info',title,message,sourceType:'announcement',sourceLabel:'School announcement',dedupeKey:`compat-announcement:${code||'platform'}:${u.id}:${title}:${message}`,data:{schoolCode:u.schoolCode||code,scope:'user',createdBy:req.user.id}})));
+    return ok(res,{count:result.count},'Announcement created');
+  } catch(e){ return fail(res,500,e.message); }
 });
 router.get('/academic-calendar', async (req,res)=>{
   try { const rows = SchoolCalendar ? await SchoolCalendar.findAll({ where:{ schoolCode:schoolCode(req) }, limit:200, order:[['startDate','ASC']] }).catch(()=>[]) : []; return ok(res, rows); } catch(e){ return fail(res,500,e.message); }

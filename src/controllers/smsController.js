@@ -51,7 +51,7 @@ exports.sendSms = async (req, res) => {
     const schoolCode = req.user.schoolCode;
     if (!schoolCode) return res.status(400).json({ success:false, message:'School scope is required.' });
     const features = await getSchoolFeatures(schoolCode);
-    if (!(features.fullAccess || features.features.has('bulk_sms'))) return res.status(403).json({ success:false, code:'FEATURE_NOT_AVAILABLE_FOR_PLAN', message:'Bulk SMS is only available on Enterprise or full access.' });
+    if (!(features.fullAccess || features.features.has('bulk_sms'))) return res.status(403).json({ success:false, code:'FEATURE_NOT_AVAILABLE_FOR_PLAN', message:'Bulk SMS is included for every active school. This account is currently suspended or unavailable.' });
     const cfg = await platformSms();
     if (!(cfg.enabled && cfg.provider && cfg.apiKey)) return res.status(400).json({ success:false, message:'SMS provider not configured by Super Admin.' });
     const message = String(req.body.message || '').trim();

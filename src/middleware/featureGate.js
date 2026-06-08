@@ -12,7 +12,7 @@ function requireFeature(featureKey) {
       }
       if (req.schoolAccess?.fullAccess || req.schoolAccess?.accessMode === 'pilot_demo_free_full_access') return next();
       const allowed = await features.hasFeature(schoolCode, featureKey);
-      if (!allowed) return res.status(403).json({ success:false, code:'FEATURE_NOT_AVAILABLE_FOR_PLAN', feature:featureKey, message:'Feature is not available for this school plan.' });
+      if (!allowed) return res.status(403).json({ success:false, code:'SCHOOL_ACCESS_UNAVAILABLE', feature:featureKey, message:'This module is temporarily unavailable because the school account is suspended or the school context is invalid.' });
       return next();
     } catch (error) {
       return res.status(500).json({ success:false, message:error.message });

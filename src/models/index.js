@@ -398,9 +398,9 @@ function modelSchoolCode(instance) {
 const CANONICAL_MODEL_EVENTS = {
   Payment: 'payment:recorded', Fee: 'fee_balance:updated', FeeStructure: 'fee_structure:updated',
   AcademicRecord: 'marks:updated', ReportSnapshot: 'report_card:updated', Attendance: 'attendance:updated',
-  HomeTask: 'homework:assigned', HomeTaskAssignment: 'homework:updated', Alert: 'alert:created',
+  HomeTask: 'homework:assigned', HomeTaskAssignment: 'homework:updated',
   ApprovalRequest: 'approval:updated', Student: 'student:updated', Teacher: 'teacher:updated',
-  Parent: 'parent:updated', Class: 'class:updated', Timetable: 'timetable:published', Message: 'chat:message_created'
+  Parent: 'parent:updated', Class: 'class:updated', Message: 'chat:message_created'
 };
 async function emitModelChange(modelName, action, instance, options = {}) {
   try {
@@ -431,8 +431,8 @@ function attachRealtimeHooks(model, modelName) {
 [
   [Payment,'Payment'],[Fee,'Fee'],[FeeStructure,'FeeStructure'],[AcademicRecord,'AcademicRecord'],
   [ReportSnapshot,'ReportSnapshot'],[Attendance,'Attendance'],[HomeTask,'HomeTask'],
-  [HomeTaskAssignment,'HomeTaskAssignment'],[Alert,'Alert'],[ApprovalRequest,'ApprovalRequest'],
-  [Student,'Student'],[Teacher,'Teacher'],[Parent,'Parent'],[Class,'Class'],[Timetable,'Timetable'],[Message,'Message']
+  [HomeTaskAssignment,'HomeTaskAssignment'],[ApprovalRequest,'ApprovalRequest'],
+  [Student,'Student'],[Teacher,'Teacher'],[Parent,'Parent'],[Class,'Class'],[Message,'Message']
 ].forEach(([model,name]) => attachRealtimeHooks(model,name));
 
 

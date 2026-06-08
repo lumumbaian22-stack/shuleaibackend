@@ -1,6 +1,7 @@
-const { SchoolCalendar, User, Alert, Student } = require('../models');
+const { SchoolCalendar, User, Student } = require('../models');
 const { Op } = require('sequelize');
 const { getAlertsForUser, alertToCalendarEvent } = require('../services/alertReceiverEngine');
+const { createAlert } = require('../services/notificationService');
 
 function getSchoolId(req) {
   return req.user?.schoolCode || req.body?.schoolId || req.query?.schoolId || 'default';
@@ -76,10 +77,8 @@ async function createCalendarBroadcastAlerts({ event, schoolId, actor }) {
         actionLabel: 'View Calendar',
         data: { eventId: event.id, eventDate: event.date || event.startDate, audience, createdBy: actor?.id || null }
       };
-      const existing = await Alert.findOne({ where: { userId: user.id, dedupeKey } }).catch(() => null);
-      const alert = existing ? await existing.update({ ...payload, isRead: false, readAt: null }) : await Alert.create(payload);
-      created.push(alert);
-      if (global.io) global.io.to(`user-${user.id}`).emit('alert', alert);
+      const alert = await createAlert({ ...payload, data:{ ...payload.data, schoolCode:schoolId } });
+      if (alert) created.push(alert);
     }
     return created.length;
   } catch (e) {

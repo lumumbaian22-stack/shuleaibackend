@@ -4,6 +4,7 @@ const daraja = require('../services/darajaService');
 const subscriptionController = require('./subscriptionController');
 const realtimeSync = require('../services/realtimeSyncService');
 const financeLedger = require('../services/financeLedgerService');
+const { CORE_SCHOOL_FEATURES } = require('../services/schoolFeatureService');
 
 function ref(prefix){ return `${prefix}-${Date.now()}-${Math.floor(Math.random()*100000).toString().padStart(5,'0')}`; }
 function cleanAmount(v){ const n = Math.round(Number(v)); if(!Number.isFinite(n) || n < 1) throw new Error('Payment amount must be at least KES 1'); return n; }
@@ -71,7 +72,7 @@ async function getPlatformPaymentConfig() {
     parentSubscriptionsEnabled: true,
     schoolSubscriptionsEnabled: true,
     parentPlans: [{ code:'child_basic', name:'Basic', amount:100, days:30, features:['Report cards','Attendance','Progress'] }, { code:'child_premium', name:'Premium', amount:250, days:30, features:['Everything in Basic','AI Tutor: 6 messages/day','Child timetable if school has timetable'] }, { code:'child_ultimate', name:'Ultimate', amount:500, days:30, features:['Everything in Premium','Extended AI Tutor','Live child analytics','Stronger alerts','Child recommendations'] }],
-    schoolPlans: [{ code:'school_growth', name:'School Growth', amount:100000, days:30 }],
+    schoolPlans: [{ code:'school_starter', name:'Starter', amount:5000, days:30, minStudents:1, maxStudents:400, features:['Complete Shule AI school platform'] }, { code:'school_growth', name:'Growth', amount:10000, days:30, minStudents:401, maxStudents:800, features:['Complete Shule AI school platform'] }, { code:'school_enterprise', name:'Enterprise', amount:30000, days:30, minStudents:801, maxStudents:null, features:['Complete Shule AI school platform'] }],
     darajaCredentials: {}
   };
   const [row] = await Settings.findOrCreate({
@@ -156,9 +157,11 @@ async function syncPlatformSubscriptionPlans(value) {
       yearlyPriceKes: raw.yearlyPriceKes ?? raw.yearly ?? (monthly ? monthly * 12 : null),
       setupFeeMinKes: raw.setupFeeMinKes ?? raw.setupMin ?? null,
       setupFeeMaxKes: raw.setupFeeMaxKes ?? raw.setupMax ?? null,
-      features: Array.isArray(raw.features) ? raw.features : [],
-      lockedFeatures: Array.isArray(raw.lockedFeatures) ? raw.lockedFeatures : [],
-      limits: raw.limits && typeof raw.limits === 'object' ? raw.limits : { days: Number(raw.days || 30) || 30 },
+      features: ownerType === 'school' ? [...CORE_SCHOOL_FEATURES] : (Array.isArray(raw.features) ? raw.features : []),
+      lockedFeatures: ownerType === 'school' ? [] : (Array.isArray(raw.lockedFeatures) ? raw.lockedFeatures : []),
+      limits: ownerType === 'school'
+        ? { ...(raw.limits && typeof raw.limits === 'object' ? raw.limits : {}), days:Number(raw.days || raw.limits?.days || 30) || 30, minStudents:Number(raw.minStudents ?? raw.limits?.minStudents ?? (name==='starter'?1:name==='growth'?401:801)), maxStudents:raw.maxStudents ?? raw.limits?.maxStudents ?? (name==='starter'?400:name==='growth'?800:null), pricingBasis:'active_students' }
+        : (raw.limits && typeof raw.limits === 'object' ? raw.limits : { days: Number(raw.days || 30) || 30 }),
       sortOrder: Number(raw.sortOrder ?? index ?? 0),
       isActive: raw.isActive !== false
     };

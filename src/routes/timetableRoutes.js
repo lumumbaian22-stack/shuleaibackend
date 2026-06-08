@@ -13,7 +13,8 @@ router.put('/:id', protect, authorize('admin'), timetableCtrl.manualUpdate);
 router.post('/:id/publish', protect, authorize('admin'), timetableCtrl.publish);
 router.get('/student/me', protect, authorize('student'), timetableCtrl.getForStudentMe);
 router.get('/parent/child/:studentId', protect, authorize('parent'), timetableCtrl.getForParentChild);
-router.get('/class/:classId', protect, timetableCtrl.getForClass);
-router.get('/teacher/:teacherId', protect, timetableCtrl.getForTeacher);
+router.get('/class/:classId', protect, authorize('admin'), timetableCtrl.getForClass);
+router.get('/teacher/me', protect, authorize('teacher'), timetableCtrl.getForTeacher);
+router.get('/teacher/:teacherId', protect, authorize('admin'), timetableCtrl.getForTeacher);
 
 module.exports = router;

@@ -1,4 +1,5 @@
 const { Parent, Student, School, Subscription, FeatureLock } = require('../models');
+const schoolFeatures = require('../services/schoolFeatureService');
 
 function isActive(subscription) {
   return subscription && subscription.status === 'active' && subscription.endDate && new Date(subscription.endDate) > new Date();
@@ -50,14 +51,16 @@ function requireFeature(featureKey, opts = {}) {
         ? await getSchoolSubscription(req.user)
         : await getChildSubscriptionForUser(req.user, req.params.studentId || req.body.studentId || req.query.studentId);
 
+      if (ownerType === 'school') {
+        const allowed = await schoolFeatures.hasFeature(req.user.schoolCode, featureKey);
+        if (allowed) return next();
+        return res.status(403).json({ success:false, code:'SCHOOL_ACCESS_UNAVAILABLE', message:'This module is temporarily unavailable because the school account is suspended or the school context is invalid.', feature:featureKey });
+      }
+
       const active = isActive(subscription);
       const features = subscription?.features || [];
       const allowed = active && (features.includes(featureKey) || features.includes('*') || !opts.strictFeatureList);
       if (allowed) return next();
-
-      if (ownerType === 'school' && opts.graceful !== false) {
-        return res.status(402).json({ success: false, code: 'SCHOOL_PREMIUM_LOCKED', message: 'School subscription expired or this premium feature is not included in the current plan.', feature: featureKey, gracefulMode: true });
-      }
       return res.status(402).json({ success: false, code: 'SUBSCRIPTION_REQUIRED', message: 'Subscription required for this feature.', feature: featureKey });
     } catch (error) {
       next(error);

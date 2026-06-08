@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
-const { sequelize, Payment, Fee, Student, Parent, User, Class, Alert, AuditLog } = require('../models');
+const { sequelize, Payment, Fee, Student, Parent, User, Class, AuditLog } = require('../models');
 const realtimeSync = require('./realtimeSyncService');
+const { createAlert } = require('./notificationService');
 
 const APPROVED = new Set(['completed', 'success', 'successful', 'approved', 'paid']);
 const PENDING = new Set(['pending', 'processing', 'pending_verification']);
@@ -77,13 +78,8 @@ async function writeAudit({ schoolCode, user, action, entityType = 'Payment', en
 }
 
 async function createAlertForUser({ userId, role, title, message, severity = 'info', data = {}, actionUrl = null, transaction }) {
-  if (!Alert || !userId) return null;
-  try {
-    return Alert.create({ userId, role, type: 'fee', severity, title, message, data, actionUrl }, { transaction });
-  } catch (e) {
-    console.error('[FinanceLedger] alert failed:', e.message);
-    return null;
-  }
+  if (!userId) return null;
+  return createAlert({ userId, role, type:'fee', severity, title, message, data, actionUrl, sourceType:'finance', sourceLabel:'School finance', transaction });
 }
 
 async function createFinanceAlerts({ schoolCode, student, parentId, payment, action, transaction }) {
