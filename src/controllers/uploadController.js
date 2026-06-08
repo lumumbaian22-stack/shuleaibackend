@@ -9,7 +9,7 @@ function safeUploadPath(originalName) {
   if (!fs.existsSync(tmpRoot)) fs.mkdirSync(tmpRoot, { recursive: true });
   return path.join(tmpRoot, `${Date.now()}-${base}`);
 }
-function safeUnlink(filePath) { try { if (filePath && fs.existsSync(filePath)) safeUnlink(filePath); } catch (_) {} }
+function safeUnlink(filePath) { try { if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (_) {} }
 
 // @desc    Upload students CSV (creates students with random ELIMUIDs)
 // @route   POST /api/upload/students
@@ -24,7 +24,7 @@ exports.uploadStudents = async (req, res) => {
     const filePath = safeUploadPath(file.name);
     await file.mv(filePath);
 
-    const processor = new CSVProcessor(req.user.schoolCode, req.user.id);
+    const processor = new CSVProcessor(req.user.schoolCode, req.user.id, req.user.role);
     const result = await processor.processStudentUpload(filePath);
 
     safeUnlink(filePath);
@@ -64,7 +64,7 @@ exports.uploadMarks = async (req, res) => {
     const filePath = safeUploadPath(file.name);
     await file.mv(filePath);
 
-    const processor = new CSVProcessor(req.user.schoolCode, req.user.id);
+    const processor = new CSVProcessor(req.user.schoolCode, req.user.id, req.user.role);
     const result = await processor.processMarksUpload(filePath);
 
     safeUnlink(filePath);
@@ -103,7 +103,7 @@ exports.uploadAttendance = async (req, res) => {
     const filePath = safeUploadPath(file.name);
     await file.mv(filePath);
 
-    const processor = new CSVProcessor(req.user.schoolCode, req.user.id);
+    const processor = new CSVProcessor(req.user.schoolCode, req.user.id, req.user.role);
     const result = await processor.processAttendanceUpload(filePath);
 
     safeUnlink(filePath);

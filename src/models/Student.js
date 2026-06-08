@@ -18,6 +18,8 @@ module.exports = (sequelize, DataTypes) => {
     curriculum: { type: DataTypes.STRING, allowNull: true, defaultValue: 'cbc' },
     admissionNumber: { type: DataTypes.STRING, allowNull: true },
     dateOfBirth: DataTypes.DATE,
+    dateOfBirthVerified: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    birthdayPrivacy: { type: DataTypes.JSONB, allowNull: false, defaultValue: { enabled:true, notifyParent:true, notifyTeacher:true, notifyStudent:true, announceToClass:false } },
     age: { type: DataTypes.VIRTUAL, get() { return calculateStudentAge(this.getDataValue('dateOfBirth')); } },
     ageDisplay: { type: DataTypes.VIRTUAL, get() { return calculateStudentAge(this.getDataValue('dateOfBirth'))?.compact || null; } },
     gender: DataTypes.ENUM('male', 'female', 'other'),
