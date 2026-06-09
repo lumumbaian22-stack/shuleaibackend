@@ -19,7 +19,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false
     },
     role: {
-      type: DataTypes.ENUM('super_admin', 'admin', 'teacher', 'parent', 'student'),
+      type: DataTypes.ENUM('super_admin', 'admin', 'finance_officer', 'teacher', 'parent', 'student'),
       allowNull: false
     },
     phone: DataTypes.STRING,
@@ -28,6 +28,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     profileImage: DataTypes.TEXT,
+    profilePicture: DataTypes.TEXT,
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true
@@ -80,7 +81,8 @@ module.exports = (sequelize, DataTypes) => {
       email: this.email,
       role: this.role,
       phone: this.phone,
-      profileImage: this.preferences?.profileImageDataUrl || this.profileImage,
+      profileImage: this.preferences?.profileImageDataUrl || this.profileImage || this.profilePicture,
+      profilePicture: this.preferences?.profileImageDataUrl || this.profilePicture || this.profileImage,
       preferences: this.preferences || {},
       signature: this.preferences?.signatureDataUrl || this.preferences?.signatureUrl || this.preferences?.signatureAbsoluteUrl || null,
       signatureUrl: this.preferences?.signatureDataUrl || this.preferences?.signatureUrl || this.preferences?.signatureAbsoluteUrl || null,

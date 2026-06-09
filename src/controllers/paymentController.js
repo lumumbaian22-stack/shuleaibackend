@@ -1155,3 +1155,16 @@ exports.getParentSchoolPaymentSettings = async (req, res) => {
     }});
   } catch (error) { res.status(500).json({ success:false, message:error.message }); }
 };
+
+
+// Finance Officer/Admin read context used by the dedicated Finance Workspace.
+exports.getFinanceContext = async (req, res) => {
+  try {
+    const code = req.user.schoolCode;
+    const [classes, students] = await Promise.all([
+      Class.findAll({ where:{ schoolCode:code }, attributes:['id','name','grade','stream'], order:[['name','ASC']] }),
+      Student.findAll({ include:[{ model:User, required:true, where:{ schoolCode:code }, attributes:['id','name','profileImage','profilePicture'] }], attributes:['id','userId','classId','grade','elimuid','admissionNumber'], order:[['id','ASC']] })
+    ]);
+    res.json({ success:true, data:{ classes, students } });
+  } catch (error) { res.status(500).json({ success:false, message:error.message }); }
+};

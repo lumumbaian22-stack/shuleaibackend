@@ -2,6 +2,7 @@ const { Parent, Teacher, User, Message, Student, Class, sequelize } = require('.
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 const ownership = require('../services/parentOwnershipService');
+const realtime = require('../services/realtimeService');
 
 function meta(message) {
   const raw = message?.toJSON ? message.toJSON() : (message || {});
@@ -180,7 +181,9 @@ exports.sendMessage = async (req, res) => {
       data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [recipientId], conversationType, conversationKey, studentId: student.id, classId, messageId: newMessage.id }
     });
 
-    res.status(201).json({ success: true, message: 'Message sent successfully', data: { ...newMessage.toJSON(), conversationId:conversationKey, conversationKey, recipient: recipientName, recipientType: recipientRole, requestedRecipientType: recipientType, recipientId, sentAt: newMessage.createdAt, Sender:{ id:req.user.id, name:req.user.name, role:'parent' } } });
+    const canonicalMessage = { ...newMessage.toJSON(), messageId:newMessage.id, conversationId:conversationKey, conversationKey, senderId:req.user.id, senderRole:'parent', senderName:req.user.name, receiverId:recipientId, receiverRole:recipientRole, body:cleanMessage, content:cleanMessage, attachment:attachmentMeta, clientMessageId:clientMessageId?String(clientMessageId):null, createdAt:newMessage.createdAt, deliveryStatus:'sent', metadata:{ ...newMessage.metadata, conversationKey, conversationType, studentId:student.id, classId } };
+    await realtime.emit({ type:'chat:message_created', schoolCode:req.user.schoolCode, audience:{ school:false, userIds:[req.user.id,recipientId], conversations:[conversationKey] }, entityType:'Message', entityId:newMessage.id, version:1, data:canonicalMessage }).catch(error=>console.error('[parent chat realtime]',error.message));
+    res.status(201).json({ success: true, message: 'Message sent successfully', data: { ...canonicalMessage, recipient: recipientName, recipientType: recipientRole, requestedRecipientType: recipientType, recipientId, sentAt: newMessage.createdAt, Sender:{ id:req.user.id, name:req.user.name, role:'parent' } } });
   } catch (error) {
     console.error('Send parent message error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -264,7 +267,10 @@ exports.replyToParent = async (req, res) => {
       metadata: { ...originalMeta, schoolCode: req.user.schoolCode, inReplyTo: originalMessageId || null, senderRole: req.user.role, senderName:req.user.name, clientMessageId:clientMessageId?String(clientMessageId):null, type: `${req.user.role}_reply` }
     });
     await createAlert({ userId: parentId, role: 'parent', type: 'message', severity: 'info', title: `Reply from ${req.user.name}`, message: cleanMessage.substring(0, 100), data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: originalMeta.conversationType || 'parent_reply', conversationKey: originalMeta.conversationKey || null, messageId: reply.id } });
-    res.status(201).json({ success: true, message: 'Reply sent successfully', data: reply });
+    const conversationKey = originalMeta.conversationKey || buildConversationKey({ type:originalMeta.conversationType||'parent_reply', schoolCode:req.user.schoolCode, parentUserId:parentId, studentId:originalMeta.studentId, classId:originalMeta.classId, receiverId:req.user.id });
+    const canonicalReply = { ...reply.toJSON(), messageId:reply.id, conversationId:conversationKey, conversationKey, senderId:req.user.id, senderRole:req.user.role, senderName:req.user.name, receiverId:Number(parentId), receiverRole:'parent', body:cleanMessage, content:cleanMessage, clientMessageId:clientMessageId?String(clientMessageId):null, createdAt:reply.createdAt, deliveryStatus:'sent', metadata:{ ...reply.metadata, conversationKey } };
+    await realtime.emit({ type:'chat:message_created', schoolCode:req.user.schoolCode, audience:{ school:false, userIds:[req.user.id,Number(parentId)], conversations:[conversationKey] }, entityType:'Message', entityId:reply.id, version:1, data:canonicalReply }).catch(error=>console.error('[parent teacher reply realtime]',error.message));
+    res.status(201).json({ success: true, message: 'Reply sent successfully', data: canonicalReply });
   } catch (error) {
     console.error('Reply error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -317,7 +323,10 @@ exports.adminReplyToParent = async (req, res) => {
     const baseMeta = meta(baseMessage);
     const reply = await Message.create({ senderId: req.user.id, receiverId: parentId, content: cleanMessage, metadata: { ...baseMeta, schoolCode: req.user.schoolCode, inReplyTo: originalMessageId || baseMessage.id, type: 'admin_reply', adminUserId: req.user.id, senderRole:'admin', senderName:req.user.name, clientMessageId:clientMessageId?String(clientMessageId):null } });
     await createAlert({ userId: parentId, role: 'parent', type: 'message', severity: 'info', title: `Reply from ${req.user.name}`, message: cleanMessage.substring(0,100), data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: 'parent_admin', conversationKey: baseMeta.conversationKey, messageId: reply.id } });
-    res.status(201).json({ success: true, data: reply, message: 'Reply sent successfully' });
+    const conversationKey = baseMeta.conversationKey || buildConversationKey({ type:'parent_admin', schoolCode:req.user.schoolCode, parentUserId:parentId, studentId:baseMeta.studentId, classId:baseMeta.classId, receiverId:req.user.id });
+    const canonicalReply = { ...reply.toJSON(), messageId:reply.id, conversationId:conversationKey, conversationKey, senderId:req.user.id, senderRole:'admin', senderName:req.user.name, receiverId:Number(parentId), receiverRole:'parent', body:cleanMessage, content:cleanMessage, clientMessageId:clientMessageId?String(clientMessageId):null, createdAt:reply.createdAt, deliveryStatus:'sent', metadata:{ ...reply.metadata, conversationKey } };
+    await realtime.emit({ type:'chat:message_created', schoolCode:req.user.schoolCode, audience:{ school:false, userIds:[req.user.id,Number(parentId)], conversations:[conversationKey] }, entityType:'Message', entityId:reply.id, version:1, data:canonicalReply }).catch(error=>console.error('[parent admin reply realtime]',error.message));
+    res.status(201).json({ success: true, data: canonicalReply, message: 'Reply sent successfully' });
   } catch (error) {
     console.error('Admin reply to parent error:', error);
     res.status(500).json({ success: false, message: error.message });

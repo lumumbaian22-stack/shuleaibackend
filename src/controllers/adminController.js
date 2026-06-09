@@ -1279,3 +1279,50 @@ exports.submitSchoolPaymentConfirmation = async (req, res) => {
     res.status(201).json({ success:true, message:'Payment confirmation submitted for super admin review', data:rows[0] });
   } catch(error) { console.error('V102 payment confirmation error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
+
+
+// ============ FINANCE STAFF WORKSPACE ============
+exports.getFinanceStaff = async (req, res) => {
+  try {
+    const rows = await User.findAll({
+      where: { schoolCode: req.user.schoolCode, role: 'finance_officer' },
+      attributes: ['id','name','email','phone','isActive','lastLogin','createdAt'],
+      order: [['name','ASC']]
+    });
+    res.json({ success:true, data:rows });
+  } catch (error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.createFinanceStaff = async (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const phone = String(req.body.phone || '').trim() || null;
+    const password = String(req.body.password || '');
+    if (name.length < 2) return res.status(400).json({ success:false, message:'Finance staff name is required.' });
+    if (!email || !/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ success:false, message:'A valid finance staff email is required.' });
+    if (password.length < 8) return res.status(400).json({ success:false, message:'Temporary password must be at least 8 characters.' });
+    const exists = await User.findOne({ where:{ email } });
+    if (exists) return res.status(409).json({ success:false, message:'That email is already in use.' });
+    const user = await User.create({ name, email, phone, password, role:'finance_officer', schoolCode:req.user.schoolCode, isActive:true, firstLogin:true, mustChangePassword:true, passwordIssuedAt:new Date() });
+    await createAlert({ userId:user.id, role:'finance_officer', type:'system', severity:'info', title:'Finance Workspace Access', message:'Your school finance account is ready. Sign in and change the temporary password.', data:{ sourceLabel:'School Administration' } }).catch(()=>null);
+    res.status(201).json({ success:true, data:{ id:user.id,name:user.name,email:user.email,phone:user.phone,isActive:user.isActive } });
+  } catch (error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.updateFinanceStaff = async (req, res) => {
+  try {
+    const user = await User.findOne({ where:{ id:req.params.userId, schoolCode:req.user.schoolCode, role:'finance_officer' } });
+    if (!user) return res.status(404).json({ success:false, message:'Finance staff account not found.' });
+    const updates = {};
+    for (const key of ['name','phone','isActive']) if (req.body[key] !== undefined) updates[key] = req.body[key];
+    if (req.body.password) {
+      if (String(req.body.password).length < 8) return res.status(400).json({ success:false, message:'Password must be at least 8 characters.' });
+      updates.password = String(req.body.password);
+      updates.mustChangePassword = true;
+      updates.passwordIssuedAt = new Date();
+    }
+    await user.update(updates);
+    res.json({ success:true, data:{ id:user.id,name:user.name,email:user.email,phone:user.phone,isActive:user.isActive } });
+  } catch (error) { res.status(500).json({ success:false, message:error.message }); }
+};

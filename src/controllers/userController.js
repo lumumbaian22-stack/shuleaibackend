@@ -178,46 +178,64 @@ exports.deactivateAccount = async (req, res) => {
   }
 };
 
-// @desc    Upload profile picture (FIXED)
+// Persisted media helpers. Render's local filesystem is ephemeral, so a small
+// database-backed data URL is saved alongside the normal /uploads path.
+function validateImageUpload(file, { maxBytes, label }) {
+  const mime = String(file?.mimetype || file?.type || '').toLowerCase();
+  if (!/^image\/(png|jpe?g|webp|gif)$/.test(mime)) {
+    const err = new Error(`${label} must be a PNG, JPG, WEBP or GIF image.`);
+    err.status = 400; throw err;
+  }
+  const size = Number(file?.size || 0);
+  if (size && size > maxBytes) {
+    const err = new Error(`${label} is too large.`);
+    err.status = 400; throw err;
+  }
+  return mime;
+}
+
+async function saveUploadedImage(file, folder, fileName) {
+  const uploadDir = path.join(__dirname, '../../uploads', folder);
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+  const uploadPath = path.join(uploadDir, fileName);
+  if (file.mv) await file.mv(uploadPath);
+  else if (file.tempFilePath) await fs.promises.copyFile(file.tempFilePath, uploadPath);
+  else if (file.path) await fs.promises.copyFile(file.path, uploadPath);
+  else if (file.buffer) await fs.promises.writeFile(uploadPath, file.buffer);
+  else { const err = new Error('Unsupported upload object from server middleware.'); err.status = 400; throw err; }
+  return { uploadPath, relativeUrl: `/uploads/${folder}/${fileName}` };
+}
+
+async function makeDurableDataUrl(uploadPath, mime, maxBytes = 2 * 1024 * 1024) {
+  const buffer = await fs.promises.readFile(uploadPath);
+  if (buffer.length > maxBytes) return null;
+  return `data:${mime};base64,${buffer.toString('base64')}`;
+}
+
+// @desc    Upload profile picture
 exports.uploadProfilePicture = async (req, res) => {
   try {
     const file = req.files?.picture || req.files?.image || req.file;
-    if (!file) {
-      return res.status(400).json({ success: false, message: 'No image uploaded. Expected form field: picture' });
-    }
-
-    const originalName = file.name || file.originalname || 'profile.jpg';
-    const ext = path.extname(originalName) || '.jpg';
+    if (!file) return res.status(400).json({ success: false, message: 'No profile image uploaded.' });
+    const mime = validateImageUpload(file, { maxBytes: 5 * 1024 * 1024, label: 'Profile image' });
+    const ext = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : mime.includes('gif') ? '.gif' : '.jpg';
     const fileName = `profile_${req.user.id}_${Date.now()}${ext}`;
-    const uploadDir = path.join(__dirname, '../../uploads/profiles');
-
-    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-    const uploadPath = path.join(uploadDir, fileName);
-
-    if (file.mv) await file.mv(uploadPath);
-    else if (file.tempFilePath) await fs.promises.copyFile(file.tempFilePath, uploadPath);
-    else if (file.path) await fs.promises.copyFile(file.path, uploadPath);
-    else if (file.buffer) await fs.promises.writeFile(uploadPath, file.buffer);
-    else return res.status(400).json({ success: false, message: 'Unsupported upload object from server middleware' });
-
-    const relativeUrl = `/uploads/profiles/${fileName}`;
+    const { uploadPath, relativeUrl } = await saveUploadedImage(file, 'profiles', fileName);
+    const dataUrl = await makeDurableDataUrl(uploadPath, mime, 2 * 1024 * 1024);
     const absoluteUrl = `${req.protocol}://${req.get('host')}${relativeUrl}`;
-    let durableProfileImageDataUrl = null;
-    try {
-      const imageBuffer = await fs.promises.readFile(uploadPath);
-      const mime = file.mimetype || file.type || 'image/jpeg';
-      if (imageBuffer.length <= 1024 * 1024) durableProfileImageDataUrl = `data:${mime};base64,${imageBuffer.toString('base64')}`;
-    } catch (_) {}
-    const preferences = { ...(req.user.preferences || {}) };
-    if (durableProfileImageDataUrl) preferences.profileImageDataUrl = durableProfileImageDataUrl;
-
-    await req.user.update({ profileImage: absoluteUrl, preferences });
-
-    res.json({ success: true, data: { profileImage: durableProfileImageDataUrl || absoluteUrl, profileImagePath: relativeUrl, durable: !!durableProfileImageDataUrl } });
+    const preferences = {
+      ...(req.user.preferences || {}),
+      profileImageDataUrl: dataUrl,
+      profileImageFileUrl: relativeUrl,
+      profileImageUrl: absoluteUrl,
+      profileImageUpdatedAt: new Date().toISOString()
+    };
+    await req.user.update({ profileImage: relativeUrl, profilePicture: relativeUrl, preferences });
+    const displayUrl = dataUrl || absoluteUrl;
+    res.json({ success: true, data: { displayUrl, profileImage: displayUrl, fileUrl: relativeUrl, absoluteUrl, durable: !!dataUrl } });
   } catch (error) {
     console.error('Profile upload error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -235,50 +253,34 @@ exports.getAlerts = async (req, res) => {
 };
 
 exports.uploadSignature = async (req, res) => {
-    try {
-        if (!req.files || !req.files.signature) {
-            return res.status(400).json({ success: false, message: 'No signature file uploaded' });
-        }
-        const file = req.files.signature;
-        const originalName = file.name || 'signature.png';
-        const ext = path.extname(originalName) || '.png';
-        const mime = file.mimetype || file.type || 'image/png';
-        const safeMime = /^image\/(png|jpe?g|webp|gif)$/i.test(mime) ? mime : 'image/png';
-        const fileName = `sig_${req.user.id}_${Date.now()}${ext}`;
-        const uploadDir = path.join(__dirname, '../../uploads/signatures/');
-        if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-        const uploadPath = path.join(uploadDir, fileName);
-        if (file.mv) await file.mv(uploadPath);
-        else if (file.tempFilePath) await fs.promises.copyFile(file.tempFilePath, uploadPath);
-        else if (file.buffer) await fs.promises.writeFile(uploadPath, file.buffer);
-        else return res.status(400).json({ success: false, message: 'Unsupported signature upload object' });
-
-        const relativeUrl = `/uploads/signatures/${fileName}`;
-        let signatureDataUrl = null;
-        try {
-          const buffer = await fs.promises.readFile(uploadPath);
-          // Signatures are usually small. Keep a DB-backed copy so Render restarts/redeploys do not erase them.
-          if (buffer.length <= 1024 * 1024) signatureDataUrl = `data:${safeMime};base64,${buffer.toString('base64')}`;
-        } catch (_) {}
-
-        const durableSignature = signatureDataUrl || relativeUrl;
-        const preferences = {
-          ...(req.user.preferences || {}),
-          signatureUrl: durableSignature,
-          signatureDataUrl: signatureDataUrl || (req.user.preferences || {}).signatureDataUrl || null,
-          signatureFileUrl: relativeUrl,
-          signatureUpdatedAt: new Date().toISOString()
-        };
-        await req.user.update({ preferences });
-        if (req.user.role === 'teacher') {
-            await Teacher.update({ signature: durableSignature, signatureUrl: durableSignature }, { where: { userId: req.user.id } }).catch(() => null);
-        }
-        if (req.user.role === 'admin') {
-            await Admin.update({ signature: durableSignature, signatureUrl: durableSignature }, { where: { userId: req.user.id } }).catch(() => null);
-        }
-        res.json({ success: true, data: { signatureUrl: durableSignature, signature: durableSignature, signatureFileUrl: relativeUrl, durable: !!signatureDataUrl } });
-    } catch (error) {
-        console.error('Signature upload error:', error);
-        res.status(500).json({ success: false, message: error.message });
+  try {
+    const file = req.files?.signature || req.files?.image || req.file;
+    if (!file) return res.status(400).json({ success: false, message: 'No signature image uploaded.' });
+    const mime = validateImageUpload(file, { maxBytes: 2 * 1024 * 1024, label: 'Signature' });
+    const ext = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : mime.includes('gif') ? '.gif' : '.jpg';
+    const fileName = `signature_${req.user.id}_${Date.now()}${ext}`;
+    const { uploadPath, relativeUrl } = await saveUploadedImage(file, 'signatures', fileName);
+    const dataUrl = await makeDurableDataUrl(uploadPath, mime, 2 * 1024 * 1024);
+    const absoluteUrl = `${req.protocol}://${req.get('host')}${relativeUrl}`;
+    const durableSignature = dataUrl || absoluteUrl;
+    const preferences = {
+      ...(req.user.preferences || {}),
+      signatureDataUrl: dataUrl,
+      signatureUrl: durableSignature,
+      signatureFileUrl: relativeUrl,
+      signatureAbsoluteUrl: absoluteUrl,
+      signatureUpdatedAt: new Date().toISOString()
+    };
+    await req.user.update({ preferences });
+    if (req.user.role === 'teacher') {
+      await Teacher.update({ signature: durableSignature, signatureUrl: durableSignature }, { where: { userId: req.user.id } });
+    } else if (req.user.role === 'admin') {
+      const { Admin } = require('../models');
+      await Admin.update({ signature: durableSignature, signatureUrl: durableSignature }, { where: { userId: req.user.id } });
     }
+    res.json({ success: true, data: { displayUrl: durableSignature, signatureUrl: durableSignature, signature: durableSignature, fileUrl: relativeUrl, signatureFileUrl: relativeUrl, absoluteUrl, durable: !!dataUrl } });
+  } catch (error) {
+    console.error('Signature upload error:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message });
+  }
 };

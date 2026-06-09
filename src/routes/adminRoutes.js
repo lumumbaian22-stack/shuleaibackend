@@ -36,6 +36,11 @@ router.post('/classes/subject-assign-batch', adminController.batchAssignSubjects
 // Parent Management
 router.get('/parents', adminController.getAllParents);
 
+// Finance staff accounts
+router.get('/finance-staff', adminController.getFinanceStaff);
+router.post('/finance-staff', adminController.createFinanceStaff);
+router.patch('/finance-staff/:userId', adminController.updateFinanceStaff);
+
 // Teacher Approvals
 router.get('/approvals/pending', teacherSignupController.getPendingApprovals);
 router.post('/teachers/:teacherId/approve', validationRules.approveTeacher, validate, teacherSignupController.approveTeacher);

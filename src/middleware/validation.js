@@ -53,7 +53,7 @@ const validationRules = {
   login: [
     body('email').optional().isEmail().normalizeEmail(),
     body('password').notEmpty().withMessage('Password is required'),
-    body('role').isIn(['admin', 'teacher', 'parent'])
+    body('role').isIn(['admin', 'finance_officer', 'teacher', 'parent'])
   ],
   
   verifySchoolCode: [
