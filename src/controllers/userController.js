@@ -2,8 +2,7 @@
 const { User, Student, Teacher, Parent, AcademicRecord, Attendance, Alert } = require('../models');
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
-const path = require('path');
-const fs = require('fs');
+const { saveUploadAsset } = require('../services/mediaAssetService');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 const { getAlertsForUser } = require('../services/alertReceiverEngine');
 
@@ -178,66 +177,9 @@ exports.deactivateAccount = async (req, res) => {
   }
 };
 
-// Persisted media helpers. Render's local filesystem is ephemeral, so a small
-// database-backed data URL is saved alongside the normal /uploads path.
-function validateImageUpload(file, { maxBytes, label }) {
-  const mime = String(file?.mimetype || file?.type || '').toLowerCase();
-  if (!/^image\/(png|jpe?g|webp|gif)$/.test(mime)) {
-    const err = new Error(`${label} must be a PNG, JPG, WEBP or GIF image.`);
-    err.status = 400; throw err;
-  }
-  const size = Number(file?.size || 0);
-  if (size && size > maxBytes) {
-    const err = new Error(`${label} is too large.`);
-    err.status = 400; throw err;
-  }
-  return mime;
-}
-
-async function saveUploadedImage(file, folder, fileName) {
-  const uploadDir = path.join(__dirname, '../../uploads', folder);
-  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-  const uploadPath = path.join(uploadDir, fileName);
-  if (file.mv) await file.mv(uploadPath);
-  else if (file.tempFilePath) await fs.promises.copyFile(file.tempFilePath, uploadPath);
-  else if (file.path) await fs.promises.copyFile(file.path, uploadPath);
-  else if (file.buffer) await fs.promises.writeFile(uploadPath, file.buffer);
-  else { const err = new Error('Unsupported upload object from server middleware.'); err.status = 400; throw err; }
-  return { uploadPath, relativeUrl: `/uploads/${folder}/${fileName}` };
-}
-
-async function makeDurableDataUrl(uploadPath, mime, maxBytes = 2 * 1024 * 1024) {
-  const buffer = await fs.promises.readFile(uploadPath);
-  if (buffer.length > maxBytes) return null;
-  return `data:${mime};base64,${buffer.toString('base64')}`;
-}
-
-// @desc    Upload profile picture
-exports.uploadProfilePicture = async (req, res) => {
-  try {
-    const file = req.files?.picture || req.files?.image || req.file;
-    if (!file) return res.status(400).json({ success: false, message: 'No profile image uploaded.' });
-    const mime = validateImageUpload(file, { maxBytes: 5 * 1024 * 1024, label: 'Profile image' });
-    const ext = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : mime.includes('gif') ? '.gif' : '.jpg';
-    const fileName = `profile_${req.user.id}_${Date.now()}${ext}`;
-    const { uploadPath, relativeUrl } = await saveUploadedImage(file, 'profiles', fileName);
-    const dataUrl = await makeDurableDataUrl(uploadPath, mime, 2 * 1024 * 1024);
-    const absoluteUrl = `${req.protocol}://${req.get('host')}${relativeUrl}`;
-    const preferences = {
-      ...(req.user.preferences || {}),
-      profileImageDataUrl: dataUrl,
-      profileImageFileUrl: relativeUrl,
-      profileImageUrl: absoluteUrl,
-      profileImageUpdatedAt: new Date().toISOString()
-    };
-    await req.user.update({ profileImage: relativeUrl, profilePicture: relativeUrl, preferences });
-    const displayUrl = dataUrl || absoluteUrl;
-    res.json({ success: true, data: { displayUrl, profileImage: displayUrl, fileUrl: relativeUrl, absoluteUrl, durable: !!dataUrl } });
-  } catch (error) {
-    console.error('Profile upload error:', error);
-    res.status(error.status || 500).json({ success: false, message: error.message });
-  }
-};
+// Durable database-backed media. Render redeployments cannot erase these files.
+function uploadedFile(req,names){for(const name of names){const v=req.files?.[name];if(Array.isArray(v))return v[0];if(v)return v;}return req.file||null;}
+exports.uploadProfilePicture=async(req,res)=>{try{const file=uploadedFile(req,['picture','image','file']);if(!file)return res.status(400).json({success:false,message:'No profile image uploaded.'});const saved=await saveUploadAsset({file,schoolCode:req.user.schoolCode,ownerUserId:req.user.id,kind:'profile_picture',maxBytes:5*1024*1024,metadata:{uploadedBy:req.user.id,role:req.user.role}});const preferences={...(req.user.preferences||{}),profileImageUrl:saved.url,profileImageFileUrl:null,profileImageDataUrl:null,profileImageAssetToken:saved.token,profileImageUpdatedAt:new Date().toISOString()};await req.user.update({profileImage:saved.url,profilePicture:saved.url,preferences});res.json({success:true,data:{displayUrl:saved.url,profileImage:saved.url,profilePicture:saved.url,canonicalUrl:saved.url,durable:true}});}catch(e){console.error('Profile upload error:',e);res.status(e.status||500).json({success:false,message:e.message});}};
 
 // @desc    Get user alerts
 exports.getAlerts = async (req, res) => {
@@ -252,35 +194,4 @@ exports.getAlerts = async (req, res) => {
   }
 };
 
-exports.uploadSignature = async (req, res) => {
-  try {
-    const file = req.files?.signature || req.files?.image || req.file;
-    if (!file) return res.status(400).json({ success: false, message: 'No signature image uploaded.' });
-    const mime = validateImageUpload(file, { maxBytes: 2 * 1024 * 1024, label: 'Signature' });
-    const ext = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : mime.includes('gif') ? '.gif' : '.jpg';
-    const fileName = `signature_${req.user.id}_${Date.now()}${ext}`;
-    const { uploadPath, relativeUrl } = await saveUploadedImage(file, 'signatures', fileName);
-    const dataUrl = await makeDurableDataUrl(uploadPath, mime, 2 * 1024 * 1024);
-    const absoluteUrl = `${req.protocol}://${req.get('host')}${relativeUrl}`;
-    const durableSignature = dataUrl || absoluteUrl;
-    const preferences = {
-      ...(req.user.preferences || {}),
-      signatureDataUrl: dataUrl,
-      signatureUrl: durableSignature,
-      signatureFileUrl: relativeUrl,
-      signatureAbsoluteUrl: absoluteUrl,
-      signatureUpdatedAt: new Date().toISOString()
-    };
-    await req.user.update({ preferences });
-    if (req.user.role === 'teacher') {
-      await Teacher.update({ signature: durableSignature, signatureUrl: durableSignature }, { where: { userId: req.user.id } });
-    } else if (req.user.role === 'admin') {
-      const { Admin } = require('../models');
-      await Admin.update({ signature: durableSignature, signatureUrl: durableSignature }, { where: { userId: req.user.id } });
-    }
-    res.json({ success: true, data: { displayUrl: durableSignature, signatureUrl: durableSignature, signature: durableSignature, fileUrl: relativeUrl, signatureFileUrl: relativeUrl, absoluteUrl, durable: !!dataUrl } });
-  } catch (error) {
-    console.error('Signature upload error:', error);
-    res.status(error.status || 500).json({ success: false, message: error.message });
-  }
-};
+exports.uploadSignature=async(req,res)=>{try{const file=uploadedFile(req,['signature','image','file']);if(!file)return res.status(400).json({success:false,message:'No signature image uploaded.'});if(!['teacher','admin'].includes(req.user.role))return res.status(403).json({success:false,message:'Only teachers and school administrators can upload signatures.'});const saved=await saveUploadAsset({file,schoolCode:req.user.schoolCode,ownerUserId:req.user.id,kind:'signature',maxBytes:2*1024*1024,metadata:{uploadedBy:req.user.id,role:req.user.role}});const preferences={...(req.user.preferences||{}),signatureUrl:saved.url,signatureAbsoluteUrl:saved.url,signatureFileUrl:null,signatureDataUrl:null,signatureAssetToken:saved.token,signatureUpdatedAt:new Date().toISOString()};await req.user.update({preferences});if(req.user.role==='teacher')await Teacher.update({signature:saved.url,signatureUrl:saved.url},{where:{userId:req.user.id}});else{const{Admin}=require('../models');await Admin.update({signature:saved.url,signatureUrl:saved.url},{where:{userId:req.user.id}});}res.json({success:true,data:{displayUrl:saved.url,signatureUrl:saved.url,signature:saved.url,canonicalUrl:saved.url,durable:true}});}catch(e){console.error('Signature upload error:',e);res.status(e.status||500).json({success:false,message:e.message});}};

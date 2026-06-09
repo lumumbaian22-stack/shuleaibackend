@@ -2,7 +2,7 @@ const { FeeStructure, Fee, Student, Class, User } = require('../models');
 const service = require('../services/feeStructureService');
 const ledger = require('../services/financeLedgerService');
 
-function schoolCode(req) { return req.user?.schoolCode || req.query.schoolCode || req.body.schoolCode; }
+function schoolCode(req){return req.user?.role==='super_admin'?(req.query.schoolCode||req.body.schoolCode||req.user.schoolCode):req.user?.schoolCode;}
 
 exports.list = async (req, res) => {
   try {

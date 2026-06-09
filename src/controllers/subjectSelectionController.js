@@ -164,10 +164,7 @@ exports.listTeacherSubjectRequests = async (req, res) => {
     const schoolCode = schoolCodeOf(req.user);
     const teacher = await Teacher.findOne({ where: { userId:req.user.id } });
     if (!teacher) return res.status(404).json({ success:false, message:'Teacher profile not found' });
-    const assignments = await TeacherSubjectAssignment.findAll({ where: { teacherId:teacher.id } }).catch(() => []);
-    const classIds = [...new Set([teacher.classId, ...assignments.map(a => a.classId)].filter(Boolean))];
-    const subjects = [...new Set([...(teacher.subjects || []), ...assignments.map(a => a.subject)].filter(Boolean).map(norm))];
-    const replacements = { schoolCode, classIds: classIds.length ? classIds : [-1], subjects: subjects.length ? subjects : ['__none__'] };
+    const assignments=await TeacherSubjectAssignment.findAll({where:{teacherId:teacher.id}}).catch(()=>[]);const assignedClassIds=[...new Set([teacher.classId,...assignments.map(a=>a.classId)].filter(Boolean).map(Number))],assignedClasses=assignedClassIds.length?await Class.findAll({where:{id:{[Op.in]:assignedClassIds},schoolCode,isActive:true}}):[],seniorClassIds=assignedClasses.filter(c=>isSeniorClass(c)).map(c=>Number(c.id));if(!seniorClassIds.length)return res.json({success:true,data:{requests:[],summary:{},subjects:[],classIds:[],seniorOnly:true}});const subjects=[...new Set([...(teacher.subjects||[]),...assignments.filter(a=>seniorClassIds.includes(Number(a.classId))).map(a=>a.subject)].filter(Boolean).map(norm))];const replacements={schoolCode,classIds:seniorClassIds};
     const [rows] = await sequelize.query(`
       SELECT sss.*, su."name" AS "studentName", st."elimuid", st."grade", c."name" AS "className"
       FROM "StudentSubjectSelections" sss
@@ -175,12 +172,12 @@ exports.listTeacherSubjectRequests = async (req, res) => {
       LEFT JOIN "Users" su ON su."id" = st."userId"
       LEFT JOIN "Classes" c ON c."id" = sss."classId"
       WHERE sss."schoolCode" = :schoolCode
-        AND (sss."classId" IN (:classIds) OR LOWER(sss."subjectName") IN (:subjects))
+        AND sss."classId" IN (:classIds)
       ORDER BY sss."updatedAt" DESC, sss."subjectName" ASC
     `, { replacements }).catch(() => [[]]);
     const summary = {};
     for (const row of rows || []) summary[row.subjectName] = (summary[row.subjectName] || 0) + 1;
-    res.json({ success:true, data:{ requests: rows || [], summary, subjects, classIds } });
+    res.json({ success:true, data:{requests:rows||[],summary,subjects,classIds:seniorClassIds,seniorOnly:true} });
   } catch (e) { res.status(500).json({ success:false, message:e.message }); }
 };
 

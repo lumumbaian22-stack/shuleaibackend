@@ -66,26 +66,30 @@ module.exports = (sequelize, DataTypes) => {
     return bcrypt.compare(candidatePassword, this.password);
   };
 
-  User.prototype.generateAuthToken = function() {
+  User.prototype.generateAuthToken = function(effectiveRole = null) {
+    const role = effectiveRole || this.role;
     return jwt.sign(
-      { id: this.id, role: this.role, schoolCode: this.schoolCode },
+      { id: this.id, role, effectiveRole: role, primaryRole: this.role, schoolCode: this.schoolCode },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE }
     );
   };
 
-  User.prototype.getPublicProfile = function() {
+  User.prototype.getPublicProfile = function(effectiveRole = null) {
+    const primaryRole = this.getDataValue('primaryRole') || this.role;
+    const role = effectiveRole || this.role;
     return {
       id: this.id,
       name: this.name,
       email: this.email,
-      role: this.role,
+      role,
+      primaryRole,
       phone: this.phone,
-      profileImage: this.preferences?.profileImageDataUrl || this.profileImage || this.profilePicture,
-      profilePicture: this.preferences?.profileImageDataUrl || this.profilePicture || this.profileImage,
+      profileImage: this.preferences?.profileImageUrl || this.profileImage || this.profilePicture || this.preferences?.profileImageDataUrl,
+      profilePicture: this.preferences?.profileImageUrl || this.profilePicture || this.profileImage || this.preferences?.profileImageDataUrl,
       preferences: this.preferences || {},
-      signature: this.preferences?.signatureDataUrl || this.preferences?.signatureUrl || this.preferences?.signatureAbsoluteUrl || null,
-      signatureUrl: this.preferences?.signatureDataUrl || this.preferences?.signatureUrl || this.preferences?.signatureAbsoluteUrl || null,
+      signature: this.preferences?.signatureUrl || this.preferences?.signatureAbsoluteUrl || this.preferences?.signatureDataUrl || null,
+      signatureUrl: this.preferences?.signatureUrl || this.preferences?.signatureAbsoluteUrl || this.preferences?.signatureDataUrl || null,
       schoolCode: this.schoolCode,
       isActive: this.isActive,
       firstLogin: this.firstLogin,

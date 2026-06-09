@@ -46,11 +46,11 @@ async function requireManageClass(req, res, classId, transaction = null) {
 async function presentSession(session, req) {
   const cls = await getClass(req, session.classId);
   const students = cls ? await classStudents(req, cls) : [];
-  const rows = await Attendance.findAll({ where:{ sessionId:session.id, schoolCode:schoolCode(req) }, order:[['studentId','ASC']] });
+  const rows=await Attendance.findAll({where:{sessionId:session.id,schoolCode:schoolCode(req)},order:[['studentId','ASC']]});const latestRelease=await ClassRelease.findOne({where:{schoolCode:schoolCode(req),classId:session.classId,date:session.date},order:[['updateNumber','DESC'],['createdAt','DESC']]});
   const rowMap = new Map(rows.map(row => [Number(row.studentId), row.toJSON()]));
   return {
     ...session.toJSON(),
-    class: cls ? { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream } : null,
+    class:cls?{id:cls.id,name:cls.name,grade:cls.grade,stream:cls.stream}:null,latestRelease:latestRelease?latestRelease.toJSON():null,
     students: students.map(st => ({
       id:st.id,
       userId:st.userId,

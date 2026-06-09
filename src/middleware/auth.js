@@ -66,8 +66,7 @@ const protect = async (req, res, next) => {
         await User.update({ schoolCode: resolvedSchoolCode }, { where: { id: user.id } }).catch(() => null);
       }
     }
-    req.user = user;
-    setTenantUser(user);
+    const primaryRole=user.role;const additionalRoles=Array.isArray(user.preferences?.additionalRoles)?user.preferences.additionalRoles:[];const requestedEffectiveRole=decoded.effectiveRole||decoded.role||primaryRole;const effectiveRole=requestedEffectiveRole===primaryRole||additionalRoles.includes(requestedEffectiveRole)?requestedEffectiveRole:primaryRole;user.setDataValue('primaryRole',primaryRole);user.setDataValue('role',effectiveRole);req.user=user;req.primaryRole=primaryRole;req.effectiveRole=effectiveRole;setTenantUser(user);
     if (user.role !== 'super_admin' && !user.schoolCode) {
       return res.status(403).json({ success: false, code: 'SCHOOL_SCOPE_REQUIRED', message: 'User is not attached to a school tenant' });
     }

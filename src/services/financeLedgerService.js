@@ -77,10 +77,7 @@ async function writeAudit({ schoolCode, user, action, entityType = 'Payment', en
   }
 }
 
-async function createAlertForUser({ userId, role, title, message, severity = 'info', data = {}, actionUrl = null, transaction }) {
-  if (!userId) return null;
-  return createAlert({ userId, role, type:'fee', severity, title, message, data, actionUrl, sourceType:'finance', sourceLabel:'School finance', transaction });
-}
+async function createAlertForUser({userId,role,title,message,severity='info',data={},actionUrl=null,dedupeKey=null,transaction}){if(!userId)return null;return createAlert({userId,role,type:'fee',severity,title,message,data,actionUrl,dedupeKey,categoryLabel:'Finance',sourceType:'finance',sourceLabel:'School Finance',transaction});}
 
 async function createFinanceAlerts({ schoolCode, student, parentId, payment, action, transaction }) {
   const name = studentName(student);
@@ -106,17 +103,7 @@ async function createFinanceAlerts({ schoolCode, student, parentId, payment, act
     transaction
   });
 
-  const admins = await User.findAll({ where: { schoolCode, role: 'admin', isActive: true }, attributes: ['id'], transaction });
-  await Promise.all(admins.map(admin => createAlertForUser({
-    userId: admin.id,
-    role: 'admin',
-    title: `Finance update: ${name}`,
-    message: `${name}: KES ${amount} ${txType} via ${payment.method} is ${status}.`,
-    severity,
-    data: { studentId: student.id, paymentId: payment.id, feeId: payment.feeId, schoolCode, action },
-    actionUrl: '#finance-fees',
-    transaction
-  })));
+  const schoolUsers=await User.findAll({where:{schoolCode,isActive:true},attributes:['id','role','preferences'],transaction});const admins=schoolUsers.filter(u=>u.role==='admin'),financeUsers=schoolUsers.filter(u=>u.role==='finance_officer'||(Array.isArray(u.preferences?.additionalRoles)&&u.preferences.additionalRoles.includes('finance_officer')));await Promise.all([...admins.map(a=>createAlertForUser({userId:a.id,role:'admin',title:`Finance update: ${name}`,message:`${name}: KES ${amount} ${txType} via ${payment.method} is ${status}.`,severity,data:{studentId:student.id,paymentId:payment.id,feeId:payment.feeId,schoolCode,action},actionUrl:'#finance-fees',dedupeKey:`finance-admin:${payment.id}:${status}:${a.id}`,transaction})),...financeUsers.map(f=>createAlertForUser({userId:f.id,role:'finance_officer',title:status==='pending'?`Payment confirmation awaiting review: ${name}`:`Finance update: ${name}`,message:`${name}: KES ${amount} ${txType} via ${payment.method} is ${status}.`,severity,data:{studentId:student.id,paymentId:payment.id,feeId:payment.feeId,schoolCode,action,targetRoles:['finance_officer']},actionUrl:'#finance-fees',dedupeKey:`finance-staff:${payment.id}:${status}:${f.id}`,transaction}))]);
 }
 
 async function findStudentInSchool({ schoolCode, studentId, transaction }) {

@@ -1,5 +1,6 @@
 const { sequelize, School, User, Student, Teacher, Parent, Class, Alert } = require('../models');
 const path = require('path');
+const { saveUploadAsset, saveDataUrlAsset } = require('../services/mediaAssetService');
 const { getRoleAnalytics } = require('../services/ownerAnalyticsEngine');
 const { generateTemporaryPassword } = require('../utils/passwords');
 
@@ -33,7 +34,7 @@ function resolveColors(colorName, primaryColor, accentColor) {
 function publicBrandingPayload(school) {
   const branding = school?.settings?.branding || {};
   const colors = resolveColors(branding.colorName, branding.primaryColor, branding.accentColor);
-  const logo = branding.logoDataUrl || branding.logoUrl || branding.logo || null;
+  const logo = branding.logoUrl || branding.logo || branding.logoDataUrl || null;
   return {
     schoolId: school.schoolId,
     name: school.name,
@@ -41,8 +42,8 @@ function publicBrandingPayload(school) {
     displayName: branding.schoolName || school.name,
     logo,
     logoUrl: branding.logoUrl || null,
-    logoDataUrl: branding.logoDataUrl || null,
-    logoSource: branding.logoDataUrl ? 'upload' : (branding.logoUrl ? 'url' : 'fallback'),
+    logoDataUrl: null,
+    logoSource: branding.logoUrl ? (String(branding.logoUrl).startsWith('/api/media/') ? 'upload' : 'url') : 'fallback',
     colorName: colors.colorName,
     primaryColor: colors.primaryColor,
     accentColor: colors.accentColor,
@@ -123,14 +124,7 @@ exports.updateSchoolBranding = async (req, res) => {
     branding.colorName = colors.colorName;
     branding.primaryColor = colors.primaryColor;
     branding.accentColor = colors.accentColor;
-    if (req.body.logoDataUrl !== undefined) {
-      const logoDataUrl = String(req.body.logoDataUrl || '').trim();
-      if (logoDataUrl && /^data:image\/(png|jpe?g|webp|gif|svg\+xml);base64,/i.test(logoDataUrl) && Buffer.byteLength(logoDataUrl, 'utf8') <= 2.8 * 1024 * 1024) {
-        branding.logoDataUrl = logoDataUrl;
-        branding.logoUrl = '';
-        branding.logoSource = 'upload';
-      }
-    }
+    if (req.body.logoDataUrl !== undefined) { const logoDataUrl=String(req.body.logoDataUrl||'').trim(); if(logoDataUrl){const saved=await saveDataUrlAsset({dataUrl:logoDataUrl,schoolCode,ownerUserId:req.user.id,kind:'school_logo',maxBytes:2*1024*1024,allowSvg:true,metadata:{schoolCode,uploadedBy:req.user.id}});branding.logoUrl=saved.url;delete branding.logoDataUrl;branding.logoSource='upload';} }
     if (req.body.logoUrl !== undefined || req.body.logo !== undefined) {
       const logoUrl = String(req.body.logoUrl || req.body.logo || '').trim();
       branding.logoUrl = logoUrl;
@@ -155,12 +149,8 @@ exports.uploadSchoolLogo = async (req, res) => {
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
     const file = extractUploadedFile(req);
     if (!file) return res.status(400).json({ success: false, message: 'No logo file uploaded. Use form field: logo' });
-    const dataUrl = await fileToDataUrl(file);
-    const current = school.settings || {};
-    const branding = { ...(current.branding || {}) };
-    branding.logoDataUrl = dataUrl;
-    branding.logoUrl = '';
-    branding.logoSource = 'upload';
+    const saved=await saveUploadAsset({file,schoolCode,ownerUserId:req.user.id,kind:'school_logo',maxBytes:2*1024*1024,allowSvg:true,metadata:{schoolCode,uploadedBy:req.user.id}});
+    const current=school.settings||{};const branding={...(current.branding||{})};branding.logoUrl=saved.url;delete branding.logoDataUrl;branding.logoSource='upload';
     branding.updatedBy = req.user.id;
     branding.updatedAt = new Date().toISOString();
     await school.update({ settings: { ...current, branding } });

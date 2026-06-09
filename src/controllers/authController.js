@@ -6,6 +6,7 @@ const sequelize = require('../config/database');
 const { computeSchoolAccess } = require('../services/schoolAccessEngine');
 const { getSchoolFeatures } = require('../services/schoolFeatureService');
 const curriculumEngine = require('../services/curriculumStructureEngine');
+function additionalRoles(user){return Array.isArray(user?.preferences?.additionalRoles)?user.preferences.additionalRoles.map(String):[];}function canLoginAs(user,requestedRole){const requested=String(requestedRole||user?.role||'').toLowerCase().replace('-','_');return requested===user?.role||additionalRoles(user).includes(requested);}function publicProfileForRole(user,effectiveRole){const payload=user.getPublicProfile(effectiveRole);payload.primaryRole=user.getDataValue?.('primaryRole')||user.primaryRole||user.role;payload.role=effectiveRole;payload.financeTitle=user.preferences?.finance?.title||null;payload.financePermissions=user.preferences?.finance?.permissions||[];return payload;}
 
 async function buildSchoolSessionPayload(school) {
   if (!school) return null;
@@ -451,19 +452,7 @@ const authController = {
     try {
       const { email, password, role } = req.body;
 
-      const user = await User.findOne({
-        where: {
-          [Op.or]: [
-            { email: email },
-            { phone: email }
-          ],
-          role
-         }
-       });
-
-      if (!user || !(await user.comparePassword(password))) {
-        return res.status(401).json({ success: false, message: 'Invalid credentials' });
-      }
+      const requestedRole=String(role||'').toLowerCase().replace('-','_');const user=await User.findOne({where:{[Op.or]:[{email:email},{phone:email}]}});if(!user||!canLoginAs(user,requestedRole)||!(await user.comparePassword(password)))return res.status(401).json({success:false,message:'Invalid credentials'});
 
       if (!user.isActive) {
         return res.status(403).json({ success: false, message: 'Account is deactivated' });
@@ -481,20 +470,20 @@ const authController = {
       user.lastLogin = new Date();
       await user.save();
 
-      const token = user.generateAuthToken();
+      const effectiveRole=requestedRole||user.role;const token=user.generateAuthToken(effectiveRole);
 
       let profile = null;
-      if (role === 'teacher') profile = await Teacher.findOne({ where: { userId: user.id } });
-      else if (role === 'student') profile = await Student.findOne({ where: { userId: user.id } });
-      else if (role === 'parent') profile = await Parent.findOne({ where: { userId: user.id } });
-      else if (role === 'admin') profile = await Admin.findOne({ where: { userId: user.id } });
+      if (effectiveRole === 'teacher') profile = await Teacher.findOne({ where: { userId: user.id } });
+      else if (effectiveRole === 'student') profile = await Student.findOne({ where: { userId: user.id } });
+      else if (effectiveRole === 'parent') profile = await Parent.findOne({ where: { userId: user.id } });
+      else if (effectiveRole === 'admin') profile = await Admin.findOne({ where: { userId: user.id } });
 
       const school = user.schoolCode ? await School.findOne({ where: { schoolId: user.schoolCode } }) : null;
       const schoolPayload = await buildSchoolSessionPayload(school);
 
       res.json({
         success: true,
-        data: { token, user: user.getPublicProfile(), profile, school: schoolPayload }
+        data: { token, user: publicProfileForRole(user,effectiveRole), profile, school: schoolPayload }
       });
     } catch (error) {
       console.error('Login error:', error);
@@ -518,7 +507,7 @@ const authController = {
         return res.status(401).json({ success: false, message: 'Invalid refresh token' });
       }
 
-      const newToken = user.generateAuthToken();
+      const requestedRole=decoded.effectiveRole||decoded.role||user.role;const effectiveRole=canLoginAs(user,requestedRole)?requestedRole:user.role;const newToken=user.generateAuthToken(effectiveRole);
       
       res.json({ success: true, token: newToken });
     } catch (error) {
@@ -542,7 +531,7 @@ const authController = {
 
       res.json({
         success: true,
-        data: { user: user.getPublicProfile(), profile, school: schoolPayload }
+        data: { user: publicProfileForRole(user,req.effectiveRole||user.role), profile, school: schoolPayload }
       });
     } catch (error) {
       console.error('Get me error:', error);

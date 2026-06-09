@@ -5,8 +5,8 @@ const birthdayService = require('../services/birthdayService');
 const DEFAULT_SETTINGS = {
   enabled: true,
   timezone: 'Africa/Nairobi',
-  advanceDays: [7, 1, 0],
-  audience: { admin:true, teacher:true, parent:true, student:true },
+  advanceDays:[7,1],sameDayEnabled:true,
+  audience:{admin:true,classTeacher:true,subjectTeacher:false,parent:true,student:true},
   announceToClass: false,
   requireVerifiedDateOfBirth: false,
   suppressedStudentIds: []

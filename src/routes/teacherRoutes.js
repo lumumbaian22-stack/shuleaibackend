@@ -7,16 +7,17 @@ const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
 const analyticsController = require('../controllers/analyticsController'); // Add import
 const subjectSelectionController = require('../controllers/subjectSelectionController');
+const classTeacherOnly=require('../middleware/classTeacherOnly');
 
 router.use(protect);
 router.use(authorize('teacher'));
 
 // Students
-router.get('/students', teacherController.getMyStudents);
-router.post('/students', teacherController.addStudent);
+router.get('/students',classTeacherOnly,teacherController.getMyStudents);
+router.post('/students',classTeacherOnly,teacherController.addStudent);
 router.get('/students/:studentId', teacherController.getTeacherStudentDetails);
-router.delete('/students/:studentId', teacherController.deleteStudent);
-router.post('/students/upload', teacherController.uploadStudentsCSV);
+router.delete('/students/:studentId',classTeacherOnly,teacherController.deleteStudent);
+router.post('/students/upload',classTeacherOnly,teacherController.uploadStudentsCSV);
 router.get('/class-students', teacherController.getClassStudentsForSubject);
 router.get('/my-assignments', teacherController.getMyAssignments);
 
@@ -50,7 +51,7 @@ router.post('/subject-selection-requests/:selectionId/review', subjectSelectionC
 router.post('/subject-requests/:selectionId/review', subjectSelectionController.reviewTeacherSubjectRequest);
 
 // Messaging (Parent)
-router.get('/parent-conversations', chatController.getParentConversations);
+router.get('/parent-conversations',classTeacherOnly,chatController.getParentConversations);
 router.get('/conversations', teacherMessageController.getConversations);
 router.get('/messages/:parentId', teacherMessageController.getMessages);
 router.put('/messages/read/:conversationId', teacherMessageController.markMessagesAsRead);

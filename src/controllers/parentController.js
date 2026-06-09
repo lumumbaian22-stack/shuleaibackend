@@ -175,7 +175,7 @@ exports.getChildSummary = async (req, res) => {
     // Get child's class teacher
     const classTeacher = await Teacher.findOne({
       where: { classTeacher: student.grade },
-      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+      include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }]
     });
 
     // Fetch only PUBLISHED academic records
@@ -373,7 +373,7 @@ exports.reportAbsence = async (req, res) => {
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId, { 
       attributes: { include: ['classId'] },
-      include: [{ model: User, attributes: ['id', 'name'] }] 
+      include: [{ model: User, attributes: ['id','name','profileImage','profilePicture'] }] 
     });
     
     if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
@@ -816,8 +816,8 @@ exports.getMessages = async (req, res) => {
       },
       order: [['createdAt', 'ASC']],
       include: [
-        { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
-        { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+        { model: User, as: 'Sender', attributes: ['id','name','role','profileImage','profilePicture'] },
+        { model: User, as: 'Receiver', attributes: ['id','name','role','profileImage','profilePicture'] }
       ]
     });
 
@@ -1000,8 +1000,8 @@ exports.getConversations = async (req, res) => {
         [Op.or]: [{ senderId: req.user.id }, { receiverId: req.user.id }]
       },
       include: [
-        { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
-        { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+        { model: User, as: 'Sender', attributes: ['id','name','role','profileImage','profilePicture'] },
+        { model: User, as: 'Receiver', attributes: ['id','name','role','profileImage','profilePicture'] }
       ],
       order: [['createdAt', 'DESC']]
     });

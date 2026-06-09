@@ -355,7 +355,7 @@ exports.getGrades = async (req, res) => {
         include: [{
           model: Teacher,
           required: false,
-          include: [{ model: User, attributes: ['id', 'name'], required: false }]
+          include: [{ model: User, attributes: ['id','name','profileImage','profilePicture'], required: false }]
         }],
         order: [['year', 'DESC'], ['term', 'DESC'], ['date', 'DESC'], ['subject', 'ASC']]
     });
@@ -536,7 +536,7 @@ exports.getGroupMessages = async (req, res) => {
           { senderId: { [Op.in]: classmateUserIds }, receiverId: req.user.id }
         ]
       },
-      include: [{ model: User, as: 'Sender', attributes: ['id', 'name'] }],
+      include: [{ model: User, as: 'Sender', attributes: ['id','name','profileImage','profilePicture'] }],
       order: [['createdAt', 'ASC']]
     });
     res.json({ success: true, data: messages });
@@ -615,7 +615,7 @@ exports.getStudentFullDetails = async (req, res) => {
 
         // Parents
         const parents = await student.getParents({
-            include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+            include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }]
         });
         const parentList = parents.map(p => ({
             id: p.id,
@@ -629,12 +629,12 @@ exports.getStudentFullDetails = async (req, res) => {
         let classTeacher = null;
         const studentClass = await Class.findOne({ where: { schoolCode: student.User?.schoolCode || user.schoolCode, [Op.or]: [{ id: student.classId || 0 }, { name: student.grade }, { grade: student.grade }] } });
         if (studentClass?.teacherId) {
-            classTeacher = await Teacher.findByPk(studentClass.teacherId, { include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }] });
+            classTeacher = await Teacher.findByPk(studentClass.teacherId, { include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }] });
         }
         if (!classTeacher) {
             classTeacher = await Teacher.findOne({
                 where: { classTeacher: student.grade },
-                include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+                include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }]
             });
         }
 

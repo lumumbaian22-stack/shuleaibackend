@@ -339,8 +339,7 @@ exports.getParentConversations = async (req, res) => {
     const messages = await Message.findAll({
       where: { [Op.or]: [{ receiverId: req.user.id }, { senderId: req.user.id }] },
       include: [
-        { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
-        { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+        {model:User,as:'Sender',attributes:['id','name','role','profileImage','profilePicture']},{model:User,as:'Receiver',attributes:['id','name','role','profileImage','profilePicture']}
       ],
       order: [['createdAt', 'DESC']]
     });
@@ -350,7 +349,7 @@ exports.getParentConversations = async (req, res) => {
 
     // First list all parents linked to students in this class teacher's actual class.
     const parentRows = await sequelize.query(
-      `SELECT DISTINCT pu."id" AS "userId", pu."name" AS "userName", p."id" AS "parentProfileId",
+      `SELECT DISTINCT pu."id" AS "userId", pu."name" AS "userName", pu."profileImage", pu."profilePicture", p."id" AS "parentProfileId",
               s."id" AS "studentId", su."name" AS "studentName",
               s."grade" AS "studentGrade", s."classId" AS "classId", c."name" AS "className"
          FROM "Students" s
@@ -375,7 +374,7 @@ exports.getParentConversations = async (req, res) => {
         conversationKey: key,
         userId: row.userId,
         userName: row.userName || 'Parent',
-        userRole: 'parent',
+        userRole:'parent',profileImage:row.profileImage||row.profilePicture||null,profilePicture:row.profilePicture||row.profileImage||null,
         conversationType: 'parent_class_teacher',
         studentId: row.studentId || null,
         studentName: row.studentName || null,

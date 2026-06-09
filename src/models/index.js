@@ -70,6 +70,8 @@ const PromotionBatch = require('./PromotionBatch')(sequelize, DataTypes);
 const PromotionDecision = require('./PromotionDecision')(sequelize, DataTypes);
 const ReportShare = require('./ReportShare')(sequelize, DataTypes);
 const BirthdayEvent = require('./BirthdayEvent')(sequelize, DataTypes);
+const MediaAsset = require('./MediaAsset')(sequelize, DataTypes);
+const FinanceExpense = require('./FinanceExpense')(sequelize, DataTypes);
 
 // Add to associations: School.hasMany(SchoolCalendar)
 
@@ -462,7 +464,7 @@ function installTenantHooks(models) {
     });
   });
 }
-installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, AuditLog });
+installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, AuditLog, MediaAsset, FinanceExpense });
 
 module.exports = {
     sequelize,
@@ -533,5 +535,7 @@ module.exports = {
     PromotionDecision,
     ReportShare,
     BirthdayEvent,
+    MediaAsset,
+    FinanceExpense,
     StudentParent
 };

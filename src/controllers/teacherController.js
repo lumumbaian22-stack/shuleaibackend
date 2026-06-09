@@ -53,7 +53,7 @@ exports.getDashboard = async (req, res) => {
     if (teacher.classTeacher) {
       students = await Student.findAll({
         where: { grade: teacher.classTeacher },
-        include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+        include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }]
       });
     }
 
@@ -141,7 +141,7 @@ exports.getMyStudents = async (req, res) => {
     // Get all students in these classes
     const students = await Student.findAll({
       where: { grade: { [Op.in]: classNames } },
-      include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }]
+      include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }]
     });
 
     const studentIds = students.map(s => s.id);
@@ -349,7 +349,7 @@ exports.enterMarks = async (req, res) => {
 
     if (score < 50) {
       const student = await Student.findByPk(studentId, { 
-        include: [{ model: User, attributes: ['id', 'name'] }] 
+        include: [{ model: User, attributes: ['id','name','profileImage','profilePicture'] }] 
       });
       
       if (student) {
@@ -395,7 +395,7 @@ exports.addComment = async (req, res) => {
     const { studentId, comment } = req.body;
     
     const student = await Student.findByPk(studentId, { 
-      include: [{ model: User, attributes: ['id', 'name'] }] 
+      include: [{ model: User, attributes: ['id','name','profileImage','profilePicture'] }] 
     });
     
     if (!student) {
@@ -403,7 +403,7 @@ exports.addComment = async (req, res) => {
     }
 
     const parents = await student.getParents({ 
-      include: [{ model: User, attributes: ['id', 'name'] }] 
+      include: [{ model: User, attributes: ['id','name','profileImage','profilePicture'] }] 
     });
     
     for (const parent of parents) {
@@ -524,8 +524,8 @@ exports.getConversations = async (req, res) => {
                 ]
             },
             include: [
-                { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
-                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+                { model: User, as: 'Sender', attributes: ['id','name','role','profileImage','profilePicture'] },
+                { model: User, as: 'Receiver', attributes: ['id','name','role','profileImage','profilePicture'] }
             ],
             order: [['createdAt', 'DESC']]
         });
@@ -575,8 +575,8 @@ exports.getMessages = async (req, res) => {
                 ]
             },
             include: [
-                { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
-                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+                { model: User, as: 'Sender', attributes: ['id','name','role','profileImage','profilePicture'] },
+                { model: User, as: 'Receiver', attributes: ['id','name','role','profileImage','profilePicture'] }
             ],
             order: [['createdAt', 'ASC']]
         });
@@ -878,7 +878,7 @@ exports.getTeacherStats = async (req, res) => {
     if (classNames.length) {
       students = await Student.findAll({
         where: { grade: { [Op.in]: classNames } },
-        include: [{ model: User, attributes: ['id', 'name'] }]
+        include: [{ model: User, attributes: ['id','name','profileImage','profilePicture'] }]
       });
     }
 
@@ -1349,7 +1349,7 @@ exports.getClassGradebook = async (req, res) => {
 
     const students = await Student.findAll({
       where: { grade: classItem.name },
-      include: [{ model: User, attributes: ['id', 'name'] }],
+      include: [{ model: User, attributes: ['id','name','profileImage','profilePicture'] }],
       order: [['createdAt', 'ASC']]
     });
 

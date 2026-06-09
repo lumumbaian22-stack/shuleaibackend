@@ -24,6 +24,7 @@ const schoolRoutes = require('./routes/schoolRoutes');
 const parentMessageRoutes = require('./routes/parentMessageRoutes');
 const helpRoutes = require('./routes/helpRoutes');
 const userRoutes = require('./routes/userRoutes');
+const mediaRoutes = require('./routes/mediaRoutes');
 const taskRoutes = require('./routes/taskRoutes');
 const alertRoutes = require('./routes/alertRoutes');
 const competencyRoutes = require('./routes/competencyRoutes');
@@ -37,6 +38,7 @@ const publicHomeworkFileController = require('./controllers/homeworkController')
 const gamificationRoutes = require('./routes/gamificationRoutes');
 const chatV9Routes = require('./routes/chatV9Routes');
 const paymentRoutes = require('./routes/paymentRoutes');
+const financeRoutes = require('./routes/financeRoutes');
 const nationalRolloutRoutes = require('./routes/nationalRolloutRoutes');
 const scaleRoutes = require('./routes/scaleRoutes');
 const jobRoutes = require('./routes/jobRoutes');
@@ -145,10 +147,10 @@ app.get('/homework-files/:filename', publicHomeworkFileController.serveHomeworkA
 
 // ============ TEST ENDPOINT ============
 app.get('/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v147-approved-theme-recovery', timestamp: new Date().toISOString() });
+  res.json({ success: true, version: require('../package.json').version, build:'v148-finance-media-session-repair', timestamp: new Date().toISOString() });
 });
 app.get('/api/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v147-approved-theme-recovery', timestamp: new Date().toISOString() });
+  res.json({ success: true, version: require('../package.json').version, build:'v148-finance-media-session-repair', timestamp: new Date().toISOString() });
 });
 
 app.get('/api/health/detailed', async (req, res) => {
@@ -301,6 +303,7 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/school', schoolRoutes);
 app.use('/api/parent-messages', parentMessageRoutes);
 app.use('/api/help', helpRoutes);
+app.use('/api/media', mediaRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/alerts', alertRoutes);
@@ -324,6 +327,7 @@ app.use('/api/tutor', tutorRoutes);
 // nationalRolloutRoutes intentionally disables legacy/fake payment endpoints, but real Daraja STK
 // endpoints such as /api/payments/parent/subscription/stk must remain reachable.
 app.use('/api/payments', paymentRoutes);
+app.use('/api/finance', financeRoutes);
 // National rollout completion routes fill missing school-operations APIs and disable old live-money endpoints.
 app.use('/api', nationalRolloutRoutes);
 app.use('/api/owner', ownerHardeningRoutes);

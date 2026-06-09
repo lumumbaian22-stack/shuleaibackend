@@ -938,7 +938,7 @@ exports.awardChatMessage = async (req, res) => {
 exports.reactToMessage = async (req, res) => {
   try {
     if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only staff can react to messages' });
-    const message = await ChatMessage.findOne({ where: { id: req.params.messageId, schoolCode: schoolCodeOf(req) }, include: [{ model: User, as: 'Sender', attributes: ['id','name','role'] }] });
+    const message = await ChatMessage.findOne({ where: { id: req.params.messageId, schoolCode: schoolCodeOf(req) }, include: [{ model: User, as: 'Sender', attributes: ['id','name','role','profileImage','profilePicture'] }] });
     if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
     const emoji = String(req.body?.emoji || '👍').slice(0, 8);
     const metadata = message.metadata || {};

@@ -1,7 +1,8 @@
 // src/controllers/teacherMessageController.js
 const { Op } = require('sequelize');
 const { Message, User, Teacher, Student, Parent, Class, sequelize } = require('../models');
-const { createAlert } = require('../services/notificationService');
+const {createAlert}=require('../services/notificationService');
+const realtime=require('../services/realtimeService');
 
 function messageMeta(message) { return (message?.toJSON ? message.toJSON() : (message || {})).metadata || {}; }
 function isTeacherParentConversation(message, user) {
@@ -79,8 +80,8 @@ exports.getConversations = async (req, res) => {
     const messages = await Message.findAll({
       where: { [Op.or]: [{ receiverId: req.user.id }, { senderId: req.user.id }] },
       include: [
-        { model: User, as: 'Sender', attributes: ['id', 'name', 'role', 'email'] },
-        { model: User, as: 'Receiver', attributes: ['id', 'name', 'role', 'email'] }
+        { model: User, as: 'Sender', attributes:['id','name','role','email','profileImage','profilePicture'] },
+        { model: User, as: 'Receiver', attributes:['id','name','role','email','profileImage','profilePicture'] }
       ],
       order: [['createdAt', 'DESC']]
     });
@@ -100,7 +101,7 @@ exports.getConversations = async (req, res) => {
         conversations[key] = {
           userId: otherUserId,
           userName: otherUser.name || 'Teacher',
-          userRole: 'teacher',
+          userRole:'teacher',profileImage:otherUser.profileImage||otherUser.profilePicture||null,profilePicture:otherUser.profilePicture||otherUser.profileImage||null,
           lastMessage: msg.content,
           lastMessageTime: msg.createdAt,
           unreadCount: Number(msg.receiverId) === Number(req.user.id) && !msg.isRead ? 1 : 0,
@@ -133,8 +134,8 @@ exports.getMessages = async (req, res) => {
                 ]
             },
             include: [
-                { model: User, as: 'Sender', attributes: ['id', 'name', 'role'] },
-                { model: User, as: 'Receiver', attributes: ['id', 'name', 'role'] }
+                { model: User, as: 'Sender', attributes:['id','name','role','profileImage','profilePicture'] },
+                { model: User, as: 'Receiver', attributes:['id','name','role','profileImage','profilePicture'] }
             ],
             order: [['createdAt', 'ASC']]
         });
@@ -253,7 +254,7 @@ exports.replyToParent = async (req, res) => {
             data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: baseMeta.conversationType, conversationKey: baseMeta.conversationKey, messageId: reply.id }
         });
 
-        res.status(201).json({ success: true, message: 'Reply sent successfully', data: reply });
+        const conversationKey=baseMeta.conversationKey;const canonicalReply={...reply.toJSON(),messageId:reply.id,conversationId:conversationKey,conversationKey,senderId:req.user.id,senderRole:'teacher',senderName:req.user.name,senderProfileImage:req.user.profileImage||req.user.profilePicture||null,receiverId:Number(parentId),receiverRole:'parent',body:String(message).trim(),content:String(message).trim(),clientMessageId:clientMessageId?String(clientMessageId):null,createdAt:reply.createdAt,deliveryStatus:'sent',metadata:{...reply.metadata,conversationKey}};await realtime.emit({type:'chat:message_created',schoolCode:req.user.schoolCode,audience:{school:false,userIds:[req.user.id,Number(parentId)],conversations:[conversationKey]},entityType:'Message',entityId:reply.id,version:1,data:canonicalReply}).catch(e=>console.error(e.message));res.status(201).json({success:true,message:'Reply sent successfully',data:canonicalReply});
     } catch (error) {
         console.error('Reply error:', error);
         res.status(500).json({ success: false, message: error.message });

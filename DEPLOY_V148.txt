@@ -1,0 +1,11 @@
+SHULE AI V148 BACKEND — RENDER
+
+Use these Render settings when this backend is the repository root:
+Build Command: npm ci --omit=dev
+Pre-Deploy Command: npm run migrate
+Start Command: npm start
+
+New migration:
+20260609010000-v148-finance-media-session-role-fixes.js
+
+Do not run npm start manually in the Render shell while the service is already running.
