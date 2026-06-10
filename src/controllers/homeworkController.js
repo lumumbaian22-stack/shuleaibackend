@@ -251,7 +251,7 @@ async function getStudentsForClass(classItem, schoolCode) {
 
   if (names.length) {
     addMany(await Student.unscoped().findAll({
-      where: { ...activeWhere, grade: { [Op.in]: names } },
+      where: { ...activeWhere, classId:null, grade: { [Op.in]: names } },
       include: [userIncludeSoft],
       attributes: ['id', 'userId', 'grade', 'classId', 'status'],
       limit: 5000
@@ -269,6 +269,7 @@ async function getStudentsForClass(classItem, schoolCode) {
     addMany(schoolStudents.filter(student => {
       if (!belongsToSchool(student)) return false;
       if (classItem.id && Number(student.classId) === Number(classItem.id)) return true;
+      if (student.classId !== null && student.classId !== undefined) return false;
       const studentGrade = normalizeClassText(student.grade);
       return normalizedNames.some(name => studentGrade === name || studentGrade.includes(name) || name.includes(studentGrade));
     }));
@@ -774,10 +775,15 @@ async function ensureHomeworkAssignmentsForStudent(student, schoolCode) {
   ].filter(Boolean))];
 
   const orRules = [];
-  if (student.classId) orRules.push({ classId: student.classId });
-  if (classNames.length) {
-    orRules.push({ className: { [Op.in]: classNames } });
-    orRules.push({ gradeLevel: { [Op.in]: classNames } });
+  if (student.classId) {
+    orRules.push({ classId: student.classId });
+    if (classNames.length) {
+      orRules.push({ [Op.and]: [{ classId:null }, { className: { [Op.in]: classNames } }] });
+      orRules.push({ [Op.and]: [{ classId:null }, { gradeLevel: { [Op.in]: classNames } }] });
+    }
+  } else if (classNames.length) {
+    orRules.push({ classId:null, className: { [Op.in]: classNames } });
+    orRules.push({ classId:null, gradeLevel: { [Op.in]: classNames } });
   }
   if (!orRules.length) return;
 
@@ -799,7 +805,11 @@ async function ensureHomeworkAssignmentsForStudent(student, schoolCode) {
       attributes: ['id', 'classId', 'className', 'gradeLevel', 'schoolCode'],
       limit: 1000
     });
-    tasks = candidates.filter(task => classNames.some(name => classTextsMatch(task.className, name) || classTextsMatch(task.gradeLevel, name)) || (student.classId && Number(task.classId) === Number(student.classId)));
+    tasks = candidates.filter(task => {
+      if (student.classId && task.classId) return Number(task.classId) === Number(student.classId);
+      if (task.classId) return false;
+      return classNames.some(name => classTextsMatch(task.className, name) || classTextsMatch(task.gradeLevel, name));
+    });
   }
 
   for (const task of tasks) {

@@ -388,14 +388,16 @@ function getGradeFromScore(score) {
 // --- v13.1 verified production exports ---
 // The public /api/analytics routes expect these handler names. Keep them attached here
 // so mounted routes never crash with "Route.get() requires a callback function".
+let getClassAnalyticsHandler;
 try {
     const classAnalyticsController = require('./classAnalyticsController');
-    exports.getClassAnalytics = classAnalyticsController.getClassAnalytics;
+    getClassAnalyticsHandler = classAnalyticsController.getClassAnalytics;
 } catch (error) {
-    exports.getClassAnalytics = async (req, res) => {
+    getClassAnalyticsHandler = async (req, res) => {
         res.status(503).json({ success: false, message: 'Class analytics service is temporarily unavailable.' });
     };
 }
+exports.getClassAnalytics = getClassAnalyticsHandler;
 
 exports.getSchoolAnalytics = exports.getAdminAnalytics;
 

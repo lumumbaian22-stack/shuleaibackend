@@ -88,6 +88,8 @@ router.post('/curriculum/custom-subjects', adminController.createCustomSubject);
 router.delete('/curriculum/custom-subjects/:subjectId', adminController.deleteCustomSubject);
 router.get('/assessment-settings', adminController.getAssessmentSettings);
 router.put('/assessment-settings', adminController.updateAssessmentSettings);
+router.get('/curriculum/classes/generation-preview', adminController.previewClassGeneration);
+router.post('/curriculum/classes/generate', adminController.generateClassesFromSettings);
 router.post('/curriculum/classes/sync', adminController.syncCurriculumClasses);
 router.get('/curriculum/classes/:classId/subjects', adminController.getEligibleSubjectsForClass);
 router.get('/students/:studentId/subject-selection', adminController.getStudentSubjectSelection);

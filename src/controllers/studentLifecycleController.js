@@ -1,13 +1,16 @@
 const { Op } = require('sequelize');
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
-const { sequelize, Student, User, Class, StudentEnrollment, PromotionBatch, PromotionDecision, ReportSnapshot, AuditLog } = require('../models');
+const { sequelize, Student, User, Class, Teacher, Parent, StudentParent, StudentEnrollment, PromotionBatch, PromotionDecision, ClassTransferRequest, ReportSnapshot, Fee, AuditLog } = require('../models');
 const realtime = require('../services/realtimeService');
 const subjectSelections = require('../services/studentSubjectSelectionService');
+const enrollmentService = require('../services/studentEnrollmentService');
+const { createAlert } = require('../services/notificationService');
 
 const OUTCOMES = new Set(['promote','repeat','move_stream','graduate','transfer_out','withdraw','hold_review']);
-function code(req){ return req.user?.schoolCode; }
-function isoToday(){ return new Date().toISOString().slice(0,10); }
+function code(req){ if(String(req.user?.role||'').toLowerCase()==='super_admin')return req.body?.schoolCode||req.query?.schoolCode||req.user?.schoolCode||null; return req.user?.schoolCode||null; }
+function fail(res,error){const status=Number(error?.status)||500;return res.status(status).json({success:false,code:error?.code||undefined,message:error?.message||'Student lifecycle request failed',data:error?.data||undefined});}
+function isoToday(){ return new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Nairobi',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()); }
 function text(v){ return String(v || '').trim().toLowerCase(); }
 function rankClass(cls){
   const s = `${cls.levelCode || ''} ${cls.levelLabel || ''} ${cls.grade || ''} ${cls.name || ''}`.toLowerCase();
@@ -39,11 +42,8 @@ function chooseBalancedDestination(current,classes,proposedCounts){
   const candidates=nextClassesFor(current,classes);
   return candidates.sort((a,b)=>(proposedCounts.get(Number(a.id))||0)-(proposedCounts.get(Number(b.id))||0)||Number(a.id)-Number(b.id))[0]||null;
 }
-async function ensureCurrentEnrollment(student, cls, year, actorId, transaction){
-  let row = await StudentEnrollment.findOne({ where:{ schoolCode:student.User.schoolCode, studentId:student.id, status:'active' }, order:[['effectiveFrom','DESC']], transaction, lock:transaction.LOCK.UPDATE });
-  if (!row) row = await StudentEnrollment.create({ schoolCode:student.User.schoolCode, studentId:student.id, classId:cls?.id || student.classId || null, stream:cls?.stream || null, academicYear:Number(year), status:'active', effectiveFrom:`${year}-01-01`, createdBy:actorId, metadata:{ migratedFromStudent:true } }, { transaction });
-  if (Number(student.activeEnrollmentId)!==Number(row.id)) await student.update({ activeEnrollmentId:row.id }, { transaction, hooks:false });
-  return row;
+async function ensureCurrentEnrollment(student, cls, year, actorId, transaction, term='Term 1'){
+  return enrollmentService.ensureCurrentEnrollment({student,schoolCode:student.User.schoolCode,academicYear:year,term,actorId,transaction});
 }
 async function loadBatch(req,id,transaction){ return PromotionBatch.findOne({ where:{ id:Number(id), schoolCode:code(req) }, transaction, lock:transaction?.LOCK?.UPDATE }); }
 
@@ -51,21 +51,24 @@ exports.preview = async (req,res)=>{
   const transaction=await sequelize.transaction();
   try{
     const closingYear=Number(req.body.closingYear), newYear=Number(req.body.newYear), effectiveDate=String(req.body.effectiveDate || `${newYear}-01-01`).slice(0,10);
+    const closingTerm=enrollmentService.normalizeTerm(req.body.closingTerm)||'Term 3', newTerm=enrollmentService.normalizeTerm(req.body.newTerm)||'Term 1';
     if(!closingYear||!newYear||newYear<=closingYear){ await transaction.rollback(); return res.status(400).json({success:false,message:'Choose a valid closing year and a later new academic year'}); }
     const classes=await Class.findAll({where:{schoolCode:code(req),isActive:true},transaction});
     const classIds=classes.map(c=>c.id);
     const students=await (Student.unscoped?Student.unscoped():Student).findAll({ where:{status:'active',classId:{[Op.in]:classIds}}, include:[{model:User,where:{schoolCode:code(req),role:'student'},attributes:['id','name','schoolCode']}], transaction });
-    const batch=await PromotionBatch.create({schoolCode:code(req),closingYear,newYear,effectiveDate,status:'draft',createdBy:req.user.id,summary:{total:students.length},metadata:{placementMode:'balanced_preview'}},{transaction});
+    const batch=await PromotionBatch.create({schoolCode:code(req),closingYear,newYear,effectiveDate,status:'draft',createdBy:req.user.id,summary:{total:students.length},metadata:{placementMode:'balanced_preview',closingTerm,newTerm}},{transaction});
     const proposedCounts=new Map(classes.map(cls=>[Number(cls.id),0]));
     for(const st of students){
       const current=classes.find(c=>Number(c.id)===Number(st.classId));
-      const enrollment=await ensureCurrentEnrollment(st,current,closingYear,req.user.id,transaction);
+      const enrollment=await ensureCurrentEnrollment(st,current,closingYear,req.user.id,transaction,closingTerm);
       const activeEnrollmentCount=await StudentEnrollment.count({where:{schoolCode:code(req),studentId:st.id,status:'active'},transaction});
+      const openTransfer=await ClassTransferRequest.findOne({where:{schoolCode:code(req),studentId:st.id,status:{[Op.in]:enrollmentService.OPEN_TRANSFER_STATUSES}},attributes:['id','status','effectiveDate'],transaction});
       const next=chooseBalancedDestination(current,classes,proposedCounts);
       if(next)proposedCounts.set(Number(next.id),(proposedCounts.get(Number(next.id))||0)+1);
       const warnings=[];
       if(!current) warnings.push('Current class is missing or inactive');
       if(activeEnrollmentCount>1)warnings.push('Multiple active enrolments require review');
+      if(openTransfer)warnings.push(`Open class transfer request #${openTransfer.id} (${openTransfer.status}) must be resolved before promotion`);
       if(!next&&current&&!isTerminalClass(current))warnings.push(`No valid next ${curriculumFamily(current).toUpperCase()} class exists in this school`);
       if(next&&curriculumFamily(next)!==curriculumFamily(current))warnings.push('Invalid curriculum transition');
       const finalReport=await ReportSnapshot.findOne({where:{schoolCode:code(req),studentId:st.id,year:closingYear,status:'published',isCurrent:true},transaction});
@@ -75,7 +78,7 @@ exports.preview = async (req,res)=>{
         if(!selections.some(row=>['taking','approved','parent_supported'].includes(String(row.status||'').toLowerCase())))warnings.push('Senior-school subject/pathway selection is missing');
       }
       let outcome=next?'promote':'graduate';
-      if(!current||warnings.some(w=>/Multiple active|Invalid curriculum/i.test(w)))outcome='hold_review';
+      if(!current||warnings.some(w=>/Multiple active|Invalid curriculum|Open class transfer/i.test(w)))outcome='hold_review';
       await PromotionDecision.create({schoolCode:code(req),batchId:batch.id,studentId:st.id,currentEnrollmentId:enrollment.id,fromClassId:current?.id||null,toClassId:next?.id||null,fromStream:current?.stream||null,toStream:next?.stream||null,outcome,warnings,status:warnings.length?'warning':'proposed',metadata:{studentName:st.User?.name||null,fromClassName:current?.name||null,toClassName:next?.name||null,curriculumFamily:current?curriculumFamily(current):null,placementMode:'balanced_preview'}},{transaction});
     }
     await transaction.commit();
@@ -103,6 +106,8 @@ exports.updateDecision=async(req,res)=>{
     if(['promote','move_stream'].includes(outcome)&&!toClassId)return res.status(400).json({success:false,message:'A destination class is required'});
     if(outcome==='repeat')toClassId=decision.fromClassId;
     const destination=toClassId?await Class.findOne({where:{id:toClassId,schoolCode:code(req),isActive:true}}):null;
+    if(toClassId&&!destination)return res.status(404).json({success:false,message:'Destination class is not active in this school'});
+    if(outcome==='move_stream'){const origin=await Class.findOne({where:{id:decision.fromClassId,schoolCode:code(req)}});if(!origin||!sameLevel(origin,destination))return res.status(400).json({success:false,message:'Move stream must remain within the same grade or level'});}
     await decision.update({outcome,toClassId,toStream:req.body.toStream!==undefined?req.body.toStream:(destination?.stream||decision.toStream),status:'proposed',warnings:[]});
     res.json({success:true,data:decision});
   }catch(error){res.status(500).json({success:false,message:error.message});}
@@ -111,6 +116,8 @@ exports.updateDecision=async(req,res)=>{
 async function applyBatch(batch,actorId,transaction){
   const decisions=await PromotionDecision.findAll({where:{batchId:batch.id,schoolCode:batch.schoolCode},transaction,lock:transaction.LOCK.UPDATE});
   const summary={promote:0,repeat:0,move_stream:0,graduate:0,transfer_out:0,withdraw:0,hold_review:0,unresolved:0};
+  const closingTerm=enrollmentService.normalizeTerm(batch.metadata?.closingTerm)||'Term 3';
+  const newTerm=enrollmentService.normalizeTerm(batch.metadata?.newTerm)||'Term 1';
   for(const d of decisions){
     summary[d.outcome]=(summary[d.outcome]||0)+1;
     if(d.outcome==='hold_review'){summary.unresolved++;continue;}
@@ -118,22 +125,26 @@ async function applyBatch(batch,actorId,transaction){
     if(!student){summary.unresolved++;continue;}
     const old=await StudentEnrollment.findOne({where:{id:d.currentEnrollmentId,schoolCode:batch.schoolCode},transaction,lock:transaction.LOCK.UPDATE});
     if(['promote','repeat','move_stream'].includes(d.outcome)){
-      const exists=await StudentEnrollment.findOne({where:{schoolCode:batch.schoolCode,studentId:d.studentId,academicYear:batch.newYear,status:'active'},transaction,lock:transaction.LOCK.UPDATE});
-      if(exists){summary.unresolved++;await d.update({status:'blocked',warnings:['Duplicate active enrolment for the new year']},{transaction});continue;}
+      const activeNow=await StudentEnrollment.findOne({where:{schoolCode:batch.schoolCode,studentId:d.studentId,status:'active'},transaction,lock:transaction.LOCK.UPDATE});
+      const openTransfer=await ClassTransferRequest.findOne({where:{schoolCode:batch.schoolCode,studentId:d.studentId,status:{[Op.in]:enrollmentService.OPEN_TRANSFER_STATUSES}},transaction,lock:transaction.LOCK.UPDATE});
+      if(!activeNow||Number(activeNow.id)!==Number(d.currentEnrollmentId)){summary.unresolved++;await d.update({status:'blocked',warnings:['Student class changed after this promotion preview. Generate a fresh preview.']},{transaction});continue;}
+      if(openTransfer){summary.unresolved++;await d.update({status:'blocked',warnings:[`Open class transfer request #${openTransfer.id} must be resolved before promotion.`]},{transaction});continue;}
       if(!d.toClassId){summary.unresolved++;await d.update({status:'blocked',warnings:['Destination class is missing']},{transaction});continue;}
-      if(old)await old.update({status:'closed',effectiveTo:batch.effectiveDate,endedReason:d.outcome,closedBy:actorId,version:Number(old.version||1)+1},{transaction,hooks:false});
-      const created=await StudentEnrollment.create({schoolCode:batch.schoolCode,studentId:d.studentId,classId:d.toClassId,stream:d.toStream,academicYear:batch.newYear,status:'active',effectiveFrom:batch.effectiveDate,createdBy:actorId,metadata:{promotionBatchId:batch.id,previousEnrollmentId:old?.id||null,outcome:d.outcome}},{transaction});
-      await student.update({classId:d.toClassId,grade:(await Class.findByPk(d.toClassId,{transaction}))?.name||student.grade,activeEnrollmentId:created.id,status:'active'},{transaction,hooks:false});
-      await d.update({status:'applied',appliedEnrollmentId:created.id},{transaction});
+      try{
+        const result=await enrollmentService.applyDirectMovement({schoolCode:batch.schoolCode,studentId:d.studentId,toClassId:d.toClassId,effectiveDate:String(batch.effectiveDate),academicYear:batch.newYear,term:newTerm,movementType:d.outcome==='move_stream'?'promotion_stream_change':d.outcome,reason:`Academic year transition ${batch.closingYear} to ${batch.newYear}`,actorId,actorRole:'admin',sourceId:`promotion:${batch.id}:${d.id}`,transaction,createTargetFeeAccount:true});
+        const feeResult=result.feeResult?{created:!!result.feeResult.created,changed:!!result.feeResult.changed,feeId:result.feeResult.fee?.id||null,structureId:result.feeResult.structure?.id||null,before:result.feeResult.before||null,target:result.feeResult.target??null,reason:result.feeResult.reason||null}:null;
+        await d.update({status:'applied',appliedEnrollmentId:result.enrollment.id,metadata:{...(d.metadata||{}),previousEnrollmentId:result.previousEnrollment.id,feeAccountId:feeResult?.feeId||null,feeResult}},{transaction});
+      }catch(error){summary.unresolved++;await d.update({status:'blocked',warnings:[error.message]},{transaction});}
     }else{
-      if(old)await old.update({status:'closed',effectiveTo:batch.effectiveDate,endedReason:d.outcome,closedBy:actorId,version:Number(old.version||1)+1},{transaction,hooks:false});
+      if(old)await old.update({status:'closed',effectiveTo:enrollmentService.dayBefore(String(batch.effectiveDate)),endTerm:closingTerm,endedReason:d.outcome,movementType:d.outcome,movementReason:`Academic year transition ${batch.closingYear} to ${batch.newYear}`,classTeacherIdAtEnd:old.classTeacherIdAtStart||null,closedBy:actorId,version:Number(old.version||1)+1},{transaction,hooks:false});
       const status=d.outcome==='graduate'?'graduated':d.outcome==='transfer_out'?'transferred':'inactive';
       await student.update({status,activeEnrollmentId:null},{transaction,hooks:false});
       await d.update({status:'applied'},{transaction});
+      await realtime.emitToStudentContext(batch.schoolCode,student.id,'student:school_status_changed',{studentId:student.id,status,outcome:d.outcome,effectiveDate:batch.effectiveDate,batchId:batch.id},{transaction,entityType:'PromotionDecision',entityId:d.id,version:1});
     }
   }
   await batch.update({status:'applied',confirmedBy:actorId,confirmedAt:new Date(),summary},{transaction});
-  await AuditLog.create({schoolCode:batch.schoolCode,actorUserId:actorId,actorRole:'admin',module:'student_lifecycle',action:'promotion_applied',entityType:'PromotionBatch',entityId:String(batch.id),after:summary,metadata:{effectiveDate:batch.effectiveDate,newYear:batch.newYear}},{transaction});
+  await AuditLog.create({schoolCode:batch.schoolCode,actorUserId:actorId,actorRole:'admin',module:'student_lifecycle',action:'promotion_applied',entityType:'PromotionBatch',entityId:String(batch.id),after:summary,metadata:{effectiveDate:batch.effectiveDate,newYear:batch.newYear,closingTerm,newTerm}},{transaction});
   await realtime.emit({type:'promotion:completed',schoolCode:batch.schoolCode,audience:{school:true},entityType:'PromotionBatch',entityId:batch.id,version:1,data:{batchId:batch.id,effectiveDate:batch.effectiveDate,newYear:batch.newYear,summary},transaction});
   await realtime.emitToSchool(batch.schoolCode,'analytics:invalidated',{scope:'students_and_academics',batchId:batch.id},{transaction});
   return summary;
@@ -191,10 +202,37 @@ exports.rollback=async(req,res)=>{
     const reason=String(req.body.reason||'').trim();if(!reason){await transaction.rollback();return res.status(400).json({success:false,message:'A rollback reason is required'});}
     const decisions=await PromotionDecision.findAll({where:{batchId:batch.id,status:'applied'},transaction,lock:transaction.LOCK.UPDATE});
     for(const d of decisions){
+      if(!d.appliedEnrollmentId)continue;
+      const activeNow=await StudentEnrollment.findOne({where:{schoolCode:batch.schoolCode,studentId:d.studentId,status:'active'},transaction,lock:transaction.LOCK.UPDATE});
+      if(Number(activeNow?.id)!==Number(d.appliedEnrollmentId)){
+        await transaction.rollback();
+        return res.status(409).json({success:false,message:'At least one learner moved again after this promotion. Roll back the latest class movement first; no promotion records were changed.'});
+      }
+    }
+    for(const d of decisions){
       const student=await (Student.unscoped?Student.unscoped():Student).findByPk(d.studentId,{transaction,lock:transaction.LOCK.UPDATE});
       if(d.appliedEnrollmentId){const newer=await StudentEnrollment.findByPk(d.appliedEnrollmentId,{transaction,lock:transaction.LOCK.UPDATE});if(newer)await newer.update({status:'reversed',effectiveTo:isoToday(),endedReason:'promotion_rollback',closedBy:req.user.id},{transaction});}
       const old=await StudentEnrollment.findByPk(d.currentEnrollmentId,{transaction,lock:transaction.LOCK.UPDATE});
-      if(old){await old.update({status:'active',effectiveTo:null,endedReason:null,closedBy:null,version:Number(old.version||1)+1},{transaction,hooks:false});await student?.update({classId:old.classId,grade:(await Class.findByPk(old.classId,{transaction}))?.name||student.grade,activeEnrollmentId:old.id,status:'active'},{transaction,hooks:false});}
+      if(old){
+        await old.update({status:'active',effectiveTo:null,endTerm:null,endedReason:null,closedBy:null,classTeacherIdAtEnd:null,movementType:'promotion_rollback',movementReason:reason,version:Number(old.version||1)+1},{transaction,hooks:false});
+        const restoredClass=await Class.findByPk(old.classId,{transaction});
+        await student?.update({classId:old.classId,grade:restoredClass?.name||student.grade,activeEnrollmentId:old.id,status:'active'},{transaction,hooks:false});
+        const feeResult=d.metadata?.feeResult||null;
+        const feeId=feeResult?.feeId||d.metadata?.feeAccountId;
+        if(feeId&&feeResult?.changed!==false){
+          const fee=await Fee.findByPk(feeId,{transaction,lock:transaction.LOCK.UPDATE});
+          if(fee){
+            const covered=Number(fee.parentPaidAmount??fee.paidAmount??0)+Number(fee.creditAmount||0);
+            const before=feeResult?.before&&typeof feeResult.before==='object'?feeResult.before:null;
+            const structure=before?null:await enrollmentService.getFeeStructure({schoolCode:batch.schoolCode,classId:old.classId,term:enrollmentService.normalizeTerm(batch.metadata?.newTerm)||'Term 1',year:batch.newYear,transaction});
+            const total=before?Math.max(covered,Number(before.totalAmount||0)):structure?Math.max(covered,Number(structure.totalAmount||0)):Number(fee.totalAmount||0);
+            const restoredClassId=before?.classId??old.classId;
+            const restoredStructureId=before?.feeStructureId||(structure?String(structure.id):fee.feeStructureId);
+            const auditTrail=[...(Array.isArray(fee.auditTrail)?fee.auditTrail:[]),{action:'promotion_fee_account_rollback',batchId:batch.id,decisionId:d.id,restoredClassId,structureId:restoredStructureId||null,actorId:req.user.id,at:new Date().toISOString(),note:before?'Restored the exact pre-promotion fee state':structure?'Reassigned to restored class fee structure':'Previous-class fee structure missing; amount preserved for finance review'}];
+            await fee.update({classId:restoredClassId,totalAmount:total,feeStructureId:restoredStructureId,dueDate:before?.dueDate||structure?.dueDate||fee.dueDate,currency:before?.currency||structure?.currency||fee.currency,status:covered>=total&&total>0?'paid':covered>0?'partial':'unpaid',auditTrail},{transaction});
+          }
+        }
+      }
       await d.update({status:'reversed',metadata:{...(d.metadata||{}),rollbackReason:reason,rolledBackAt:new Date().toISOString()}},{transaction});
     }
     await batch.update({status:'rolled_back',rollbackBy:req.user.id,rollbackAt:new Date(),metadata:{...(batch.metadata||{}),rollbackReason:reason}},{transaction});
@@ -204,7 +242,7 @@ exports.rollback=async(req,res)=>{
   }catch(error){if(!transaction.finished)await transaction.rollback();res.status(500).json({success:false,message:error.message});}
 };
 
-exports.enrollmentHistory=async(req,res)=>{try{const student=await (Student.unscoped?Student.unscoped():Student).findOne({where:{id:Number(req.params.studentId)},include:[{model:User,where:{schoolCode:code(req)}}]});if(!student)return res.status(404).json({success:false,message:'Student not found'});res.json({success:true,data:await StudentEnrollment.findAll({where:{schoolCode:code(req),studentId:student.id},include:[Class],order:[['academicYear','DESC'],['effectiveFrom','DESC']]})});}catch(error){res.status(500).json({success:false,message:error.message});}};
+// Enrollment history and transfer endpoints are defined below.
 
 
 exports.exportBatch = async (req,res) => {
@@ -245,4 +283,225 @@ exports.exportBatch = async (req,res) => {
     addSheet('Unresolved Students',rows.filter(r=>r.outcome==='hold_review'||r.status==='blocked'||r.warnings));
     res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename="${base}.xlsx"`);await workbook.xlsx.write(res);res.end();
   }catch(error){if(!res.headersSent)res.status(500).json({success:false,message:error.message});else res.end();}
+};
+
+function transferInclude(){
+  return [
+    {model:Student,include:[{model:User,attributes:['id','name','email','phone']}]},
+    {model:Class,as:'FromClass',attributes:['id','name','grade','stream','teacherId']},
+    {model:Class,as:'ToClass',attributes:['id','name','grade','stream','teacherId']}
+  ];
+}
+
+async function assertHistoryAccess(req, student, rows){
+  const role=String(req.user.role||'').toLowerCase();
+  if(['admin','super_admin'].includes(role))return true;
+  if(role==='student'){
+    const profile=await Student.findOne({where:{userId:req.user.id}});
+    return Number(profile?.id)===Number(student.id);
+  }
+  if(role==='parent'){
+    const parent=await Parent.findOne({where:{userId:req.user.id}});
+    if(!parent)return false;
+    return !!(await StudentParent.findOne({where:{studentId:student.id,parentId:parent.id}}));
+  }
+  if(role==='teacher'){
+    const teacher=await Teacher.findOne({where:{userId:req.user.id}});
+    if(!teacher)return false;
+    const classIds=[...new Set(rows.map(r=>Number(r.classId)).filter(Boolean))];
+    if(rows.some(r=>Number(r.classTeacherIdAtStart)===Number(teacher.id)||Number(r.classTeacherIdAtEnd)===Number(teacher.id)))return true;
+    if(!classIds.length)return false;
+    const classes=await Class.findAll({where:{id:{[Op.in]:classIds},schoolCode:code(req)}});
+    for(const cls of classes){
+      const ids=await enrollmentService.classTeacherIdsForClass({cls,schoolCode:code(req)});
+      if(ids.includes(Number(teacher.id)))return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+exports.enrollmentHistory=async(req,res)=>{
+  try{
+    const schoolCode=code(req);
+    const student=await enrollmentService.findStudentInSchool({schoolCode,studentId:req.params.studentId});
+    if(!student)return res.status(404).json({success:false,message:'Student not found'});
+    const rows=await StudentEnrollment.findAll({where:{schoolCode,studentId:student.id},include:[{model:Class,attributes:['id','name','grade','stream','isActive']}],order:[['effectiveFrom','DESC'],['id','DESC']]});
+    if(!(await assertHistoryAccess(req,student,rows)))return res.status(403).json({success:false,message:'You are not allowed to view this student enrollment history'});
+    res.json({success:true,data:{student:{id:student.id,name:student.User?.name,elimuid:student.elimuid,currentClassId:student.classId},enrollments:rows}});
+  }catch(error){fail(res,error);}
+};
+
+exports.myEnrollmentHistory=async(req,res)=>{
+  try{
+    if(req.user.role!=='student')return res.status(403).json({success:false,message:'Student access only'});
+    const student=await Student.findOne({where:{userId:req.user.id}});
+    if(!student)return res.status(404).json({success:false,message:'Student profile not found'});
+    req.params.studentId=student.id;
+    return exports.enrollmentHistory(req,res);
+  }catch(error){fail(res,error);}
+};
+
+exports.childEnrollmentHistory=async(req,res)=>{
+  try{
+    if(req.user.role!=='parent')return res.status(403).json({success:false,message:'Parent access only'});
+    return exports.enrollmentHistory(req,res);
+  }catch(error){fail(res,error);}
+};
+
+exports.previewTransfer=async(req,res)=>{
+  const transaction=await sequelize.transaction();
+  try{
+    if(!['admin','super_admin','teacher'].includes(req.user.role)){await transaction.rollback();return res.status(403).json({success:false,message:'Only school administrators and class teachers can preview a class transfer'});}
+    const result=await enrollmentService.validateMovement({schoolCode:code(req),studentId:req.body.studentId,toClassId:req.body.toClassId,effectiveDate:req.body.effectiveDate,academicYear:req.body.academicYear,term:req.body.term,reason:req.body.reason,feeAction:req.body.feeAction||'keep_current_period',actor:req.user,transaction});
+    await transaction.commit();
+    res.json({success:true,data:{student:{id:result.student.id,name:result.student.User?.name,elimuid:result.student.elimuid},currentEnrollment:{id:result.currentEnrollment.id,effectiveFrom:result.currentEnrollment.effectiveFrom,academicYear:result.currentEnrollment.academicYear,startTerm:result.currentEnrollment.startTerm},fromClass:enrollmentService.publicClass(result.fromClass),toClass:enrollmentService.publicClass(result.toClass),academicYear:result.academicYear,term:result.term,effectiveDate:result.effectiveDate,reason:result.reason,feeAction:result.feeAction,feePreview:result.feePreview,impactPreview:result.impactPreview,warnings:[...(result.impactPreview.requiresAcknowledgement?['This backdated movement affects existing attendance, marks, or a published report. Administrator acknowledgement is required.']:[]),...(result.feePreview.requiresChoice?['The target class has a different fee structure. Select how the difference should be handled.']:[])]}});
+  }catch(error){if(!transaction.finished)await transaction.rollback();fail(res,error);}
+};
+
+async function createTransferRequest(req,res,{teacherRequest=false}={}){
+  const transaction=await sequelize.transaction();
+  try{
+    const role=req.user.role;
+    if(teacherRequest&&role!=='teacher'){await transaction.rollback();return res.status(403).json({success:false,message:'Teacher access only'});}
+    if(!teacherRequest&&!['admin','super_admin'].includes(role)){await transaction.rollback();return res.status(403).json({success:false,message:'Administrator access only'});}
+    const result=await enrollmentService.validateMovement({schoolCode:code(req),studentId:req.body.studentId,toClassId:req.body.toClassId,effectiveDate:req.body.effectiveDate,academicYear:req.body.academicYear,term:req.body.term,reason:req.body.reason,feeAction:teacherRequest?'keep_current_period':(req.body.feeAction||'keep_current_period'),actor:req.user,transaction});
+    if(!teacherRequest&&result.impactPreview.requiresAcknowledgement&&req.body.acknowledgeHistoricalImpact!==true){await transaction.rollback();return res.status(409).json({success:false,code:'HISTORICAL_IMPACT_ACK_REQUIRED',message:'This backdated transfer affects existing records. Review the preview and explicitly acknowledge the historical impact.',data:{impactPreview:result.impactPreview,feePreview:result.feePreview}});}
+    const request=await ClassTransferRequest.create({schoolCode:code(req),studentId:result.student.id,requestedBy:req.user.id,requestedByRole:role,fromEnrollmentId:result.currentEnrollment.id,fromClassId:result.fromClass.id,toClassId:result.toClass.id,academicYear:result.academicYear,term:result.term,effectiveDate:result.effectiveDate,reason:result.reason,note:String(req.body.note||'').trim()||null,feeAction:teacherRequest?'keep_current_period':result.feeAction,feePreview:result.feePreview,impactPreview:result.impactPreview,status:teacherRequest?'pending':'approved',approvedBy:teacherRequest?null:req.user.id,approvedAt:teacherRequest?null:new Date(),metadata:{createdFrom:teacherRequest?'class_teacher_request':'admin_direct_transfer',acknowledgedHistoricalImpact:req.body.acknowledgeHistoricalImpact===true}},{transaction});
+    await AuditLog.create({schoolCode:code(req),actorUserId:req.user.id,actorRole:role,module:'student_lifecycle',action:teacherRequest?'class_transfer_requested':'class_transfer_approved',entityType:'ClassTransferRequest',entityId:String(request.id),after:request.toJSON(),reason:request.reason},{transaction});
+    if(teacherRequest){
+      const admins=await User.findAll({where:{schoolCode:code(req),role:'admin',isActive:true},attributes:['id'],transaction});
+      for(const admin of admins)await createAlert({userId:admin.id,role:'admin',type:'approval',severity:'info',title:'Class transfer request awaiting approval',message:`${result.student.User?.name||'A learner'}: ${result.fromClass.name} → ${result.toClass.name}, effective ${result.effectiveDate}.`,categoryLabel:'Student School Cycle',sourceType:'class_transfer_request',sourceLabel:'Class Teacher',studentId:result.student.id,classId:result.fromClass.id,dedupeKey:`class-transfer-request:${request.id}:${admin.id}`,actionUrl:'#class-transfers',data:{schoolCode:code(req),requestId:request.id,studentId:result.student.id},transaction});
+      await realtime.emitToRole(code(req),'admin','student:class_transfer_requested',{requestId:request.id,studentId:result.student.id,fromClassId:result.fromClass.id,toClassId:result.toClass.id,effectiveDate:result.effectiveDate},{transaction,entityType:'ClassTransferRequest',entityId:request.id,version:1});
+    }
+    if(!teacherRequest)await enrollmentService.applyRequest({requestId:request.id,actorId:req.user.id,actorRole:role,transaction});
+    await transaction.commit();
+    const saved=await ClassTransferRequest.findByPk(request.id,{include:transferInclude()});
+    res.status(teacherRequest?201:200).json({success:true,message:teacherRequest?'Transfer request sent to the school administrator for approval.':(saved.status==='scheduled'?`Transfer scheduled for ${saved.effectiveDate}.`:'Student transferred without deleting historical records.'),data:saved});
+  }catch(error){if(!transaction.finished)await transaction.rollback();fail(res,error);}
+}
+
+exports.requestTransfer=(req,res)=>createTransferRequest(req,res,{teacherRequest:true});
+exports.createTransfer=(req,res)=>createTransferRequest(req,res,{teacherRequest:false});
+
+exports.listTransfers=async(req,res)=>{
+  try{
+    if(!['admin','super_admin','teacher'].includes(req.user.role))return res.status(403).json({success:false,message:'Forbidden'});
+    const where={schoolCode:code(req)};
+    if(req.user.role==='teacher')where.requestedBy=req.user.id;
+    if(req.query.status)where.status=String(req.query.status);
+    if(req.query.studentId)where.studentId=Number(req.query.studentId);
+    const rows=await ClassTransferRequest.findAll({where,include:transferInclude(),order:[['createdAt','DESC']],limit:100});
+    res.json({success:true,data:rows});
+  }catch(error){fail(res,error);}
+};
+
+exports.getTransfer=async(req,res)=>{
+  try{
+    const row=await ClassTransferRequest.findOne({where:{id:Number(req.params.id),schoolCode:code(req)},include:transferInclude()});
+    if(!row)return res.status(404).json({success:false,message:'Class transfer request not found'});
+    if(req.user.role==='teacher'&&Number(row.requestedBy)!==Number(req.user.id))return res.status(403).json({success:false,message:'You can view only transfer requests you submitted'});
+    if(!['admin','super_admin','teacher'].includes(req.user.role))return res.status(403).json({success:false,message:'Forbidden'});
+    res.json({success:true,data:row});
+  }catch(error){fail(res,error);}
+};
+
+exports.approveTransfer=async(req,res)=>{
+  const transaction=await sequelize.transaction();
+  try{
+    if(!['admin','super_admin'].includes(req.user.role)){await transaction.rollback();return res.status(403).json({success:false,message:'Administrator approval is required'});}
+    const request=await ClassTransferRequest.findOne({where:{id:Number(req.params.id),schoolCode:code(req)},transaction,lock:transaction.LOCK.UPDATE});
+    if(!request||request.status!=='pending'){await transaction.rollback();return res.status(409).json({success:false,message:'Only a pending transfer request can be approved'});}
+    const feeAction=req.body.feeAction||request.feeAction||'keep_current_period';
+    const result=await enrollmentService.validateMovement({schoolCode:code(req),studentId:request.studentId,toClassId:request.toClassId,effectiveDate:request.effectiveDate,academicYear:request.academicYear,term:request.term,reason:request.reason,feeAction,actor:req.user,transaction,allowExistingRequestId:request.id});
+    if(result.impactPreview.requiresAcknowledgement&&req.body.acknowledgeHistoricalImpact!==true){await transaction.rollback();return res.status(409).json({success:false,code:'HISTORICAL_IMPACT_ACK_REQUIRED',message:'This backdated transfer affects existing records. Explicit administrator acknowledgement is required.',data:{impactPreview:result.impactPreview,feePreview:result.feePreview}});}
+    await request.update({feeAction,feePreview:result.feePreview,impactPreview:result.impactPreview,status:'approved',approvedBy:req.user.id,approvedAt:new Date(),version:Number(request.version||1)+1,metadata:{...(request.metadata||{}),approvalNote:String(req.body.note||'').trim()||null,acknowledgedHistoricalImpact:req.body.acknowledgeHistoricalImpact===true}},{transaction});
+    const appliedRequest=await enrollmentService.applyRequest({requestId:request.id,actorId:req.user.id,actorRole:req.user.role,transaction});
+    await AuditLog.create({schoolCode:code(req),actorUserId:req.user.id,actorRole:req.user.role,module:'student_lifecycle',action:'class_transfer_request_approved',entityType:'ClassTransferRequest',entityId:String(request.id),reason:request.reason},{transaction});
+    await createAlert({userId:request.requestedBy,role:request.requestedByRole,type:'approval',severity:'success',title:'Class transfer request approved',message:`The transfer request has been ${request.effectiveDate>isoToday()?'approved and scheduled':'approved and applied'}.`,categoryLabel:'Student School Cycle',sourceType:'class_transfer_approval',sourceLabel:'School Administration',studentId:request.studentId,dedupeKey:`class-transfer-approved:${request.id}:${request.requestedBy}`,actionUrl:'#student-lifecycle',data:{schoolCode:code(req),requestId:request.id},transaction});
+    await transaction.commit();
+    res.json({success:true,message:appliedRequest.status==='scheduled'?`Transfer approved and scheduled for ${request.effectiveDate}.`:'Transfer approved and applied.',data:await ClassTransferRequest.findByPk(request.id,{include:transferInclude()})});
+  }catch(error){if(!transaction.finished)await transaction.rollback();fail(res,error);}
+};
+
+exports.rejectTransfer=async(req,res)=>{
+  const transaction=await sequelize.transaction();
+  try{
+    if(!['admin','super_admin'].includes(req.user.role)){await transaction.rollback();return res.status(403).json({success:false,message:'Administrator access only'});}
+    const rejectionReason=String(req.body.reason||'').trim();if(!rejectionReason){await transaction.rollback();return res.status(400).json({success:false,message:'A rejection reason is required'});}
+    const request=await ClassTransferRequest.findOne({where:{id:Number(req.params.id),schoolCode:code(req)},transaction,lock:transaction.LOCK.UPDATE});
+    if(!request||request.status!=='pending'){await transaction.rollback();return res.status(409).json({success:false,message:'Only a pending transfer request can be rejected'});}
+    await request.update({status:'rejected',rejectedBy:req.user.id,rejectedAt:new Date(),rejectionReason,version:Number(request.version||1)+1},{transaction});
+    await AuditLog.create({schoolCode:code(req),actorUserId:req.user.id,actorRole:req.user.role,module:'student_lifecycle',action:'class_transfer_request_rejected',entityType:'ClassTransferRequest',entityId:String(request.id),reason:rejectionReason},{transaction});
+    await createAlert({userId:request.requestedBy,role:request.requestedByRole,type:'approval',severity:'warning',title:'Class transfer request rejected',message:rejectionReason,categoryLabel:'Student School Cycle',sourceType:'class_transfer_rejection',sourceLabel:'School Administration',studentId:request.studentId,dedupeKey:`class-transfer-rejected:${request.id}:${request.requestedBy}`,actionUrl:'#student-lifecycle',data:{schoolCode:code(req),requestId:request.id},transaction});
+    await transaction.commit();res.json({success:true,message:'Transfer request rejected.',data:request});
+  }catch(error){if(!transaction.finished)await transaction.rollback();fail(res,error);}
+};
+
+exports.cancelTransfer=async(req,res)=>{
+  const transaction=await sequelize.transaction();
+  try{
+    const request=await ClassTransferRequest.findOne({where:{id:Number(req.params.id),schoolCode:code(req)},transaction,lock:transaction.LOCK.UPDATE});
+    if(!request){await transaction.rollback();return res.status(404).json({success:false,message:'Transfer request not found'});}
+    const admin=['admin','super_admin'].includes(req.user.role),owner=Number(request.requestedBy)===Number(req.user.id);
+    if(!admin&&!owner){await transaction.rollback();return res.status(403).json({success:false,message:'You cannot cancel this transfer request'});}
+    if(!['pending','approved','scheduled'].includes(request.status)){await transaction.rollback();return res.status(409).json({success:false,message:'This transfer request can no longer be cancelled'});}
+    await request.update({status:'cancelled',version:Number(request.version||1)+1,metadata:{...(request.metadata||{}),cancelledBy:req.user.id,cancelledAt:new Date().toISOString(),cancelReason:String(req.body.reason||'').trim()||null}},{transaction});
+    await AuditLog.create({schoolCode:code(req),actorUserId:req.user.id,actorRole:req.user.role,module:'student_lifecycle',action:'class_transfer_cancelled',entityType:'ClassTransferRequest',entityId:String(request.id),reason:String(req.body.reason||'').trim()||null},{transaction});
+    await transaction.commit();res.json({success:true,message:'Transfer request cancelled.',data:request});
+  }catch(error){if(!transaction.finished)await transaction.rollback();fail(res,error);}
+};
+
+exports.rollbackTransfer=async(req,res)=>{
+  const transaction=await sequelize.transaction();
+  try{
+    if(!['admin','super_admin'].includes(req.user.role)){await transaction.rollback();return res.status(403).json({success:false,message:'Administrator access only'});}
+    const request=await enrollmentService.rollbackRequest({requestId:req.params.id,actor:req.user,reason:req.body.reason,transaction});
+    await transaction.commit();res.json({success:true,message:'Class transfer rolled back. Enrollment history was preserved.',data:request});
+  }catch(error){if(!transaction.finished)await transaction.rollback();fail(res,error);}
+};
+
+exports.applyDueTransfersSystem=async()=>{
+  const requests=await ClassTransferRequest.findAll({where:{status:'scheduled',effectiveDate:{[Op.lte]:isoToday()}},attributes:['id'],order:[['effectiveDate','ASC'],['id','ASC']]});
+  const results=[];
+  for(const row of requests){
+    const transaction=await sequelize.transaction();
+    try{
+      const full=await ClassTransferRequest.findByPk(row.id,{transaction,lock:transaction.LOCK.UPDATE});
+      if(!full||full.status!=='scheduled'){await transaction.rollback();results.push({id:row.id,status:full?.status||'missing'});continue;}
+      const applied=await enrollmentService.applyRequest({requestId:full.id,actorId:full.approvedBy||full.requestedBy,actorRole:'system',transaction});
+      await transaction.commit();results.push({id:applied.id,status:applied.status});
+    }catch(error){
+      if(!transaction.finished)await transaction.rollback();
+      const terminal=error?.code==='STALE_TRANSFER_REQUEST'||error?.code==='OPEN_CLASS_TRANSFER'||[404,409].includes(Number(error?.status));
+      const current=await ClassTransferRequest.findByPk(row.id).catch(()=>null);
+      if(current&&current.status==='scheduled')await current.update({status:terminal?'failed':'scheduled',version:Number(current.version||1)+1,metadata:{...(current.metadata||{}),schedulerFailed:terminal,schedulerRetryPending:!terminal,schedulerAttempts:Number(current.metadata?.schedulerAttempts||0)+1,lastSchedulerError:String(error.message||'Scheduled transfer failed').slice(0,500),lastSchedulerAttemptAt:new Date().toISOString()}}).catch(()=>null);
+      console.error('[Class transfer scheduler]',row.id,error.message);
+      results.push({id:row.id,status:terminal?'failed':'retry_scheduled',error:error.message});
+    }
+  }
+  return results;
+};
+
+exports.transferOptions=async(req,res)=>{
+  try{
+    if(!['admin','super_admin','teacher'].includes(req.user.role))return res.status(403).json({success:false,message:'Forbidden'});
+    const schoolCode=code(req);
+    const classes=await Class.findAll({where:{schoolCode,isActive:true},attributes:['id','name','grade','stream','teacherId','curriculum','levelCode'],order:[['name','ASC']]});
+    let students=[];
+    if(req.user.role==='teacher'){
+      const teacher=await Teacher.findOne({where:{userId:req.user.id}});
+      const ownClasses=[];
+      if(teacher){
+        for(const cls of classes){
+          const ids=await enrollmentService.classTeacherIdsForClass({cls,schoolCode});
+          if(ids.includes(Number(teacher.id)))ownClasses.push(cls);
+        }
+      }
+      if(ownClasses.length)students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{classId:{[Op.in]:ownClasses.map(c=>c.id)},status:'active'},include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name']}],attributes:['id','elimuid','classId','grade'],order:[[User,'name','ASC']]});
+    }else{
+      students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{status:'active',classId:{[Op.in]:classes.map(c=>c.id)}},include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name']}],attributes:['id','elimuid','classId','grade'],order:[[User,'name','ASC']]});
+    }
+    res.json({success:true,data:{classes,students}});
+  }catch(error){fail(res,error);}
 };

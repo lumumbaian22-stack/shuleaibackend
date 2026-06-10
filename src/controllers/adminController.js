@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { User, Teacher, Student, Parent, School, Alert, Class } = require('../models');
+const { User, Teacher, Student, Parent, School, Alert, Class, TeacherSubjectAssignment } = require('../models');
 const { createAlert } = require('../services/notificationService');
 
 // Helper for curriculum names
@@ -32,15 +32,31 @@ exports.getDashboardStats = async (req, res) => {
 exports.getAllTeachers = async (req, res) => {
   try {
     const teachers = await Teacher.findAll({
-      include: [{ 
-        model: User, 
-        where: { schoolCode: req.user.schoolCode }, 
-        attributes: ['id','name','email','phone','profileImage','profilePicture','createdAt'] 
-      }],
+      include: [
+        { model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id','name','email','phone','profileImage','profilePicture','createdAt'] },
+        { model: TeacherSubjectAssignment, required: false, attributes: ['id','classId','subject','isClassTeacher'], include: [{ model: Class, required: false, attributes: ['id','name','grade','stream','isActive','schoolCode'] }] }
+      ],
       order: [['createdAt', 'DESC']]
     });
-    res.json({ success: true, data: teachers });
+    const teacherIds = teachers.map(t => Number(t.id)).filter(Boolean);
+    const legacyClassIds = teachers.map(t => Number(t.classId)).filter(Boolean);
+    let classes = [];
+    if (teacherIds.length || legacyClassIds.length) {
+      const clauses = [];
+      if (teacherIds.length) clauses.push({ teacherId: { [Op.in]: teacherIds } });
+      if (legacyClassIds.length) clauses.push({ id: { [Op.in]: legacyClassIds } });
+      classes = await Class.findAll({ where: { schoolCode: req.user.schoolCode, isActive: true, [Op.or]: clauses }, attributes: ['id','name','grade','stream','teacherId','isActive'] });
+    }
+    const data = teachers.map(row => {
+      const teacher = row.toJSON ? row.toJSON() : row;
+      teacher.TeacherSubjectAssignments = (teacher.TeacherSubjectAssignments || []).filter(a => !a.Class || a.Class.schoolCode === req.user.schoolCode);
+      teacher.Classes = classes.filter(c => Number(c.teacherId) === Number(teacher.id) || Number(c.id) === Number(teacher.classId)).map(c => c.toJSON ? c.toJSON() : c);
+      teacher.Class = teacher.Classes[0] || null;
+      return teacher;
+    });
+    res.json({ success: true, data });
   } catch (error) {
+    console.error('Get teachers error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -48,43 +64,25 @@ exports.getAllTeachers = async (req, res) => {
 exports.updateTeacher = async (req, res) => {
   try {
     const { teacherId } = req.params;
-    const {
-      name, email, phone, subjects, department, classTeacher, qualification,
-      employeeId, specialization, approvalStatus, classId, dateJoined,
-      gender, dateOfBirth, location, notes, tscNumber, roles
-    } = req.body;
-    
-    const teacher = await Teacher.findByPk(teacherId, { include: [{ model: User }] });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
-    
-    if (name || email || phone) await teacher.User.update({ name, email, phone });
-    
-    const teacherFields = {
-      subjects: subjects ? (Array.isArray(subjects) ? subjects : String(subjects).split(',').map(s => s.trim()).filter(Boolean)) : teacher.subjects,
-      department: department !== undefined ? department : teacher.department,
-      classTeacher: classTeacher !== undefined ? classTeacher : teacher.classTeacher,
-      qualification: qualification !== undefined ? qualification : teacher.qualification,
-      specialization: specialization !== undefined ? specialization : teacher.specialization,
-      approvalStatus: approvalStatus !== undefined ? approvalStatus : teacher.approvalStatus,
-      classId: classId !== undefined && classId !== '' ? classId : teacher.classId,
-      dateJoined: dateJoined !== undefined && dateJoined !== '' ? dateJoined : teacher.dateJoined
-    };
+    const { name, email, phone, department, qualification, employeeId, specialization, approvalStatus, dateJoined, gender, dateOfBirth, location, notes, tscNumber, roles } = req.body || {};
+    const teacher = await Teacher.findOne({ where: { id: teacherId }, include: [{ model: User, where: { schoolCode: req.user.schoolCode } }] });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found in this school' });
+    const userPatch = {};
+    if (name !== undefined && String(name).trim()) userPatch.name = String(name).trim();
+    if (email !== undefined && String(email).trim()) userPatch.email = String(email).trim();
+    if (phone !== undefined) userPatch.phone = phone || null;
+    if (Object.keys(userPatch).length) await teacher.User.update(userPatch);
+    const teacherFields = {};
+    if (department !== undefined) teacherFields.department = department || null;
+    if (qualification !== undefined) teacherFields.qualification = qualification || null;
+    if (specialization !== undefined) teacherFields.specialization = specialization || null;
+    if (approvalStatus !== undefined) teacherFields.approvalStatus = approvalStatus;
+    if (dateJoined !== undefined && dateJoined !== '') teacherFields.dateJoined = dateJoined;
     if (employeeId !== undefined && employeeId !== '') teacherFields.employeeId = employeeId;
     const existingDuties = teacher.duties && typeof teacher.duties === 'object' ? teacher.duties : {};
-    teacherFields.duties = {
-      ...(Array.isArray(existingDuties) ? { list: existingDuties } : existingDuties),
-      profile: {
-        gender: gender || existingDuties?.profile?.gender || null,
-        dateOfBirth: dateOfBirth || existingDuties?.profile?.dateOfBirth || null,
-        location: location || existingDuties?.profile?.location || null,
-        notes: notes || existingDuties?.profile?.notes || null,
-        tscNumber: tscNumber || existingDuties?.profile?.tscNumber || null,
-        roles: roles || existingDuties?.profile?.roles || []
-      }
-    };
+    teacherFields.duties = { ...(Array.isArray(existingDuties) ? { list: existingDuties } : existingDuties), profile: { gender: gender ?? existingDuties?.profile?.gender ?? null, dateOfBirth: dateOfBirth ?? existingDuties?.profile?.dateOfBirth ?? null, location: location ?? existingDuties?.profile?.location ?? null, notes: notes ?? existingDuties?.profile?.notes ?? null, tscNumber: tscNumber ?? existingDuties?.profile?.tscNumber ?? null, roles: roles ?? existingDuties?.profile?.roles ?? [] } };
     await teacher.update(teacherFields);
-    
-    res.json({ success: true, message: 'Teacher updated successfully', data: teacher });
+    res.json({ success: true, message: 'Teacher profile updated. Class and subject assignments were preserved.', data: teacher });
   } catch (error) {
     console.error('Update teacher error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -94,14 +92,18 @@ exports.updateTeacher = async (req, res) => {
 exports.deleteTeacher = async (req, res) => {
   try {
     const { teacherId } = req.params;
-    const teacher = await Teacher.findByPk(teacherId, { include: [{ model: User }] });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
-    
-    const userName = teacher.User.name;
-    await teacher.destroy();
-    res.json({ success: true, message: `Teacher ${userName} deleted successfully` });
+    const teacher = await Teacher.findOne({ where: { id: teacherId }, include: [{ model: User, where: { schoolCode: req.user.schoolCode } }] });
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found in this school' });
+    const userName = teacher.User?.name || 'Teacher';
+    const existingDuties = teacher.duties && typeof teacher.duties === 'object' ? teacher.duties : {};
+    await teacher.User.update({ isActive: false });
+    await teacher.update({
+      approvalStatus: 'suspended',
+      duties: { ...(Array.isArray(existingDuties) ? { list: existingDuties } : existingDuties), deactivatedAt: new Date().toISOString(), deactivatedBy: req.user.id }
+    });
+    res.json({ success: true, message: `${userName} deactivated. Class, subject, academic and audit history were preserved.` });
   } catch (error) {
-    console.error('Delete teacher error:', error);
+    console.error('Deactivate teacher error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -144,71 +146,7 @@ exports.getStudentDetails = async (req, res) => {
   }
 };
 
-exports.updateStudent = async (req, res) => {
-  try {
-    const { studentId } = req.params;
-    const {
-      name, email, phone, grade, status, isPrefect,
-      assessmentNumber, nemisNumber, location,
-      parentName, parentEmail, parentPhone, parentRelationship,
-      dateOfBirth, gender, academicStatus, house, transport, stream,
-      medicalNotes, disciplineNotes, clubs, schoolType
-    } = req.body;
-
-    const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
-
-    // Update User fields – only if provided
-    if (name !== undefined || email !== undefined || phone !== undefined) {
-      const userFields = {};
-      if (name !== undefined) userFields.name = name;
-      if (email !== undefined) userFields.email = email?.trim() || null;   // empty string → null
-      if (phone !== undefined) userFields.phone = phone?.trim() || null;
-      await student.User.update(userFields);
-    }
-
-    // Update Student fields
-    const studentFields = {};
-    if (grade !== undefined) studentFields.grade = grade;
-    if (status !== undefined) studentFields.status = status;
-    if (isPrefect !== undefined) studentFields.isPrefect = isPrefect;
-    if (assessmentNumber !== undefined) studentFields.assessmentNumber = assessmentNumber;
-    if (nemisNumber !== undefined) studentFields.nemisNumber = nemisNumber;
-    if (location !== undefined) studentFields.location = location;
-    if (parentName !== undefined) studentFields.parentName = parentName;
-    if (parentEmail !== undefined) studentFields.parentEmail = parentEmail;
-    if (parentPhone !== undefined) studentFields.parentPhone = parentPhone;
-    if (parentRelationship !== undefined) studentFields.parentRelationship = parentRelationship;
-    if (dateOfBirth !== undefined && dateOfBirth !== '') studentFields.dateOfBirth = dateOfBirth;
-    if (gender !== undefined && gender !== '') studentFields.gender = gender;
-    if (academicStatus !== undefined && academicStatus !== '') studentFields.academicStatus = academicStatus;
-    const existingPreferences = student.preferences && typeof student.preferences === 'object' ? student.preferences : {};
-    studentFields.preferences = {
-      ...existingPreferences,
-      schoolType: schoolType || existingPreferences.schoolType || null,
-      house: house || existingPreferences.house || null,
-      transport: transport || existingPreferences.transport || null,
-      stream: stream || existingPreferences.stream || null,
-      medicalNotes: medicalNotes || existingPreferences.medicalNotes || null,
-      disciplineNotes: disciplineNotes || existingPreferences.disciplineNotes || null,
-      clubs: Array.isArray(clubs) ? clubs : (clubs ? String(clubs).split(',').map(c => c.trim()).filter(Boolean) : existingPreferences.clubs || [])
-    };
-
-    if (Object.keys(studentFields).length > 0) {
-      await student.update(studentFields);
-    }
-
-    await student.reload({ include: [{ model: User }] });
-    res.json({ success: true, message: 'Student updated successfully', data: student });
-  } catch (error) {
-    console.error('Update student error:', error);
-    const statusCode = error.name === 'SequelizeValidationError' ? 400 : 500;
-    const message = error.name === 'SequelizeValidationError'
-      ? error.errors?.map(e => e.message).join(', ') || 'Validation failed'
-      : error.message;
-    res.status(statusCode).json({ success: false, message });
-  }
-};
+// Superseded duplicate export removed: updateStudent.
 
 exports.deleteStudent = async (req, res) => {
   try {
@@ -294,49 +232,9 @@ exports.getAllParents = async (req, res) => {
 };
 
 // ============ SCHOOL SETTINGS ============
-exports.getSchoolSettings = async (req, res) => {
-  try {
-    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
-    
-    // Add curriculum alias for frontend compatibility
-    const schoolData = school.toJSON();
-    schoolData.curriculum = school.system;
-    
-    res.json({ success: true, data: schoolData });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+// Superseded duplicate export removed: getSchoolSettings.
 
-exports.updateSchoolSettings = async (req, res) => {
-  try {
-    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) return res.status(404).json({ success: false, message: 'School not found' });
-
-    // Update curriculum and broadcast change
-    const oldCurriculum = school.system;
-    if (req.body.curriculum && req.body.curriculum !== oldCurriculum) {
-      school.system = req.body.curriculum;
-      if (global.io) {
-        global.io.to(`school-${school.schoolId}`).emit('curriculum-updated', {
-          curriculum: school.system,
-          curriculumName: getCurriculumName(school.system),
-          timestamp: new Date()
-        });
-      }
-    }
-
-    school.settings = { ...school.settings, ...req.body, customSubjects: req.body.customSubjects || [] };
-    if (req.body.schoolName) school.name = req.body.schoolName;
-    await school.save();
-
-    res.json({ success: true, data: { ...school.toJSON(), customSubjects: school.settings.customSubjects } });
-  } catch (error) {
-    console.error('Update school settings error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+// Superseded duplicate export removed: updateSchoolSettings.
 
 // ============ CLASS MANAGEMENT ============
 exports.getClasses = async (req, res) => {
@@ -362,12 +260,12 @@ exports.getClassStudents = async (req, res) => {
     const classItem = await Class.findOne({ where: { id, schoolCode: req.user.schoolCode, isActive: true } });
     if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
     const students = await Student.findAll({
-      where: { schoolCode: req.user.schoolCode, [Op.or]: [{ classId: id }, { grade: classItem.name }, { className: classItem.name }] },
+      where: { status:{ [Op.ne]:'inactive' }, [Op.or]: [{ classId: id }, { [Op.and]:[{ classId:null }, { grade:classItem.name }] }] },
       include: [
-        { model: User, attributes: ['id', 'name', 'email'] },
+        { model: User, attributes: ['id', 'name', 'email'], where:{ schoolCode:req.user.schoolCode }, required:true },
         { model: Parent, as: 'parents', include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }] }
       ],
-      order: [[User, 'name', 'ASC']]
+      order: [['createdAt', 'DESC']]
     });
     res.json({ success: true, data: students });
   } catch (error) {
@@ -396,36 +294,9 @@ exports.getClassDetails = async (req, res) => {
 };
 
 
-exports.createClass = async (req, res) => {
-  try {
-    const { name, grade, stream, teacherId } = req.body;
-    const newClass = await Class.create({
-      name, grade, stream,
-      schoolCode: req.user.schoolCode,
-      teacherId: teacherId || null
-    });
-    res.status(201).json({ success: true, data: newClass });
-  } catch (error) {
-    console.error('Create class error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+// Removed superseded duplicate export: createClass. The canonical implementation is defined later in this controller.
 
-exports.updateClass = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, grade, stream, teacherId } = req.body;
-    
-    const classItem = await Class.findOne({ where: { id, schoolCode: req.user.schoolCode } });
-    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-    
-    await classItem.update({ name, grade, stream, teacherId });
-    res.json({ success: true, data: classItem });
-  } catch (error) {
-    console.error('Update class error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+// Removed superseded duplicate export: updateClass. The canonical implementation is defined later in this controller.
 
 exports.deleteClass = async (req, res) => {
   try {
@@ -446,11 +317,26 @@ exports.getAvailableTeachers = async (req, res) => {
     const teachers = await Teacher.findAll({
       where: { approvalStatus: 'approved' },
       include: [
-        { model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id', 'name', 'email'] },
-        { model: Class, attributes: ['id','name','profileImage','profilePicture'] } // include assigned class
-      ]
+        { model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id','name','email','phone','profileImage','profilePicture'] },
+        { model: TeacherSubjectAssignment, required: false, attributes: ['id','classId','subject','isClassTeacher'], include: [{ model: Class, required: false, attributes: ['id','name','grade','stream','isActive','schoolCode'] }] }
+      ],
+      order: [['createdAt', 'DESC']]
     });
-    res.json({ success: true, data: teachers });
+    const teacherIds = teachers.map(t => Number(t.id)).filter(Boolean);
+    const legacyClassIds = teachers.map(t => Number(t.classId)).filter(Boolean);
+    const clauses = [];
+    if (teacherIds.length) clauses.push({ teacherId: { [Op.in]: teacherIds } });
+    if (legacyClassIds.length) clauses.push({ id: { [Op.in]: legacyClassIds } });
+    const classes = clauses.length ? await Class.findAll({ where: { schoolCode:req.user.schoolCode, isActive:true, [Op.or]:clauses }, attributes:['id','name','grade','stream','teacherId','isActive'] }) : [];
+    const data = teachers.map(row => {
+      const teacher = row.toJSON ? row.toJSON() : row;
+      teacher.TeacherSubjectAssignments = (teacher.TeacherSubjectAssignments || []).filter(a => !a.Class || a.Class.schoolCode === req.user.schoolCode);
+      teacher.Classes = classes.filter(c => Number(c.teacherId) === Number(teacher.id) || Number(c.id) === Number(teacher.classId)).map(c => c.toJSON ? c.toJSON() : c);
+      teacher.Class = teacher.Classes[0] || null;
+      return teacher;
+    });
+    data.sort((a,b) => String(a.User?.name || '').localeCompare(String(b.User?.name || '')));
+    res.json({ success: true, data });
   } catch (error) {
     console.error('Get available teachers error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -459,72 +345,10 @@ exports.getAvailableTeachers = async (req, res) => {
 
 // In adminController.js
 // Replace the existing assignTeacherToClass with:
-exports.assignTeacherToClass = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { teacherId } = req.body;
-    const classItem = await Class.findOne({ where: { id, schoolCode: req.user.schoolCode } });
-    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-    const teacher = await Teacher.findOne({
-      where: { id: teacherId },
-      include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
-    });
-    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
-
-    // Remove previous class teacher
-    if (classItem.teacherId) {
-      const oldTeacher = await Teacher.findByPk(classItem.teacherId);
-      if (oldTeacher) {
-        oldTeacher.classId = null;
-        oldTeacher.classTeacher = null;
-        await oldTeacher.save();
-      }
-    }
-    // If teacher was already class teacher of another class, remove that
-    if (teacher.classId && teacher.classId !== classItem.id) {
-      const oldClass = await Class.findByPk(teacher.classId);
-      if (oldClass) {
-        oldClass.teacherId = null;
-        await oldClass.save();
-      }
-    }
-    await classItem.update({ teacherId: teacher.id });
-    await teacher.update({ classId: classItem.id, classTeacher: classItem.name });
-    res.json({ success: true, message: `Teacher assigned to ${classItem.name} successfully` });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+// Removed superseded duplicate export: assignTeacherToClass. The canonical implementation is defined later in this controller.
 
 // Add batch subject assignment
-exports.batchAssignSubjects = async (req, res) => {
-  try {
-    const { classId, assignments } = req.body; // assignments: [{ teacherId, subject }]
-    const classItem = await Class.findOne({ where: { id: classId, schoolCode: req.user.schoolCode } });
-    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-    let subjectTeachers = classItem.subjectTeachers || [];
-    for (const ass of assignments) {
-      const teacher = await Teacher.findByPk(ass.teacherId);
-      if (!teacher) continue;
-      const teacherName = teacher.User?.name || 'Unknown';
-      // Remove existing assignment for this subject
-      subjectTeachers = subjectTeachers.filter(st => st.subject !== ass.subject);
-      subjectTeachers.push({
-        id: Date.now().toString() + Math.random(),
-        teacherId: ass.teacherId,
-        teacherName,
-        subject: ass.subject,
-        assignedAt: new Date(),
-        assignedBy: req.user.id
-      });
-    }
-    await classItem.update({ subjectTeachers });
-    res.json({ success: true, message: 'Subjects assigned successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+// Removed superseded duplicate export: batchAssignSubjects. The canonical implementation is defined later in this controller.
 
 exports.removeTeacherFromClass = async (req, res) => {
   try {
@@ -557,50 +381,7 @@ exports.removeTeacherFromClass = async (req, res) => {
 };
 
 // ============ SUBJECT ASSIGNMENT ============
-exports.assignTeacherToSubject = async (req, res) => {
-  try {
-    const { classId, teacherId, subject, isClassTeacher = false } = req.body;
-
-    if (!classId || !teacherId || !subject) {
-      return res.status(400).json({ success: false, message: 'Class ID, Teacher ID, and Subject are required' });
-    }
-
-    const classItem = await Class.findOne({
-      where: { id: parseInt(classId), schoolCode: req.user.schoolCode }
-    });
-    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-
-    const teacher = await Teacher.findOne({
-      where: { id: parseInt(teacherId) },
-      include: [{ model: User, attributes: ['name'] }]
-    });
-    const teacherName = teacher?.User?.name || 'Unknown Teacher';
-
-    let existing = classItem.subjectTeachers || [];
-    const alreadyExists = existing.some(t => t.subject === subject && t.teacherId === parseInt(teacherId));
-    if (alreadyExists) {
-      return res.status(400).json({ success: false, message: 'Teacher already assigned to this subject' });
-    }
-
-    const newAssignment = {
-      id: Date.now().toString(),
-      teacherId: parseInt(teacherId),
-      teacherName,
-      subject,
-      assignedAt: new Date().toISOString(),
-      assignedBy: req.user.id,
-      isClassTeacher
-    };
-
-    existing.push(newAssignment);
-    await classItem.update({ subjectTeachers: existing });
-
-    res.json({ success: true, message: `Teacher assigned to ${subject} successfully`, data: newAssignment });
-  } catch (error) {
-    console.error('ASSIGNMENT ERROR:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+// Removed superseded duplicate export: assignTeacherToSubject. The canonical implementation is defined later in this controller.
 
 exports.removeSubjectAssignment = async (req, res) => {
   try {
@@ -626,17 +407,7 @@ exports.removeSubjectAssignment = async (req, res) => {
   }
 };
 
-exports.getClassSubjectAssignments = async (req, res) => {
-  try {
-    const { classId } = req.params;
-    const classItem = await Class.findOne({ where: { id: parseInt(classId), schoolCode: req.user.schoolCode } });
-    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-    res.json({ success: true, data: classItem.subjectTeachers || [] });
-  } catch (error) {
-    console.error('Get subject assignments error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+// Removed superseded duplicate export: getClassSubjectAssignments. The canonical implementation is defined later in this controller.
 
 // ============ ANALYTICS ============
 exports.getStudentGrades = async (req, res) => {
@@ -695,34 +466,7 @@ exports.getAttendanceStats = async (req, res) => {
   }
 };
 
-exports.batchAssignSubjects = async (req, res) => {
-  try {
-    const { classId, assignments } = req.body; // assignments: [{ teacherId, subject }]
-    const classItem = await Class.findOne({ where: { id: classId, schoolCode: req.user.schoolCode } });
-    if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-    let subjectTeachers = classItem.subjectTeachers || [];
-    for (const ass of assignments) {
-      const teacher = await Teacher.findByPk(ass.teacherId);
-      if (!teacher) continue;
-      const teacherName = teacher.User?.name || 'Unknown';
-      // Remove existing assignment for this subject (if any)
-      subjectTeachers = subjectTeachers.filter(st => st.subject !== ass.subject);
-      // Add new
-      subjectTeachers.push({
-        id: Date.now().toString() + Math.random(),
-        teacherId: ass.teacherId,
-        teacherName,
-        subject: ass.subject,
-        assignedAt: new Date(),
-        assignedBy: req.user.id
-      });
-    }
-    await classItem.update({ subjectTeachers });
-    res.json({ success: true, message: 'Subjects assigned successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+// Removed superseded duplicate export: batchAssignSubjects. The canonical implementation is defined later in this controller.
 
 // ============ V3 OVERRIDES: class teacher, subject teacher, extended student fields ============
 async function v3SchoolTeacher(teacherId, schoolCode) {
@@ -742,37 +486,9 @@ async function v3SaveSubjectAssignment({ classItem, teacher, subject, isClassTea
   await teacher.update({ subjects: Array.from(new Set([...(teacher.subjects || []), subject])) });
   return row;
 }
-exports.assignTeacherToClass = async (req, res) => {
-  try {
-    const classItem = await v3Class(req.params.id, req.user.schoolCode); if (!classItem) return res.status(404).json({ success:false, message:'Class not found' });
-    const teacher = await v3SchoolTeacher(req.body.teacherId, req.user.schoolCode); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found in this school' });
-    if (classItem.teacherId && Number(classItem.teacherId) !== Number(teacher.id)) { const old = await Teacher.findByPk(classItem.teacherId); if (old) await old.update({ classId:null, classTeacher:null }); }
-    const previous = await Class.findOne({ where: { teacherId: teacher.id, schoolCode: req.user.schoolCode, isActive: true } });
-    if (previous && previous.id !== classItem.id) await previous.update({ teacherId: null });
-    await classItem.update({ teacherId: teacher.id });
-    await teacher.update({ classId: classItem.id, classTeacher: classItem.name });
-    res.json({ success:true, message:`${teacher.User.name} is now class teacher for ${classItem.name}`, data:{ class:classItem, teacher } });
-  } catch(error) { console.error('V3 assign class teacher error:', error); res.status(500).json({ success:false, message:error.message }); }
-};
-exports.assignTeacherToSubject = async (req, res) => {
-  try {
-    const { classId, teacherId, subject, isClassTeacher=false } = req.body;
-    if (!classId || !teacherId || !subject) return res.status(400).json({ success:false, message:'classId, teacherId and subject are required' });
-    const classItem = await v3Class(classId, req.user.schoolCode); if (!classItem) return res.status(404).json({ success:false, message:'Class not found' });
-    const teacher = await v3SchoolTeacher(teacherId, req.user.schoolCode); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found in this school' });
-    const row = await v3SaveSubjectAssignment({ classItem, teacher, subject, isClassTeacher, adminId:req.user.id });
-    if (isClassTeacher) { await classItem.update({ teacherId: teacher.id }); await teacher.update({ classId: classItem.id, classTeacher: classItem.name }); }
-    res.json({ success:true, message:`${teacher.User.name} assigned to ${subject} in ${classItem.name}`, data:row });
-  } catch(error) { console.error('V3 assign subject error:', error); res.status(500).json({ success:false, message:error.message }); }
-};
-exports.batchAssignSubjects = async (req, res) => {
-  try {
-    const classItem = await v3Class(req.body.classId, req.user.schoolCode); if (!classItem) return res.status(404).json({ success:false, message:'Class not found' });
-    const saved=[];
-    for (const item of (req.body.assignments || [])) { if (!item.teacherId || !item.subject) continue; const teacher = await v3SchoolTeacher(item.teacherId, req.user.schoolCode); if (!teacher) continue; saved.push(await v3SaveSubjectAssignment({ classItem, teacher, subject:item.subject, isClassTeacher:item.isClassTeacher, adminId:req.user.id })); if (item.isClassTeacher) { await classItem.update({ teacherId: teacher.id }); await teacher.update({ classId: classItem.id, classTeacher: classItem.name }); } }
-    res.json({ success:true, message:`${saved.length} assignment(s) saved`, data:saved });
-  } catch(error) { console.error('V3 batch subject error:', error); res.status(500).json({ success:false, message:error.message }); }
-};
+// Removed superseded duplicate export: assignTeacherToClass. The canonical implementation is defined later in this controller.
+// Removed superseded duplicate export: assignTeacherToSubject. The canonical implementation is defined later in this controller.
+// Removed superseded duplicate export: batchAssignSubjects. The canonical implementation is defined later in this controller.
 exports.updateStudent = async (req, res) => {
   try {
     const student = await Student.findByPk(req.params.studentId, { include: [{ model: User }] });
@@ -790,6 +506,7 @@ exports.updateStudent = async (req, res) => {
 
 // ============ V102 LOCKED ACCESS + CURRICULUM STRUCTURE ENGINE ============
 const curriculumEngine = require('../services/curriculumStructureEngine');
+const classGeneration = require('../services/classGenerationService');
 const { listStudentSubjectSelections, replaceStudentSubjectSelections } = require('../services/studentSubjectSelectionService');
 const { sequelize } = require('../models');
 const TeacherSubjectAssignmentModel = require('../models').TeacherSubjectAssignment;
@@ -815,26 +532,34 @@ function v102BuildCurriculumSettings(school, patch = {}) {
   const structureType = patch.structureType || patch.schoolStructure || currentEngine.structureType || school.schoolStructure || currentSettings.schoolLevel || 'mixed';
   const rawLevels = Array.isArray(patch.enabledLevels) ? [...patch.enabledLevels] : (Array.isArray(currentEngine.enabledLevels) ? [...currentEngine.enabledLevels] : []);
   const rawGroups = Array.isArray(patch.enabledLevelGroups) ? [...patch.enabledLevelGroups] : (Array.isArray(currentEngine.enabledLevelGroups) ? [...currentEngine.enabledLevelGroups] : []);
-  if (!rawLevels.length && !rawGroups.length) {
-    if (curriculum === 'cbc') {
-      if (/primary/.test(structureType)) rawGroups.push('early_learning','primary_learning');
-      else if (/junior/.test(structureType)) rawGroups.push('junior_school');
-      else if (/senior/.test(structureType)) rawGroups.push('senior_secondary');
-      else rawGroups.push('early_learning','primary_learning','junior_school','senior_secondary');
-    } else if (curriculum === '844') {
-      if (/secondary/.test(structureType)) rawGroups.push('secondary_844');
-      else if (/primary/.test(structureType)) rawGroups.push('primary_844');
-      else rawGroups.push('primary_844','secondary_844');
-    }
+  if (!rawLevels.length && !rawGroups.length && structureType !== 'custom') {
+    const presetStructure = ['primary_only','secondary_only','mixed','full_school','junior_only','senior_only'].includes(structureType)
+      ? structureType
+      : 'mixed';
+    const syntheticSchool = {
+      system: curriculum,
+      schoolStructure: presetStructure,
+      enabledLevels: [],
+      settings: { curriculumEngine: { curriculum, structureType: presetStructure, enabledLevels: [], enabledLevelGroups: [] } }
+    };
+    rawLevels.push(...curriculumEngine.getCurriculumConfig(syntheticSchool).enabledLevels);
   }
   const enabledLevels = curriculumEngine.expandEnabledLevelCodes(curriculum, [...rawGroups, ...rawLevels]);
   const enabledLevelGroups = curriculumEngine.groupsFromEnabledLevels(curriculum, enabledLevels);
   const schoolSubjects = Array.isArray(patch.schoolSubjects) ? patch.schoolSubjects : (Array.isArray(currentEngine.schoolSubjects) ? currentEngine.schoolSubjects : []);
   const assessmentSettings = Array.isArray(patch.assessmentSettings) ? patch.assessmentSettings : (Array.isArray(currentEngine.assessmentSettings) ? currentEngine.assessmentSettings : curriculumEngine.defaultAssessmentSettings());
+  const classGenerationConfig = classGeneration.normalizeConfigPatch(school, patch.classGeneration || {}, patch.updatedBy || null);
+  if (!enabledLevels.length && !classGenerationConfig.customClasses.length) {
+    const error = new Error('Select at least one grade/class level or add at least one custom class name.');
+    error.statusCode = 400;
+    error.code = 'CLASS_STRUCTURE_REQUIRED';
+    throw error;
+  }
   return {
     ...currentSettings,
     schoolStructure: structureType,
     curriculum,
+    classGeneration: classGenerationConfig,
     curriculumEngine: {
       ...currentEngine,
       curriculum,
@@ -851,30 +576,11 @@ function v102BuildCurriculumSettings(school, patch = {}) {
 }
 
 
-async function v130SyncClassesForEnabledLevels(school, actorUserId) {
-  const cfg = curriculumEngine.getCurriculumConfig(school);
-  const allowedLevels = curriculumEngine.getAllowedLevelsForSchool(school);
-  const allowedCodes = new Set(allowedLevels.map(l => l.code));
-  const existing = await Class.findAll({ where: { schoolCode: school.schoolId } });
-  const byLevel = new Map(existing.filter(c => c.levelCode).map(c => [c.levelCode, c]));
-  const touched = [];
-  for (const level of allowedLevels) {
-    const subjectList = curriculumEngine.getEligibleSubjectsForClass(school, { grade: level.label, name: level.label, levelCode: level.code, subjectTeachers: [] });
-    const settings = { curriculumMeta: { curriculum: cfg.curriculum, structureType: cfg.structureType, levelCode: level.code, levelLabel: level.label, curriculumLevel: level.group || null }, subjects: subjectList.map(s => ({ id:s.id, name:s.name, category:s.category, isCore:s.isCore, countsInFinalByDefault:s.countsInFinalByDefault })) };
-    const current = byLevel.get(level.code) || existing.find(c => String(c.grade || '').toLowerCase() === String(level.label).toLowerCase());
-    if (current) {
-      await current.update({ curriculum: cfg.curriculum, levelCode: level.code, levelLabel: level.label, curriculumLevel: level.group || null, isActive: true, settings: { ...(current.settings || {}), ...settings } });
-      touched.push(current.id);
-    } else {
-      const created = await Class.create({ name: level.label, grade: level.label, stream: null, schoolCode: school.schoolId, curriculum: cfg.curriculum, levelCode: level.code, levelLabel: level.label, curriculumLevel: level.group || null, isActive: true, settings });
-      touched.push(created.id);
-    }
-  }
-  for (const cls of existing) {
-    if (cls.levelCode && !allowedCodes.has(cls.levelCode)) await cls.update({ isActive:false }).catch(() => null);
-  }
-  await sequelize.query(`INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","eventType","payload","createdAt","updatedAt") VALUES (:schoolCode,:actorUserId,'curriculum_classes_synced',:payload,NOW(),NOW())`, { replacements:{ schoolCode: school.schoolId, actorUserId: actorUserId || null, payload: JSON.stringify({ enabledLevels:[...allowedCodes], touchedClassIds:touched }) } }).catch(() => null);
-  return { touchedClassIds:touched, enabledLevels:[...allowedCodes] };
+async function v130SyncClassesForEnabledLevels(school, actorUserId, options = {}) {
+  if (options.mode === 'preview') return classGeneration.preview(school);
+  if (options.mode === 'apply') return classGeneration.apply(school, actorUserId, options.previewToken);
+  // Safe metadata refresh only. Never create, reactivate, deactivate, rename, or delete classes here.
+  return classGeneration.refreshExistingClassMetadata(school);
 }
 
 function v102ClassMeta(school, gradeOrName) {
@@ -918,6 +624,7 @@ exports.getSchoolSettings = async (req, res) => {
       enabledLevels: curriculumEngine.getAllowedLevelsForSchool(school),
       subjectCount: curriculumEngine.getSubjectBankForSchool(school).length
     };
+    schoolData.classGeneration = classGeneration.getConfig(school);
     res.json({ success: true, data: schoolData });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -930,7 +637,7 @@ exports.updateSchoolSettings = async (req, res) => {
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
     const before = school.toJSON();
     const patch = req.body || {};
-    const newSettings = v102BuildCurriculumSettings(school, patch);
+    const newSettings = v102BuildCurriculumSettings(school, { ...patch, updatedBy: req.user.id });
     const nextCurriculum = curriculumEngine.normalizeCurriculum(patch.curriculum || school.system);
     if (patch.curriculum && nextCurriculum !== school.system) {
       newSettings.curriculumHistory = [
@@ -944,15 +651,18 @@ exports.updateSchoolSettings = async (req, res) => {
     school.enabledLevels = newSettings.curriculumEngine.enabledLevels;
     school.settings = { ...newSettings, customSubjects: patch.customSubjects || newSettings.customSubjects || [] };
     await school.save();
-    const sync = await v130SyncClassesForEnabledLevels(school, req.user.id);
+    // Saving school settings is non-destructive. Existing Class rows and assignments
+    // are not mutated here; the admin must review and confirm the generation preview.
+    const sync = { preserved: true, updatedClassIds: [], createdClassIds: [], deactivatedClassIds: [] };
+    const generationPreview = await classGeneration.preview(school);
     await sequelize.query(`INSERT INTO "PlatformAuditEvents" ("schoolCode","actorUserId","eventType","payload","createdAt","updatedAt") VALUES (:schoolCode,:actorUserId,'school_settings_updated',:payload,NOW(),NOW())`, {
       replacements: { schoolCode: school.schoolId, actorUserId: req.user.id, payload: JSON.stringify({ before: { system: before.system, settings: before.settings }, after: { system: school.system, settings: school.settings }, sync }) }
     }).catch(() => null);
     if (global.io) global.io.to(`school-${school.schoolId}`).emit('curriculum-updated', { curriculum: school.system, timestamp: new Date() });
-    res.json({ success: true, data: { ...school.toJSON(), curriculum: school.system, curriculumSetup: curriculumEngine.getCurriculumConfig(school), classSync: sync } });
+    res.json({ success: true, message: 'School settings saved. Existing classes were preserved; review the class-generation preview before creating missing classes.', data: { ...school.toJSON(), curriculum: school.system, curriculumSetup: curriculumEngine.getCurriculumConfig(school), classGeneration: classGeneration.getConfig(school), classSync: sync, classGenerationPreview: generationPreview } });
   } catch (error) {
     console.error('V130 update school settings error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, code:error.code, message: error.message });
   }
 };
 
@@ -984,11 +694,35 @@ exports.syncCurriculumClasses = async (req, res) => {
   try {
     const school = await v102GetSchool(req.user.schoolCode);
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const result = await v130SyncClassesForEnabledLevels(school, req.user.id);
-    res.json({ success:true, message:`Curriculum classes synced: ${result.touchedClassIds.length} class(es) touched`, data:result });
+    if (req.body?.confirm === true) {
+      const result = await v130SyncClassesForEnabledLevels(school, req.user.id, { mode:'apply', previewToken:req.body.previewToken });
+      return res.status(201).json({ success:true, message:`${result.createdCount} missing class(es) created. Existing classes and assignments were preserved.`, data:result });
+    }
+    const result = await v130SyncClassesForEnabledLevels(school, req.user.id, { mode:'preview' });
+    return res.json({ success:true, message:`Preview ready: ${result.createCount} class(es) can be added and ${result.skipCount} existing class(es) will be skipped.`, data:result });
   } catch(error) {
-    console.error('V132 sync curriculum classes error:', error);
-    res.status(500).json({ success:false, message:error.message });
+    console.error('Class generation error:', error);
+    res.status(error.statusCode || 500).json({ success:false, code:error.code, message:error.message, data:error.preview || undefined });
+  }
+};
+
+exports.previewClassGeneration = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const result = await classGeneration.preview(school);
+    res.json({ success:true, data:result });
+  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+exports.generateClassesFromSettings = async (req, res) => {
+  try {
+    const school = await v102GetSchool(req.user.schoolCode);
+    if (!school) return res.status(404).json({ success:false, message:'School not found' });
+    const result = await classGeneration.apply(school, req.user.id, req.body?.previewToken);
+    res.status(201).json({ success:true, message:`${result.createdCount} missing class(es) created safely.`, data:result });
+  } catch(error) {
+    res.status(error.statusCode || 500).json({ success:false, code:error.code, message:error.message, data:error.preview || undefined });
   }
 };
 

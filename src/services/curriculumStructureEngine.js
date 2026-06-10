@@ -294,7 +294,9 @@ function getCurriculumConfig(school) {
   const engine = settings.curriculumEngine || {};
   const curriculum = normalizeCurriculum(engine.curriculum || settings.curriculum || school?.system || 'cbc');
   const structureType = engine.structureType || settings.schoolStructure || school?.schoolStructure || 'mixed';
-  const preset = STRUCTURE_PRESETS[curriculum]?.[structureType] || STRUCTURE_PRESETS[curriculum]?.mixed || (SUBJECT_BANK[curriculum]?.levels || []).map(l => l.code);
+  const preset = structureType === 'custom'
+    ? []
+    : (STRUCTURE_PRESETS[curriculum]?.[structureType] || STRUCTURE_PRESETS[curriculum]?.mixed || (SUBJECT_BANK[curriculum]?.levels || []).map(l => l.code));
   const explicitLevels = Array.isArray(engine.enabledLevels) && engine.enabledLevels.length ? engine.enabledLevels : (Array.isArray(school?.enabledLevels) ? school.enabledLevels : []);
   const explicitGroups = Array.isArray(engine.enabledLevelGroups) && engine.enabledLevelGroups.length ? engine.enabledLevelGroups : [];
   // If an admin selected grouped levels (Early/Primary/Junior/Senior), honor those groups first.

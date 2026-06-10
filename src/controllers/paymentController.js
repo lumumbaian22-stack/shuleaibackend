@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, Subscription, SubscriptionPayment, SchoolPaymentSetting, Class } = require('../models');
 const daraja = require('../services/darajaService');
 const subscriptionController = require('./subscriptionController');
+const subscriptionEnforcement = require('../services/subscriptionEnforcementService');
 const realtimeSync = require('../services/realtimeSyncService');
 const financeLedger = require('../services/financeLedgerService');
 const { CORE_SCHOOL_FEATURES } = require('../services/schoolFeatureService');
@@ -505,117 +506,6 @@ exports.parentFeeSTK = async (req, res) => {
   } catch(error){ console.error('Parent fee STK error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 
-exports.parentFeeManual = async (req, res) => {
-  try {
-    const { studentId, feeId, amount, mpesaCode, phone, notes } = req.body || {};
-    if(!studentId || !amount || !mpesaCode) return res.status(400).json({ success:false, message:'studentId, amount, and M-Pesa code are required' });
-    const student = await findStudentForParent(req, studentId);
-    if(!student) return res.status(404).json({ success:false, message:'Student not found or not linked to this parent' });
-    const parent = await currentParent(req);
-    if(!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-    const realSchoolCode = studentSchoolCode(student) || schoolCode(req);
-    const fee = feeId ? await Fee.findOne({ where:{ id:feeId, studentId:student.id, schoolCode:realSchoolCode } }) : await Fee.findOne({ where:{ studentId:student.id, schoolCode:realSchoolCode }, order:[['year','DESC'],['term','DESC']] });
-    const payAmount = cleanAmount(amount);
-    if(fee && payAmount > feeBalance(fee)) return res.status(400).json({ success:false, message:'Payment amount exceeds outstanding balance' });
-    const payment = await createManualPayment(req, { student, parent, fee, amount:payAmount, mpesaCode, phone, notes });
-    res.json({ success:true, message:'Payment submitted for school finance verification. Balance updates after approval.', data:{ paymentId:payment.id, reference:payment.reference, status:payment.status, elimuId:studentElimuId(student), amount:payAmount } });
-  } catch(error){ console.error('Manual school fee payment error:', error); res.status(500).json({ success:false, message:error.message }); }
-};
-
-exports.getManualVerificationQueue = async (req, res) => {
-  try {
-    const rows = await Payment.findAll({
-      where:{ schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school', paymentGateway:'manual_mpesa', status:'pending' },
-      include:[{ model:Student, include:[{model:User, attributes:['id','name','schoolCode']}] }, { model:Parent, include:[{model:User, attributes:['id','name','phone','email']}] }],
-      order:[['createdAt','DESC']], limit:200
-    });
-    res.json({ success:true, data:rows });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
-};
-
-
-exports.getAdminPaymentRecords = async (req, res) => {
-  try {
-    const rows = await Payment.findAll({
-      where:{ schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school' },
-      include:[
-        { model:Student, include:[{model:User, attributes:['id','name','schoolCode']}] },
-        { model:Parent, include:[{model:User, attributes:['id','name','phone','email']}] },
-        { model:Fee, required:false }
-      ],
-      order:[['createdAt','DESC']],
-      limit:1000
-    });
-
-    const data = rows.map((payment) => {
-      const row = payment.toJSON ? payment.toJSON() : payment;
-      const fee = row.Fee || null;
-      const total = Number(fee?.totalAmount || 0);
-      const paid = Number(fee?.paidAmount || 0);
-      const balance = Math.max(0, total - paid);
-      return {
-        ...row,
-        studentName: row.Student?.User?.name || row.Student?.name || row.metadata?.studentName || null,
-        parentName: row.Parent?.User?.name || row.metadata?.parentName || null,
-        className: row.Student?.grade || row.metadata?.className || fee?.className || null,
-        feeTerm: fee?.term || row.metadata?.term || null,
-        feeYear: fee?.year || row.metadata?.year || null,
-        feeTotalAmount: total,
-        feePaidAmount: paid,
-        feeBalance: balance
-      };
-    });
-
-    res.json({ success:true, data });
-  } catch(error){
-    console.error('Admin payment records error:', error);
-    res.status(500).json({ success:false, message:error.message });
-  }
-};
-
-exports.approveManualPayment = async (req, res) => {
-  try {
-    const payment = await Payment.findOne({ where:{ id:req.params.paymentId, schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school' } });
-    if(!payment) return res.status(404).json({ success:false, message:'Payment not found' });
-    if(payment.status === 'completed') return res.json({ success:true, message:'Payment already approved', data:payment });
-    const trail = Array.isArray(payment.auditTrail) ? payment.auditTrail : [];
-    trail.push(auditEntry('manual_payment_approved', req.user, { reference:payment.reference, amount:payment.amount }));
-    await payment.update({ status:'completed', completedAt:new Date(), verifiedBy:req.user.id, verifiedAt:new Date(), notes:req.body?.notes || payment.notes, auditTrail:trail });
-    const fee = await applyFeePayment(payment, payment.reference);
-    await writeAudit(req, { module:'payments', action:'manual_payment_approved', entityType:'Payment', entityId:String(payment.id), after:payment.toJSON() });
-    realtimeSync.emitPaymentUpdate(payment.schoolCode || req.user.schoolCode, {
-      paymentId: payment.id,
-      studentId: payment.studentId,
-      feeId: payment.feeId,
-      amount: payment.amount,
-      status: 'completed',
-      action: 'manual_payment_approved'
-    });
-    res.json({ success:true, message:'Payment approved. Student fee balance updated.', data:{ payment, fee } });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
-};
-
-exports.rejectManualPayment = async (req, res) => {
-  try {
-    const payment = await Payment.findOne({ where:{ id:req.params.paymentId, schoolCode:req.user.schoolCode, paymentType:'fee', paidTo:'school' } });
-    if(!payment) return res.status(404).json({ success:false, message:'Payment not found' });
-    const trail = Array.isArray(payment.auditTrail) ? payment.auditTrail : [];
-    trail.push(auditEntry('manual_payment_rejected', req.user, { reason:req.body?.reason || 'Rejected by finance/admin' }));
-    await payment.update({ status:'failed', verifiedBy:req.user.id, verifiedAt:new Date(), notes:req.body?.reason || 'Rejected by school finance/admin', auditTrail:trail });
-    await writeAudit(req, { module:'payments', action:'manual_payment_rejected', entityType:'Payment', entityId:String(payment.id), after:payment.toJSON() });
-    realtimeSync.emitPaymentUpdate(payment.schoolCode || req.user.schoolCode, {
-      paymentId: payment.id,
-      studentId: payment.studentId,
-      feeId: payment.feeId,
-      amount: payment.amount,
-      status: 'failed',
-      action: 'manual_payment_rejected'
-    });
-    res.json({ success:true, message:'Payment rejected. No balance was updated.', data:payment });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
-};
-
-
 exports.parentSubscriptionSTK = async (req, res) => {
   try {
     const { studentId, phone } = req.body || {};
@@ -757,7 +647,7 @@ exports.reviewPlatformManualPayment = async (req, res) => {
 exports.schoolSubscriptionSTK = async (req, res) => {
   try {
     const { phone } = req.body || {};
-    const billingCycle = billingCycleFromBody(req.body || {});
+    const billingCycle = subscriptionEnforcement.requireBillingCycle(req.body?.billingCycle || req.body?.billingPeriod || 'monthly');
     const planCode = normalizePlanInput(req.body?.planCode || req.body?.plan || 'school_growth', 'school');
     if (!phone) return res.status(400).json({ success:false, message:'phone is required' });
     const school = await currentSchool(req);
@@ -768,6 +658,7 @@ exports.schoolSubscriptionSTK = async (req, res) => {
     const amount = cleanAmount(req.body.amount || subscriptionController.planAmount(plan, billingCycle));
     const subscription = await subscriptionController.findOrCreateSchoolSubscription(school, plan, billingCycle);
     await subscription.update({ planId:plan.id, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle, status:'pending', features:plan.features || [], limits:plan.limits || {} });
+    await subscriptionEnforcement.configurePending(subscription, school, billingCycle);
     const reference = ref(`SCH-SUB-${school.id}`);
     const stk = await daraja.initiateSTKPush({
       phone,
@@ -817,7 +708,8 @@ exports.schoolSubscriptionSTK = async (req, res) => {
     res.json({ success:true, message:'M-PESA prompt sent. School subscription renews after Daraja callback confirmation.', data:{ paymentId:payment.id, subscriptionPaymentId:subscriptionPayment.id, subscriptionId:subscription.id, reference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
   } catch(error) {
     console.error('School subscription STK error:', error);
-    res.status(error.statusCode || 500).json({ success:false, message:error.message, data:error.data || undefined });
+    const calendarMissing = /academic calendar|term dates|academic year/i.test(String(error.message || ''));
+    res.status(error.statusCode || (calendarMissing ? 400 : 500)).json({ success:false, code:error.code || (calendarMissing ? 'ACADEMIC_CALENDAR_REQUIRED' : undefined), message:error.message, data:error.data || undefined });
   }
 };
 
@@ -1041,37 +933,27 @@ exports.recordAdminBursary = async (req, res) => {
 
 exports.getAdminPaymentRecords = async (req, res) => {
   try {
-    const summary = await financeLedger.getAdminSummary({ schoolCode: req.user.schoolCode });
-    const payments = await Payment.findAll({
-      where: { schoolCode: req.user.schoolCode, paymentType: 'fee', paidTo: 'school' },
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(20, Number.parseInt(req.query.limit, 10) || 100));
+    const offset = (page - 1) * limit;
+    const where = { schoolCode: req.user.schoolCode, paymentType: 'fee', paidTo: 'school' };
+    const { count, rows } = await Payment.findAndCountAll({
+      where,
+      attributes: ['id','studentId','parentId','feeId','amount','status','method','paymentGateway','reference','mpesaReceiptNumber','payerPhone','paymentDate','transactionDate','createdAt','notes','metadata'],
       include: [
-        { model: Student, include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }, { model: Class, required: false }] },
-        { model: Parent, include: [{ model: User, attributes: ['id', 'name', 'phone', 'email'] }], required: false },
-        { model: Fee, required: false }
+        { model: Student, required: false, attributes: ['id','grade','classId','elimuid','admissionNumber'], include: [{ model: User, required: false, attributes: ['id','name'] }, { model: Class, required: false, attributes: ['id','name','grade','stream'] }] },
+        { model: Parent, required: false, attributes: ['id'], include: [{ model: User, required: false, attributes: ['id','name','phone','email'] }] },
+        { model: Fee, required: false, attributes: ['id','term','year','totalAmount','paidAmount','parentPaidAmount','creditAmount'] }
       ],
-      order: [['createdAt', 'DESC']],
-      limit: 1000
+      order: [['createdAt','DESC']], limit, offset, distinct: true
     });
-    const data = summary.accounts.map(account => {
-      const studentPayments = payments.filter(p => Number(p.studentId) === Number(account.studentId) && (!account.id || Number(p.feeId) === Number(account.id))).map(financeLedger.decoratePayment);
-      const last = studentPayments[0] || null;
-      return {
-        ...account,
-        feeId: account.id,
-        studentId: account.studentId,
-        studentName: account.studentName,
-        className: account.className,
-        feeTotalAmount: account.totalAmount,
-        feeParentPaidAmount: account.parentPaidAmount,
-        feeCreditAmount: account.creditAmount,
-        feePaidAmount: account.paidAmount,
-        feeBalance: account.balance,
-        lastPayment: last,
-        paymentHistory: studentPayments,
-        recordType: 'fee_account'
-      };
+    const records = rows.map(payment => {
+      const row = payment.toJSON ? payment.toJSON() : payment;
+      const fee = row.Fee || {};
+      const total = Number(fee.totalAmount || 0), parentPaid = Number(fee.parentPaidAmount ?? fee.paidAmount ?? 0), credit = Number(fee.creditAmount || 0);
+      return { ...row, studentName: row.Student?.User?.name || row.metadata?.studentName || null, parentName: row.Parent?.User?.name || row.metadata?.parentName || null, className: row.Student?.Class?.name || row.Student?.grade || row.metadata?.className || null, feeTerm: fee.term || row.metadata?.term || null, feeYear: fee.year || row.metadata?.year || null, feeTotalAmount: total, feeParentPaidAmount: parentPaid, feeCreditAmount: credit, feePaidAmount: parentPaid + credit, feeBalance: Math.max(0, total - parentPaid - credit), recordType: 'payment' };
     });
-    res.json({ success: true, data, summary });
+    res.json({ success: true, data: records, records, pagination: { page, limit, total: count, pages: Math.max(1, Math.ceil(count / limit)) } });
   } catch (error) {
     console.error('Admin payment records error:', error);
     res.status(500).json({ success: false, message: error.message });

@@ -4,11 +4,12 @@ const { Op } = require('sequelize');
 exports.getClassAnalytics = async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher || !teacher.classId) return res.status(403).json({ success: false, message: 'No class assigned' });
-    const classItem = await Class.findByPk(teacher.classId);
-    const students = await Student.findAll({
-      where: { grade: classItem.name },
-      include: [{ model: User, attributes: ['name'] }]
+    if (!teacher) return res.status(403).json({ success: false, message: 'No teacher profile found' });
+    const classItem = await Class.findOne({ where:{ schoolCode:req.user.schoolCode, isActive:true, [Op.or]:[{ teacherId:teacher.id }, { id:teacher.classId || 0 }] } });
+    if (!classItem) return res.status(403).json({ success:false, message:'No active class-teacher assignment found' });
+    const students = await Student.unscoped().findAll({
+      where: { status:{ [Op.ne]:'inactive' }, [Op.or]:[{ classId:classItem.id }, { [Op.and]:[{ classId:null }, { grade:classItem.name }] }] },
+      include: [{ model: User, attributes: ['name'], where:{ schoolCode:req.user.schoolCode }, required:true }]
     });
     const studentIds = students.map(s => s.id);
     // Overall average

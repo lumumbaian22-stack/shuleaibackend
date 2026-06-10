@@ -6,6 +6,7 @@ const sequelize = require('../config/database');
 const { computeSchoolAccess } = require('../services/schoolAccessEngine');
 const { getSchoolFeatures } = require('../services/schoolFeatureService');
 const curriculumEngine = require('../services/curriculumStructureEngine');
+const classGeneration = require('../services/classGenerationService');
 function additionalRoles(user){return Array.isArray(user?.preferences?.additionalRoles)?user.preferences.additionalRoles.map(String):[];}function canLoginAs(user,requestedRole){const requested=String(requestedRole||user?.role||'').toLowerCase().replace('-','_');return requested===user?.role||additionalRoles(user).includes(requested);}function publicProfileForRole(user,effectiveRole){const payload=user.getPublicProfile(effectiveRole);payload.primaryRole=user.getDataValue?.('primaryRole')||user.primaryRole||user.role;payload.role=effectiveRole;payload.financeTitle=user.preferences?.finance?.title||null;payload.financePermissions=user.preferences?.finance?.permissions||[];return payload;}
 
 async function buildSchoolSessionPayload(school) {
@@ -89,7 +90,7 @@ const authController = {
     try {
       const { 
         name, email, password, phone, 
-        schoolName, schoolLevel, curriculum, schoolType, enabledLevels, enabledLevelGroups, structureType, schoolStructure,
+        schoolName, schoolLevel, curriculum, schoolType, enabledLevels, enabledLevelGroups, structureType, schoolStructure, classGeneration: classGenerationInput, streams, customClasses,
         address, contact 
       } = req.body;
 
@@ -114,20 +115,34 @@ const authController = {
       const normalizedCurriculum = curriculumEngine.normalizeCurriculum(curriculum || 'cbc');
       const normalizedStructure = structureType || schoolStructure || schoolLevel || 'mixed';
       const rawLevelValues = [...(Array.isArray(enabledLevelGroups) ? enabledLevelGroups : []), ...(Array.isArray(enabledLevels) ? enabledLevels : [])];
-      if (!rawLevelValues.length) {
-        if (normalizedCurriculum === 'cbc') {
-          if (/primary/.test(normalizedStructure)) rawLevelValues.push('early_learning','primary_learning');
-          else if (/junior/.test(normalizedStructure)) rawLevelValues.push('junior_school');
-          else if (/senior/.test(normalizedStructure)) rawLevelValues.push('senior_secondary');
-          else rawLevelValues.push('early_learning','primary_learning','junior_school');
-        } else if (normalizedCurriculum === '844') {
-          if (/secondary/.test(normalizedStructure)) rawLevelValues.push('secondary_844');
-          else if (/primary/.test(normalizedStructure)) rawLevelValues.push('primary_844');
-          else rawLevelValues.push('primary_844','secondary_844');
-        }
+      if (!rawLevelValues.length && normalizedStructure !== 'custom') {
+        const supportedStructures = {
+          cbc:new Set(['primary_only','junior_only','senior_only','secondary_only','mixed','full_school']),
+          '844':new Set(['primary_only','secondary_only','mixed','full_school']),
+          british:new Set(['primary_only','secondary_only','mixed','full_school']),
+          american:new Set(['primary_only','secondary_only','mixed','full_school']),
+          custom:new Set(['custom'])
+        };
+        const fallbackStructure = supportedStructures[normalizedCurriculum]?.has(normalizedStructure)
+          ? normalizedStructure
+          : (['junior_only','senior_only'].includes(normalizedStructure) ? 'secondary_only' : 'mixed');
+        const syntheticSchool = {
+          system: normalizedCurriculum,
+          schoolStructure: fallbackStructure,
+          enabledLevels: [],
+          settings: { curriculumEngine: { curriculum:normalizedCurriculum, structureType:fallbackStructure, enabledLevels:[], enabledLevelGroups:[] } }
+        };
+        rawLevelValues.push(...curriculumEngine.getCurriculumConfig(syntheticSchool).enabledLevels);
       }
       const selectedLevels = curriculumEngine.expandEnabledLevelCodes(normalizedCurriculum, rawLevelValues);
       const selectedGroups = curriculumEngine.groupsFromEnabledLevels(normalizedCurriculum, selectedLevels);
+      const classGenerationConfig = classGeneration.normalizeConfigPatch(
+        { settings: {} },
+        classGenerationInput || { streams: Array.isArray(streams) ? streams : [], customClasses: Array.isArray(customClasses) ? customClasses : [] }
+      );
+      if (!selectedLevels.length && !classGenerationConfig.customClasses.length) {
+        return res.status(400).json({ success:false, code:'CLASS_STRUCTURE_REQUIRED', message:'Select at least one grade/class level or add at least one custom class name.' });
+      }
       console.log('Creating school with name:', schoolName);
       const school = await School.create({
         name: schoolName,
@@ -145,6 +160,7 @@ const authController = {
           schoolType: schoolType || 'day',
           schoolStructure: normalizedStructure,
           curriculumEngine: { curriculum: normalizedCurriculum, structureType: normalizedStructure, enabledLevels: selectedLevels, enabledLevelGroups: selectedGroups, schoolSubjects: [], assessmentSettings: curriculumEngine.defaultAssessmentSettings(), updatedAt: new Date().toISOString() },
+          classGeneration: classGenerationConfig,
           originalSignupName: schoolName,
           displayName: schoolName,
           boarding: { type: schoolType || 'day', hasBoarding: ['boarding','day_boarding'].includes(schoolType || 'day') },

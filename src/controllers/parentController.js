@@ -5,6 +5,15 @@ const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 const ownership = require('../services/parentOwnershipService');
 
 
+function legacyPaymentEndpointDisabled(req, res) {
+  return res.status(410).json({
+    success: false,
+    code: 'LEGACY_PAYMENT_ENDPOINT_DISABLED',
+    message: 'This old payment endpoint is disabled. Use the verified M-Pesa or manual-payment workflow under /api/payments.'
+  });
+}
+
+
 async function countLinkedParents(studentId) {
   const rows = await sequelize.query(
     'SELECT COUNT(DISTINCT "parentId")::int AS count FROM "StudentParents" WHERE "studentId" = :studentId',
@@ -246,10 +255,12 @@ exports.getChildReportCardDetails = async (req, res) => {
     const school = await School.findOne({ where: { schoolId: schoolCode }, attributes: ['name','schoolId','system','settings','reportCardSettings'] }).catch(() => null);
     const curriculum = school?.system || school?.settings?.curriculum || student.curriculum || 'cbc';
     const schoolLevel = school?.settings?.schoolLevel || 'secondary';
-    const classTeacher = await Teacher.findOne({
-      where: student.classId ? { [Op.or]: [{ classTeacher: student.grade }, { classId: student.classId }] } : { classTeacher: student.grade },
-      include: [{ model: User, attributes: ['id','name','email','phone','preferences'] }]
-    }).catch(() => null);
+    let classTeacher = null;
+    let currentClass = student.classId ? await Class.findOne({ where:{ id:student.classId, schoolCode, isActive:true } }).catch(() => null) : null;
+    if (!currentClass && !student.classId && student.grade) currentClass = await Class.findOne({ where:{ schoolCode, isActive:true, [Op.or]:[{ name:student.grade }, { grade:student.grade }] }, order:[['id','ASC']] }).catch(() => null);
+    if (currentClass?.teacherId) classTeacher = await Teacher.findOne({ where:{ id:currentClass.teacherId }, include:[{ model:User, attributes:['id','name','email','phone','preferences'], where:{ schoolCode }, required:true }] }).catch(() => null);
+    if (!classTeacher && currentClass?.id) classTeacher = await Teacher.findOne({ where:{ classId:currentClass.id }, include:[{ model:User, attributes:['id','name','email','phone','preferences'], where:{ schoolCode }, required:true }] }).catch(() => null);
+    if (!classTeacher && !student.classId) classTeacher = await Teacher.findOne({ where:{ classTeacher:student.grade }, include:[{ model:User, attributes:['id','name','email','phone','preferences'], where:{ schoolCode }, required:true }] }).catch(() => null);
     const adminSigner = await Admin.findOne({
       where: {},
       include: [{ model: User, attributes: ['id','name','email','phone','preferences'], where: { schoolCode, role: 'admin' }, required: true }],
@@ -522,109 +533,15 @@ exports.getSubscriptionPlans = async (req, res) => {
   }
 };
 
-// @desc    Make a payment with school details
+// @desc    Legacy payment creation endpoint disabled
 // @route   POST /api/parent/pay
 // @access  Private/Parent
-exports.makePayment = async (req, res) => {
-  try {
-    const { studentId, amount, method, reference, plan } = req.body;
-    
-    const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    const student = await Student.findByPk(studentId, { 
-      attributes: { include: ['classId'] },
-      include: [{ model: User, attributes: ['name'] }] 
-    });
-    
-    if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
-      return res.status(403).json({ success: false, message: 'Not your child' });
-    }
+exports.makePayment = legacyPaymentEndpointDisabled;
 
-    const school = await School.findOne({ 
-      where: { schoolId: req.user.schoolCode },
-      attributes: ['name', 'bankDetails', 'contact', 'schoolId']
-    });
-
-    const payment = await Payment.create({
-      studentId,
-      parentId: parent.id,
-      amount,
-      method,
-      reference: reference || `PAY-${Date.now()}-${studentId}`,
-      plan,
-      status: 'pending',
-      schoolCode: req.user.schoolCode,
-      metadata: {
-        schoolName: school.name,
-        studentName: student.User.name,
-        paymentDate: new Date()
-      }
-    });
-
-    res.status(201).json({ 
-      success: true, 
-      message: 'Payment initiated successfully',
-      data: {
-        payment: payment,
-        school: {
-          name: school.name,
-          bankDetails: school.bankDetails,
-          contact: school.contact
-        },
-        instructions: 'Please complete payment using the school bank details below'
-      }
-    });
-  } catch (error) {
-    console.error('Make payment error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Confirm payment (webhook or callback)
+// @desc    Legacy client-side payment confirmation endpoint disabled
 // @route   POST /api/parent/payment-confirm
 // @access  Private/Parent
-exports.confirmPayment = async (req, res) => {
-  try {
-    const { paymentId, transactionId } = req.body;
-    
-    const payment = await Payment.findByPk(paymentId, {
-      include: [{ model: Student }]
-    });
-
-    if (!payment) {
-      return res.status(404).json({ success: false, message: 'Payment not found' });
-    }
-
-    payment.status = 'completed';
-    payment.transactionId = transactionId;
-    payment.completedAt = new Date();
-    await payment.save();
-
-    const student = payment.Student;
-    student.subscriptionPlan = payment.plan;
-    student.subscriptionStatus = 'active';
-    student.subscriptionExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    await student.save();
-
-    await createAlert({
-      userId: req.user.id,
-      role: 'parent',
-      type: 'payment',
-      severity: 'success',
-      title: '✅ Payment Successful',
-      message: `Your payment of $${payment.amount} for ${payment.plan} plan has been confirmed.`,
-      data: { paymentId: payment.id }
-    });
-
-    res.json({ 
-      success: true, 
-      message: 'Payment confirmed successfully',
-      data: payment
-    });
-  } catch (error) {
-    console.error('Confirm payment error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+exports.confirmPayment = legacyPaymentEndpointDisabled;
 
 // @desc    Get payment history
 // @route   GET /api/parent/payments
@@ -672,65 +589,10 @@ exports.getPayments = async (req, res) => {
   }
 };
 
-// @desc    Upgrade subscription plan
+// @desc    Legacy direct plan-upgrade endpoint disabled
 // @route   POST /api/parent/upgrade-plan
 // @access  Private/Parent
-exports.upgradePlan = async (req, res) => {
-  try {
-    const { studentId, newPlan } = req.body;
-    
-    const validPlans = ['basic', 'premium', 'ultimate'];
-    if (!validPlans.includes(newPlan)) {
-      return res.status(400).json({ success: false, message: 'Invalid plan' });
-    }
-
-    const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    const student = await Student.findByPk(studentId);
-    
-    if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
-      return res.status(403).json({ success: false, message: 'Not your child' });
-    }
-
-    const prices = { basic: 3, premium: 10, ultimate: 20 };
-    const amount = prices[newPlan];
-
-    const school = await School.findOne({ 
-      where: { schoolId: req.user.schoolCode },
-      attributes: ['name', 'bankDetails', 'contact']
-    });
-
-    const payment = await Payment.create({
-      studentId,
-      parentId: parent.id,
-      amount,
-      method: 'pending',
-      reference: `UPGRADE-${Date.now()}-${studentId}`,
-      plan: newPlan,
-      status: 'pending',
-      schoolCode: req.user.schoolCode,
-      metadata: {
-        type: 'upgrade',
-        previousPlan: student.paymentStatus?.plan || 'none',
-        newPlan: newPlan,
-        schoolName: school.name
-      }
-    });
-
-    res.json({
-      success: true,
-      message: `Upgrade to ${newPlan} plan initiated`,
-      data: {
-        payment,
-        school,
-        amount,
-        instructions: 'Please complete payment to activate the new plan'
-      }
-    });
-  } catch (error) {
-    console.error('Upgrade plan error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+exports.upgradePlan = legacyPaymentEndpointDisabled;
 
 // @desc    Send message to class teacher or admin only
 // @route   POST /api/parent/message
@@ -763,7 +625,7 @@ exports.sendMessage = async (req, res) => {
         teacher = ass?.Teacher || null;
       }
       if (!teacher && cls?.id) teacher = await Teacher.findOne({ where:{ classId:cls.id }, include:[{ model:User, where:{ schoolCode:req.user.schoolCode }, attributes:['id','name','email'] }] }).catch(()=>null);
-      if (!teacher) {
+      if (!teacher && !student.classId) {
         const teacherNames = [...possibleClassNames, cls?.name, cls?.grade].filter(Boolean);
         if (teacherNames.length) teacher = await Teacher.findOne({ where:{ classTeacher:{ [Op.in]: teacherNames } }, include:[{ model:User, where:{ schoolCode:req.user.schoolCode }, attributes:['id','name','email'] }] }).catch(()=>null);
       }
@@ -918,53 +780,10 @@ exports.getFees = async (req, res) => {
   }
 };
 
-// @desc    Fee payment endpoint disabled; production uses Daraja STK + callback
+// @desc    Legacy direct fee-payment endpoint disabled
 // @route   POST /api/parent/fees/pay
 // @access  Private/Parent
-exports.addPayment = async (req, res) => {
-  try {
-    const { studentId, term, year, amount, method, reference } = req.body;
-    const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
-    if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
-      return res.status(403).json({ success: false, message: 'Not your child' });
-    }
-
-    let fee = await Fee.findOne({ where: { studentId, schoolCode: req.user.schoolCode, term, year } });
-    if (!fee) {
-      fee = await Fee.create({
-        studentId,
-        schoolCode: student.User?.schoolCode || req.user.schoolCode,
-        term,
-        year,
-        totalAmount: 5000,
-        paidAmount: 0,
-        status: 'unpaid'
-      });
-    }
-
-    const payment = await Payment.create({
-      studentId,
-      parentId: parent.id,
-      feeId: fee.id,
-      amount,
-      method,
-      reference: reference || `PAY-${Date.now()}`,
-      status: 'completed',
-      schoolCode: student.User.schoolCode
-    });
-
-    fee.paidAmount += amount;
-    if (fee.paidAmount >= fee.totalAmount) fee.status = 'paid';
-    else if (fee.paidAmount > 0) fee.status = 'partial';
-    await fee.save();
-
-    res.json({ success: true, data: { payment, fee } });
-  } catch (error) {
-    console.error('Add payment error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+exports.addPayment = legacyPaymentEndpointDisabled;
 
 // @desc    Get child's live attendance for today
 // @route   GET /api/parent/child/:studentId/attendance/today

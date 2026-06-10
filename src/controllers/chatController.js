@@ -77,42 +77,7 @@ exports.sendGroupMessage = async (req, res) => {
   }
 };
 
-exports.sendPrivateMessage = async (req, res) => {
-  try {
-    const { receiverId, content, replyToId } = req.body;
-    const receiver = await User.findOne({ where: { id: receiverId, schoolCode: req.user.schoolCode, isActive: true } });
-    if (!receiver) return res.status(404).json({ success: false, message: 'Recipient not found' });
-    if (receiver.role !== 'teacher') return res.status(403).json({ success: false, message: 'Teacher private messages are limited to fellow teachers only.' });
-    const message = await Message.create({
-      senderId: req.user.id,
-      receiverId,
-      content,
-      metadata: { type: 'private_message', senderName: req.user.name, replyToId },
-      replyToMessageId: replyToId || null
-    });
-    if (global.io) {
-      global.io.to(`user-${receiverId}`).emit('new-private-message', {
-        from: req.user.id,
-        fromName: req.user.name,
-        content,
-        replyToId,
-        timestamp: new Date()
-      });
-    }
-    await createAlert({
-      userId: receiverId,
-      role: receiver.role,
-      type: 'message',
-      severity: 'info',
-      title: `New message from ${req.user.name}`,
-      message: content.substring(0, 100)
-    });
-    res.status(201).json({ success: true, data: message });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+// Superseded duplicate export removed: sendPrivateMessage.
 
 exports.getMessage = async (req, res) => {
   try {

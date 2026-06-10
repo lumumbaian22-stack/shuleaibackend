@@ -16,8 +16,18 @@ module.exports = (sequelize, DataTypes) => {
     lastPaymentId: { type: DataTypes.INTEGER, allowNull: true },
     features: { type: DataTypes.JSONB, defaultValue: [] },
     limits: { type: DataTypes.JSONB, defaultValue: {} },
-    auditTrail: { type: DataTypes.JSONB, defaultValue: [] }
-  }, { timestamps: true, indexes: [{ fields: ['ownerType'] }, { fields: ['schoolCode'] }, { fields: ['studentId'] }] });
+    auditTrail: { type: DataTypes.JSONB, defaultValue: [] },
+    enforcementEnabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    nextDueDate: { type: DataTypes.DATE, allowNull: true },
+    graceEndsAt: { type: DataTypes.DATE, allowNull: true },
+    billingState: { type: DataTypes.STRING(32), allowNull: false, defaultValue: 'not_enforced' },
+    billingAnchorDate: { type: DataTypes.DATE, allowNull: true },
+    periodKey: { type: DataTypes.STRING(160), allowNull: true },
+    academicPeriod: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
+    reminderState: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
+    lastReminderAt: { type: DataTypes.DATE, allowNull: true },
+    overdueSince: { type: DataTypes.DATE, allowNull: true }
+  }, { timestamps: true, indexes: [{ fields: ['ownerType'] }, { fields: ['schoolCode'] }, { fields: ['studentId'] }, { fields: ['ownerType','enforcementEnabled','nextDueDate'] }, { fields: ['schoolCode','periodKey'] }] });
   Subscription.prototype.isActiveNow = function(){ return this.status === 'active' && this.endDate && new Date(this.endDate) > new Date(); };
   Subscription.prototype.daysRemaining = function(){ if (!this.endDate || this.status !== 'active') return 0; return Math.max(0, Math.ceil((new Date(this.endDate) - new Date()) / 86400000)); };
   return Subscription;

@@ -21,7 +21,13 @@ async function getClass(req, classId, transaction = null) {
 async function classStudents(req, cls, transaction = null) {
   const scoped = Student.unscoped ? Student.unscoped() : Student;
   return scoped.findAll({
-    where:{ status:'active', [Op.or]:[{ classId:cls.id }, { grade:cls.name }] },
+    where:{
+      status:'active',
+      [Op.or]:[
+        { classId:cls.id },
+        { [Op.and]:[{ classId:null }, { grade:cls.name }] }
+      ]
+    },
     include:[{ model:User, where:{ schoolCode:schoolCode(req), role:'student', isActive:true }, attributes:['id','name','profileImage'] }],
     order:[[User,'name','ASC']],
     transaction

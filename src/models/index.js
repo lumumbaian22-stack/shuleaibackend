@@ -68,6 +68,7 @@ const ClassRelease = require('./ClassRelease')(sequelize, DataTypes);
 const StudentEnrollment = require('./StudentEnrollment')(sequelize, DataTypes);
 const PromotionBatch = require('./PromotionBatch')(sequelize, DataTypes);
 const PromotionDecision = require('./PromotionDecision')(sequelize, DataTypes);
+const ClassTransferRequest = require('./ClassTransferRequest')(sequelize, DataTypes);
 const ReportShare = require('./ReportShare')(sequelize, DataTypes);
 const BirthdayEvent = require('./BirthdayEvent')(sequelize, DataTypes);
 const MediaAsset = require('./MediaAsset')(sequelize, DataTypes);
@@ -358,6 +359,12 @@ PromotionBatch.hasMany(PromotionDecision, { foreignKey: 'batchId' });
 PromotionDecision.belongsTo(PromotionBatch, { foreignKey: 'batchId' });
 Student.hasMany(PromotionDecision, { foreignKey: 'studentId' });
 PromotionDecision.belongsTo(Student, { foreignKey: 'studentId' });
+Student.hasMany(ClassTransferRequest, { foreignKey: 'studentId' });
+ClassTransferRequest.belongsTo(Student, { foreignKey: 'studentId' });
+ClassTransferRequest.belongsTo(Class, { as: 'FromClass', foreignKey: 'fromClassId' });
+ClassTransferRequest.belongsTo(Class, { as: 'ToClass', foreignKey: 'toClassId' });
+ClassTransferRequest.belongsTo(StudentEnrollment, { as: 'FromEnrollment', foreignKey: 'fromEnrollmentId' });
+ClassTransferRequest.belongsTo(StudentEnrollment, { as: 'AppliedEnrollment', foreignKey: 'appliedEnrollmentId' });
 Student.hasMany(BirthdayEvent, { foreignKey: 'studentId' });
 BirthdayEvent.belongsTo(Student, { foreignKey: 'studentId' });
 
@@ -464,7 +471,7 @@ function installTenantHooks(models) {
     });
   });
 }
-installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, AuditLog, MediaAsset, FinanceExpense });
+installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ClassTransferRequest, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, AuditLog, MediaAsset, FinanceExpense });
 
 module.exports = {
     sequelize,
@@ -533,6 +540,7 @@ module.exports = {
     StudentEnrollment,
     PromotionBatch,
     PromotionDecision,
+    ClassTransferRequest,
     ReportShare,
     BirthdayEvent,
     MediaAsset,

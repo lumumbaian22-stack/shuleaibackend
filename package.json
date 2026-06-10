@@ -1,6 +1,6 @@
 {
   "name": "shuleai-backend",
-  "version": "2.1.48",
+  "version": "2.1.484",
   "description": "Complete School Intelligence System with PostgreSQL",
   "main": "server.js",
   "scripts": {

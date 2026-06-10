@@ -94,10 +94,18 @@ const protect = async (req, res, next) => {
         req.schoolAccess = access;
         const path = String(req.originalUrl || req.url || '').toLowerCase();
         const allowedWhenExpired = path.includes('/api/auth/me') ||
+          path.includes('/api/subscription') ||
+          path.includes('/api/subscriptions') ||
           path.includes('/api/admin/billing/payment-confirmation') ||
-          path.includes('/api/payments/school/subscription/stk') ||
+          path.includes('/api/payments/school/subscription') ||
           path.includes('/api/super-admin/payment-requests') ||
-          path.includes('/api/user/alerts');
+          path.includes('/api/user/alerts') ||
+          path.includes('/api/alerts') ||
+          path.includes('/api/admin/settings') ||
+          path.includes('/api/school/settings') ||
+          path.includes('/api/profile') ||
+          path.includes('/api/help') ||
+          path.includes('/api/admin/dashboard');
         if (access.accessMode === 'expired_subscription' && !allowedWhenExpired) {
           return res.status(402).json({ success: false, code: 'SCHOOL_SUBSCRIPTION_EXPIRED', message: access.reason || 'School subscription has expired', data: access });
         }

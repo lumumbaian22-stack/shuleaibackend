@@ -10,6 +10,7 @@ const realtimeService = require('./src/services/realtimeService');
 const { configureSocketRedisAdapter } = require('./src/config/socketRedisAdapter');
 const birthdayService = require('./src/services/birthdayService');
 const studentLifecycleController = require('./src/controllers/studentLifecycleController');
+const subscriptionEnforcement = require('./src/services/subscriptionEnforcementService');
 
 const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
@@ -160,6 +161,8 @@ async function start() {
     const runScheduledLifecycleJobs = async () => {
       await birthdayService.processAllSchools().catch(error => console.error('[Birthday scheduler]', error.message));
       await studentLifecycleController.applyDueSystem().catch(error => console.error('[Promotion scheduler]', error.message));
+      await studentLifecycleController.applyDueTransfersSystem().catch(error => console.error('[Class transfer scheduler]', error.message));
+      await subscriptionEnforcement.processAllSchools().catch(error => console.error('[Subscription scheduler]', error.message));
     };
     setTimeout(runScheduledLifecycleJobs, 5000).unref?.();
     const lifecycleTimer = setInterval(runScheduledLifecycleJobs, Number(process.env.LIFECYCLE_JOB_INTERVAL_MS || 60 * 60 * 1000));

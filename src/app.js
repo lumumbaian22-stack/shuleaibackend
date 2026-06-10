@@ -45,7 +45,6 @@ const jobRoutes = require('./routes/jobRoutes');
 const tutorRoutes = require('./routes/tutorRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const smsRoutes = require('./routes/smsRoutes');
-const compatibilityRoutes = require('./routes/compatibilityRoutes');
 const feeStructureRoutes = require('./routes/feeStructureRoutes');
 const ownerHardeningRoutes = require('./routes/ownerHardeningRoutes');
 const realtimeRoutes = require('./routes/realtimeRoutes');
@@ -147,10 +146,10 @@ app.get('/homework-files/:filename', publicHomeworkFileController.serveHomeworkA
 
 // ============ TEST ENDPOINT ============
 app.get('/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v148-finance-media-session-repair', timestamp: new Date().toISOString() });
+  res.json({ success: true, version: require('../package.json').version, build:'v148.4-enrollment-lifecycle-complete', timestamp: new Date().toISOString() });
 });
 app.get('/api/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v148-finance-media-session-repair', timestamp: new Date().toISOString() });
+  res.json({ success: true, version: require('../package.json').version, build:'v148.4-enrollment-lifecycle-complete', timestamp: new Date().toISOString() });
 });
 
 app.get('/api/health/detailed', async (req, res) => {
@@ -313,8 +312,6 @@ app.use('/api/consent', consentRoutes);   // <-- ADDED
 app.use('/api/search', searchRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/sms', smsRoutes);
-// V27 compatibility routes fix old frontend/test endpoints and role-safe aliases.
-app.use('/api', compatibilityRoutes);
 app.use('/api/calendar', protect, calendarRoutes);
 app.use('/api/timetable', protect, timetableRoutes);
 app.use('/api/homework', protect, homeworkRoutes);

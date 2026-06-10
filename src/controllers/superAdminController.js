@@ -85,23 +85,7 @@ exports.getOverview = async (req, res) => {
 // @desc    Get all schools
 // @route   GET /api/super-admin/schools
 // @access  Private/SuperAdmin
-exports.getSchools = async (req, res) => {
-    try {
-        const schools = await School.findAll({ 
-            order: [['createdAt', 'DESC']],
-            include: [{
-                model: User,
-                as: 'admins',
-                attributes: ['id', 'name', 'email', 'phone', 'isActive'],
-                required: false
-            }]
-        });
-        res.json({ success: true, data: schools.map(serializeSchoolForSuperAdmin) });
-    } catch (error) {
-        console.error('Get schools error:', error);
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
+// Superseded duplicate export removed: getSchools.
 
 // @desc    Get pending school approvals
 // @route   GET /api/super-admin/pending-schools

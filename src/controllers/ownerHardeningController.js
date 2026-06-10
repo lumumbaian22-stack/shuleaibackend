@@ -1,4 +1,4 @@
-const { sequelize, School, User, Student, Teacher, Parent, Class, Alert } = require('../models');
+const { sequelize, School, User, Student, Teacher, Parent, Class, Alert, MediaAsset } = require('../models');
 const path = require('path');
 const { saveUploadAsset, saveDataUrlAsset } = require('../services/mediaAssetService');
 const { getRoleAnalytics } = require('../services/ownerAnalyticsEngine');
@@ -53,6 +53,22 @@ function publicBrandingPayload(school) {
   };
 }
 
+async function restoreLatestDurableSchoolLogo(school) {
+  const current = school?.settings || {};
+  const branding = { ...(current.branding || {}) };
+  if (branding.logoUrl || branding.logo || branding.logoDataUrl) return false;
+  const asset = await MediaAsset.findOne({
+    where: { schoolCode: school.schoolId, kind: 'school_logo', isActive: true },
+    order: [['createdAt', 'DESC']]
+  }).catch(() => null);
+  if (!asset?.token) return false;
+  branding.logoUrl = `/api/media/${asset.token}`;
+  branding.logoSource = 'recovered_durable_upload';
+  branding.recoveredAt = new Date().toISOString();
+  await school.update({ settings: { ...current, branding } });
+  return true;
+}
+
 function extractUploadedFile(req) {
   return req.files?.logo || req.files?.file || req.files?.image || null;
 }
@@ -102,6 +118,7 @@ exports.getSchoolBranding = async (req, res) => {
     if (req.user.role !== 'super_admin' && schoolCode !== req.user.schoolCode) return res.status(403).json({ success: false, message: 'Cross-school branding access blocked' });
     const school = await School.findOne({ where: { schoolId: schoolCode } });
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+    await restoreLatestDurableSchoolLogo(school);
     return res.json({ success: true, data: publicBrandingPayload(school) });
   } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
 };
@@ -124,11 +141,32 @@ exports.updateSchoolBranding = async (req, res) => {
     branding.colorName = colors.colorName;
     branding.primaryColor = colors.primaryColor;
     branding.accentColor = colors.accentColor;
-    if (req.body.logoDataUrl !== undefined) { const logoDataUrl=String(req.body.logoDataUrl||'').trim(); if(logoDataUrl){const saved=await saveDataUrlAsset({dataUrl:logoDataUrl,schoolCode,ownerUserId:req.user.id,kind:'school_logo',maxBytes:2*1024*1024,allowSvg:true,metadata:{schoolCode,uploadedBy:req.user.id}});branding.logoUrl=saved.url;delete branding.logoDataUrl;branding.logoSource='upload';} }
-    if (req.body.logoUrl !== undefined || req.body.logo !== undefined) {
+    let uploadedLogo = false;
+    if (req.body.logoDataUrl !== undefined) {
+      const logoDataUrl = String(req.body.logoDataUrl || '').trim();
+      if (logoDataUrl) {
+        const saved = await saveDataUrlAsset({ dataUrl: logoDataUrl, schoolCode, ownerUserId: req.user.id, kind: 'school_logo', maxBytes: 2*1024*1024, allowSvg: true, metadata: { schoolCode, uploadedBy: req.user.id } });
+        branding.logoUrl = saved.url;
+        delete branding.logoDataUrl;
+        delete branding.logo;
+        branding.logoSource = 'upload';
+        uploadedLogo = true;
+      }
+    }
+    if (!uploadedLogo && (req.body.logoUrl !== undefined || req.body.logo !== undefined)) {
       const logoUrl = String(req.body.logoUrl || req.body.logo || '').trim();
-      branding.logoUrl = logoUrl;
-      if (logoUrl) delete branding.logoDataUrl;
+      if (logoUrl) {
+        branding.logoUrl = logoUrl;
+        delete branding.logoDataUrl;
+        delete branding.logo;
+        branding.logoSource = 'url';
+      }
+    }
+    if (req.body.removeLogo === true) {
+      delete branding.logoUrl;
+      delete branding.logoDataUrl;
+      delete branding.logo;
+      branding.logoSource = 'removed';
     }
     ['reportFooter','paymentInstructions'].forEach(k => {
       if (req.body[k] !== undefined) branding[k] = String(req.body[k] || '').trim();

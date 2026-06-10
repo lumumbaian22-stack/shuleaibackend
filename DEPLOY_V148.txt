@@ -1,11 +1,10 @@
-SHULE AI V148 BACKEND — RENDER
+SHULE AI V148.4 BACKEND — ENROLLMENT LIFECYCLE COMPLETE
 
-Use these Render settings when this backend is the repository root:
 Build Command: npm ci --omit=dev
 Pre-Deploy Command: npm run migrate
 Start Command: npm start
 
-New migration:
-20260609010000-v148-finance-media-session-role-fixes.js
+Deploy as a complete replacement with the matching v148.4 frontend.
+Do not merge runtime files from v148, v148.1, v148.2, or v148.3.
 
-Do not run npm start manually in the Render shell while the service is already running.
+Verify /api/health reports: v148.4-enrollment-lifecycle-complete

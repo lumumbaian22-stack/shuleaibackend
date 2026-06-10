@@ -1,6 +1,18 @@
 const { Competency, LearningOutcome, StudentCompetencyProgress, Student, Teacher, Class, User } = require('../models');
 const { Op } = require('sequelize');
 
+async function currentClassTeacherContext(req) {
+  const teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
+  if (!teacher) return { teacher:null, classItem:null, students:[] };
+  const classItem = await Class.findOne({ where:{ schoolCode:req.user.schoolCode, isActive:true, [Op.or]:[{ teacherId:teacher.id }, { id:teacher.classId || 0 }] } });
+  if (!classItem) return { teacher, classItem:null, students:[] };
+  const students = await Student.unscoped().findAll({
+    where:{ status:{ [Op.ne]:'inactive' }, [Op.or]:[{ classId:classItem.id }, { [Op.and]:[{ classId:null }, { grade:classItem.name }] }] },
+    include:[{ model:User, attributes:['id','name'], where:{ schoolCode:req.user.schoolCode }, required:true }]
+  });
+  return { teacher, classItem, students };
+}
+
 // ============ COMPETENCIES ============
 exports.getCompetencies = async (req, res) => {
   try {
@@ -91,10 +103,8 @@ exports.updateStudentProgress = async (req, res) => {
 // ============ TEACHER DASHBOARD DATA ============
 exports.getClassCompetencyHeatmap = async (req, res) => {
   try {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher || !teacher.classId) return res.status(403).json({ success: false, message: 'No class assigned' });
-    const classItem = await Class.findByPk(teacher.classId);
-    const students = await Student.findAll({ where: { grade: classItem.name } });
+    const { teacher, classItem, students } = await currentClassTeacherContext(req);
+    if (!teacher || !classItem) return res.status(403).json({ success:false, message:'No active class-teacher assignment found' });
     const studentIds = students.map(s => s.id);
     const outcomes = await LearningOutcome.findAll({
       where: { gradeLevel: classItem.grade, curriculum: req.user.school?.system || 'cbc' },
@@ -120,10 +130,8 @@ exports.getClassCompetencyHeatmap = async (req, res) => {
 
 exports.getBelowExpectationStudents = async (req, res) => {
   try {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher || !teacher.classId) return res.status(403).json({ success: false });
-    const classItem = await Class.findByPk(teacher.classId);
-    const students = await Student.findAll({ where: { grade: classItem.name } });
+    const { teacher, classItem, students } = await currentClassTeacherContext(req);
+    if (!teacher || !classItem) return res.status(403).json({ success:false, message:'No active class-teacher assignment found' });
     const studentIds = students.map(s => s.id);
     const belowExpectation = await StudentCompetencyProgress.findAll({
       where: { studentId: { [Op.in]: studentIds }, level: { [Op.in]: ['AE', 'BE'] } },
@@ -152,10 +160,8 @@ exports.getBelowExpectationStudents = async (req, res) => {
 
 exports.getAutoInsights = async (req, res) => {
   try {
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
-    if (!teacher || !teacher.classId) return res.status(403).json({ success: false });
-    const classItem = await Class.findByPk(teacher.classId);
-    const students = await Student.findAll({ where: { grade: classItem.name } });
+    const { teacher, classItem, students } = await currentClassTeacherContext(req);
+    if (!teacher || !classItem) return res.status(403).json({ success:false, message:'No active class-teacher assignment found' });
     const studentIds = students.map(s => s.id);
     const progress = await StudentCompetencyProgress.findAll({
       where: { studentId: { [Op.in]: studentIds } },

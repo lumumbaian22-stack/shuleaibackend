@@ -11,6 +11,7 @@ const {
   Settings
 } = require('../models');
 const schoolFeatures = require('../services/schoolFeatureService');
+const subscriptionEnforcement = require('../services/subscriptionEnforcementService');
 
 const SCHOOL_CORE_FEATURES = schoolFeatures.CORE_SCHOOL_FEATURES || ['dashboard','students','teachers','attendance','marks','report_cards','fees','calendar','timetable','homework','duty','departments','school_branding','alerts','bulk_sms'];
 const SCHOOL_PREMIUM_FEATURES = [];
@@ -197,6 +198,11 @@ async function findOrCreateChildSubscription(parent, student, plan, cycle) {
 }
 
 async function renewSubscription(subscription, plan, cycle, paymentId) {
+  if (subscription.ownerType === 'school') {
+    const school = await School.findOne({ where:{ schoolId:subscription.schoolCode } });
+    if (!school) throw new Error('School not found for subscription activation');
+    return subscriptionEnforcement.activatePaid(subscription, school, plan, cycle || subscription.billingCycle, paymentId);
+  }
   const period = addPeriod(subscription.endDate, cycle || subscription.billingCycle);
   const trail = Array.isArray(subscription.auditTrail) ? subscription.auditTrail : [];
   trail.push({ action: 'renewed', paymentId, planCode: plan.code || plan.name, cycle: normalizeCycle(cycle), at: new Date().toISOString() });
@@ -268,8 +274,11 @@ exports.getSchoolStatus = async (req, res) => {
   try {
     const school = await getSchoolForUser(req.user);
     if (!school) return res.status(404).json({ success: false, message: 'School not found' });
-    const featureInfo = await schoolFeatures.getSchoolFeatures(school.schoolId);
     const subscription = await Subscription.findOne({ where: { ownerType: 'school', schoolCode: school.schoolId }, include: [{ model: SubscriptionPlan }] });
+    if (subscription?.enforcementEnabled) await subscriptionEnforcement.processSubscription(subscription).catch(() => null);
+    const enforcement = await subscriptionEnforcement.getSummary(subscription, school);
+    await school.reload().catch(() => null);
+    const featureInfo = await schoolFeatures.getSchoolFeatures(school.schoolId);
     const studentCount = await Student.count({ include:[{ model:User, where:{ schoolCode:school.schoolId, role:'student', isActive:true }, required:true }], where:{ status:{ [Op.in]:['active','enrolled'] } } }).catch(async () => User.count({ where:{ schoolCode:school.schoolId, role:'student', isActive:true } }).catch(() => 0));
     const subActive = subscription?.status === 'active' && subscription.endDate && new Date(subscription.endDate) > new Date();
     const override = !!featureInfo.override || ['pilot_demo_free_full_access','trial'].includes(featureInfo.accessMode);
@@ -300,7 +309,9 @@ exports.getSchoolStatus = async (req, res) => {
         coreFeatures: featureInfo.featureList || SCHOOL_CORE_FEATURES,
         premiumLocked:false,
         lockedFeatures:[],
-        gracefulMode:false,
+        gracefulMode:['payment_required','grace','due_soon'].includes(enforcement.billingState),
+        enforcement,
+        paymentRequired:!!enforcement.enforcementEnabled && enforcement.billingState !== 'active',
         subscription
       }
     });
@@ -362,10 +373,16 @@ exports.createSchoolSubscriptionRequest = async (req, res) => {
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
     const plan = await getPlanByCode(planCode, 'school');
     if (!plan) return res.status(404).json({ success:false, message:'School subscription plan not found' });
-    const subscription = await findOrCreateSchoolSubscription(school, plan, billingCycle);
-    await subscription.update({ planId:plan.id, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle:normalizeCycle(billingCycle), status:'pending', features:plan.features || [], limits:plan.limits || {} });
-    res.json({ success:true, message:'School subscription request prepared. Complete STK payment to activate.', data:{ subscription, amount:planAmount(plan, billingCycle), plan:planPayload(plan) } });
-  } catch(error) { res.status(500).json({ success:false, message:error.message }); }
+    const normalizedCycle = subscriptionEnforcement.requireBillingCycle(billingCycle);
+    const subscription = await findOrCreateSchoolSubscription(school, plan, normalizedCycle);
+    await subscription.update({ planId:plan.id, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle:normalizedCycle, status:'pending', features:plan.features || [], limits:plan.limits || {} });
+    await subscriptionEnforcement.configurePending(subscription, school, normalizedCycle);
+    const enforcement = await subscriptionEnforcement.getSummary(subscription, school);
+    res.json({ success:true, message:'School subscription cadence saved and payment is now due.', data:{ subscription, enforcement, amount:planAmount(plan, normalizedCycle), plan:planPayload(plan) } });
+  } catch(error) {
+    const calendarMissing = /academic calendar|term dates|academic year/i.test(String(error.message || ''));
+    res.status(error.statusCode || (calendarMissing ? 400 : 500)).json({ success:false, code:error.code || (calendarMissing ? 'ACADEMIC_CALENDAR_REQUIRED' : 'SUBSCRIPTION_REQUEST_FAILED'), message:error.message });
+  }
 };
 
 exports.expireNow = async (req, res) => {

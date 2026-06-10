@@ -473,6 +473,16 @@ exports.sendMessage = async (req, res) => {
 exports.getMessages = async (req, res) => {
   try {
     const { otherUserId } = req.params;
+    const me = await Student.findOne({ where:{ userId:req.user.id, status:'active' } });
+    const other = await Student.findOne({
+      where:{ userId:Number(otherUserId), status:'active' },
+      include:[{ model:User, attributes:['id'], where:{ schoolCode:req.user.schoolCode, role:'student', isActive:true }, required:true }]
+    });
+    if (!me || !other) return res.status(404).json({ success:false, message:'Classmate not found' });
+    const sameClass = me.classId && other.classId
+      ? Number(me.classId) === Number(other.classId)
+      : !me.classId && !other.classId && String(me.grade || '').trim().toLowerCase() === String(other.grade || '').trim().toLowerCase();
+    if (!sameClass) return res.status(403).json({ success:false, message:'Student direct messages are limited to current classmates' });
     const messages = await Message.findAll({
       where: {
         [Op.or]: [
@@ -496,7 +506,13 @@ exports.sendGroupMessage = async (req, res) => {
     const { content, replyToId } = req.body;
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
-    const classmates = await Student.findAll({ where: { grade: student.grade, id: { [Op.ne]: student.id } } });
+    const classWhere = student.classId
+      ? { classId:student.classId }
+      : { classId:null, grade:student.grade };
+    const classmates = await Student.findAll({
+      where: { ...classWhere, status:'active', id: { [Op.ne]: student.id } },
+      include:[{ model:User, where:{ schoolCode:req.user.schoolCode, role:'student', isActive:true }, attributes:['id'] }]
+    });
     const recipients = classmates.map(s => s.userId);
     const messages = recipients.map(receiverId => ({
       senderId: req.user.id,
@@ -524,10 +540,13 @@ exports.getGroupMessages = async (req, res) => {
   try {
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(404).json({ success: false });
-    const allStudents = await Student.findAll({
-        include: [{ model: User, where: { schoolCode: req.user.schoolCode } }]
+    const classWhere = student.classId
+      ? { classId:student.classId }
+      : { classId:null, grade:student.grade };
+    const classmates = await Student.findAll({
+      where:{ ...classWhere, status:'active', id:{ [Op.ne]:student.id } },
+      include:[{ model:User, where:{ schoolCode:req.user.schoolCode, role:'student', isActive:true } }]
     });
-    const classmates = allStudents.filter(s => s.grade === student.grade && s.id !== student.id);
     const classmateUserIds = classmates.map(s => s.User.id);
     const messages = await Message.findAll({
       where: {
@@ -574,13 +593,15 @@ exports.getStudentFullDetails = async (req, res) => {
         } else if (user.role === 'teacher') {
             const teacher = await Teacher.findOne({ where: { userId: user.id } });
             if (teacher) {
-                const classes = await Class.findAll({ where: { schoolCode: user.schoolCode } });
-                const teachesClass = classes.some(cls =>
-                    cls.teacherId === teacher.id ||
-                    (cls.subjectTeachers && cls.subjectTeachers.some(st => st.teacherId === teacher.id))
-                );
-                if (teachesClass && classes.some(cls => Number(cls.id) === Number(student.classId) || cls.name === student.grade || cls.grade === student.grade)) {
-                    authorized = true;
+                let currentClass = null;
+                if (student.classId) currentClass = await Class.findOne({ where:{ id:student.classId, schoolCode:user.schoolCode, isActive:true } });
+                if (!currentClass && !student.classId && student.grade) currentClass = await Class.findOne({ where:{ schoolCode:user.schoolCode, isActive:true, [Op.or]:[{ name:student.grade }, { grade:student.grade }] }, order:[['id','ASC']] });
+                if (currentClass) {
+                    const tableAssignment = await TeacherSubjectAssignment.findOne({ where:{ teacherId:teacher.id, classId:currentClass.id } }).catch(() => null);
+                    authorized = Number(currentClass.teacherId) === Number(teacher.id)
+                      || Number(teacher.classId) === Number(currentClass.id)
+                      || !!tableAssignment
+                      || (Array.isArray(currentClass.subjectTeachers) && currentClass.subjectTeachers.some(st => Number(st.teacherId) === Number(teacher.id)));
                 }
             }
         } else if (user.role === 'parent') {
@@ -627,11 +648,16 @@ exports.getStudentFullDetails = async (req, res) => {
 
         // Class teacher
         let classTeacher = null;
-        const studentClass = await Class.findOne({ where: { schoolCode: student.User?.schoolCode || user.schoolCode, [Op.or]: [{ id: student.classId || 0 }, { name: student.grade }, { grade: student.grade }] } });
+        let studentClass = student.classId
+            ? await Class.findOne({ where:{ id:student.classId, schoolCode:student.User?.schoolCode || user.schoolCode } })
+            : null;
+        if (!studentClass && !student.classId && student.grade) {
+            studentClass = await Class.findOne({ where:{ schoolCode:student.User?.schoolCode || user.schoolCode, [Op.or]:[{ name:student.grade }, { grade:student.grade }] }, order:[['id','ASC']] });
+        }
         if (studentClass?.teacherId) {
             classTeacher = await Teacher.findByPk(studentClass.teacherId, { include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }] });
         }
-        if (!classTeacher) {
+        if (!classTeacher && !student.classId) {
             classTeacher = await Teacher.findOne({
                 where: { classTeacher: student.grade },
                 include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }]

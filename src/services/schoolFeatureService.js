@@ -64,8 +64,12 @@ async function getSchoolFeatures(schoolCode) {
     return { planCode:'enterprise', plan:{...defs.enterprise, code:'enterprise', name:'Enterprise / Full Access', override:true, fullAccess:true, features:ALL_FEATURES}, features:set, featureList:[...set], override:true, fullAccess:true, accessMode:access.accessMode, access, brandingAllowed:true };
   }
   if (access.accessStatus === 'locked' && access.accessMode === 'suspended') {
-    const set = new Set(['billing','school_settings']);
+    const set = new Set(['billing','school_settings','alerts','help','profile','dashboard']);
     return { planCode:access.planCode || 'starter', plan:defs.starter, features:set, featureList:[...set], fullAccess:false, accessMode:access.accessMode, access, brandingAllowed:false };
+  }
+  if (access.accessStatus === 'locked' && access.accessMode === 'expired_subscription') {
+    const set = new Set(['billing','subscriptions','school_settings','alerts','help','profile','dashboard']);
+    return { planCode:access.planCode || 'starter', plan:defs[access.planCode] || defs.starter, features:set, featureList:[...set], fullAccess:false, accessMode:access.accessMode, access, brandingAllowed:false };
   }
   const code = normalizePlanCode(access.planCode || await getSchoolPlanCode(schoolCode));
   const configured = defs[code] || defs.starter;
