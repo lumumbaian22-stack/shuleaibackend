@@ -58,14 +58,15 @@ async function findClassTeacherForStudent(student, schoolCode) {
   const rows = await sequelize.query(
     `SELECT t."id" AS "teacherId", u."id" AS "userId", u."name", u."email", c."id" AS "classId", c."name" AS "className", c."grade"
        FROM "Classes" c
-       JOIN "Teachers" t ON (t."id" = c."teacherId" OR t."classId" = c."id")
+       LEFT JOIN "TeacherSubjectAssignments" tsa ON tsa."classId" = c."id" AND tsa."isClassTeacher" = true
+       JOIN "Teachers" t ON (t."id" = c."teacherId" OR t."classId" = c."id" OR t."id" = tsa."teacherId")
        JOIN "Users" u ON u."id" = t."userId"
       WHERE c."schoolCode" = :schoolCode
         AND u."schoolCode" = :schoolCode
         AND u."role" = 'teacher'
         AND u."isActive" = true
         AND (:classId::integer IS NULL OR c."id" = :classId)
-      ORDER BY CASE WHEN t."id" = c."teacherId" THEN 0 ELSE 1 END
+      ORDER BY CASE WHEN t."id" = c."teacherId" THEN 0 WHEN t."id" = tsa."teacherId" THEN 1 ELSE 2 END
       LIMIT 1`,
     { replacements: { schoolCode, classId: student.classId || null }, type: sequelize.QueryTypes.SELECT }
   ).catch(() => []);
@@ -74,14 +75,15 @@ async function findClassTeacherForStudent(student, schoolCode) {
   const fallbackRows = await sequelize.query(
     `SELECT t."id" AS "teacherId", u."id" AS "userId", u."name", u."email", c."id" AS "classId", c."name" AS "className", c."grade"
        FROM "Classes" c
-       JOIN "Teachers" t ON (t."id" = c."teacherId" OR t."classId" = c."id")
+       LEFT JOIN "TeacherSubjectAssignments" tsa ON tsa."classId" = c."id" AND tsa."isClassTeacher" = true
+       JOIN "Teachers" t ON (t."id" = c."teacherId" OR t."classId" = c."id" OR t."id" = tsa."teacherId")
        JOIN "Users" u ON u."id" = t."userId"
       WHERE c."schoolCode" = :schoolCode
         AND u."schoolCode" = :schoolCode
         AND u."role" = 'teacher'
         AND u."isActive" = true
         AND (LOWER(COALESCE(c."grade",'')) = LOWER(:grade) OR LOWER(COALESCE(c."name",'')) = LOWER(:className))
-      ORDER BY CASE WHEN t."id" = c."teacherId" THEN 0 ELSE 1 END
+      ORDER BY CASE WHEN t."id" = c."teacherId" THEN 0 WHEN t."id" = tsa."teacherId" THEN 1 ELSE 2 END
       LIMIT 1`,
     { replacements: { schoolCode, grade: student.grade || '', className: student.className || student.grade || '' }, type: sequelize.QueryTypes.SELECT }
   ).catch(() => []);

@@ -16,6 +16,13 @@ function gradeFor(score, school, cls) {
   return getGradeFromScore(Number(score), school?.system || 'cbc', gradingLevel(cls, school), school?.settings?.gradingScale || null);
 }
 
+function defaultReportLogo() { return '/assets/logo.png'; }
+function logoForSchool(school) { return school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || school?.reportCardSettings?.logo || defaultReportLogo(); }
+function reportAssessmentSettings(school) { const raw = school?.settings?.curriculumEngine?.assessmentSettings || school?.settings?.reportCardSettings?.assessmentSettings || school?.reportCardSettings?.assessmentSettings || []; return Array.isArray(raw) && raw.length ? raw : [{key:'cat1',label:'CAT 1',assessmentType:'CAT 1',showOnReport:true,countInFinal:true,weight:10,displayOrder:1},{key:'cat2',label:'CAT 2',assessmentType:'CAT 2',showOnReport:true,countInFinal:true,weight:10,displayOrder:2},{key:'midterm',label:'Midterm',assessmentType:'Midterm',showOnReport:true,countInFinal:true,weight:20,displayOrder:3},{key:'endterm',label:'End Term',assessmentType:'End Term',showOnReport:true,countInFinal:true,weight:40,displayOrder:4},{key:'sba',label:'SBA / Project',assessmentType:'SBA',showOnReport:true,countInFinal:true,weight:20,displayOrder:5}]; }
+function normAssess(x){return String(x||'').toLowerCase().replace(/[^a-z0-9]+/g,'');}
+function recordMatchesAssessment(record, setting){ const keys=[record.assessmentType,record.assessmentName,record.testType,record.examType,record.type].map(normAssess); return keys.includes(normAssess(setting.assessmentType))||keys.includes(normAssess(setting.label))||keys.includes(normAssess(setting.key)); }
+
+
 async function studentForUser(userId) {
   return (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ userId } });
 }
@@ -52,7 +59,12 @@ async function buildSnapshot({ studentId, schoolCode:code, term, year, assessmen
   const where = { studentId:student.id, schoolCode:code, term, year:Number(year) };
   if (assessmentType) where.assessmentType = assessmentType;
   if (assessmentName) where.assessmentName = assessmentName;
-  const records = await AcademicRecord.unscoped().findAll({ where, order:[['subject','ASC'],['assessmentName','ASC'],['date','ASC']] });
+  let records = await AcademicRecord.unscoped().findAll({ where, order:[['subject','ASC'],['assessmentName','ASC'],['date','ASC']] });
+  const assessmentSettings = reportAssessmentSettings(school).filter(x => x.showOnReport !== false).sort((a,b)=>Number(a.displayOrder||0)-Number(b.displayOrder||0));
+  const countedSettings = assessmentSettings.filter(x => x.countInFinal !== false);
+  if (!assessmentType && !assessmentName && assessmentSettings.length) {
+    records = records.filter(record => assessmentSettings.some(setting => recordMatchesAssessment(record, setting)));
+  }
   const selections = cls ? await selectionsService.listStudentSubjectSelections({ schoolCode:code, studentId:student.id, classId:cls.id }).catch(() => []) : [];
   const reportRows = school && cls ? curriculumEngine.buildSubjectRowsForReport({ school, classItem:cls, student, records, studentSubjectSelections:selections }) : [];
   const summary = reportRows.length ? curriculumEngine.summarizeReportRows(reportRows) : null;
@@ -80,10 +92,10 @@ async function buildSnapshot({ studentId, schoolCode:code, term, year, assessmen
   attendance.rate = attendance.total ? Math.round((attendance.present / attendance.total) * 1000) / 10 : 0;
   const snapshot = {
     student:{ id:student.id, userId:student.userId, name:student.User?.name, photo:student.User?.profileImage || student.profileImage || null, dateOfBirth:student.dateOfBirth, elimuid:student.elimuid, grade:student.grade, className:cls?.name || student.grade },
-    school:{ name:school?.name || 'School', logo:school?.settings?.branding?.logo || school?.settings?.logo || null, branding:school?.settings?.branding || {} },
+    school:{ name:school?.name || 'School', logo:logoForSchool(school), watermarkLogo:logoForSchool(school), branding:school?.settings?.branding || {}, usesFallbackLogo:!logoForSchool(school) || logoForSchool(school) === defaultReportLogo() },
     class:cls ? { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream, levelCode:cls.levelCode } : null,
     term, year:Number(year), curriculum:school?.system || student.curriculum || null,
-    assessmentType:assessmentType || null, assessmentName:assessmentName || null,
+    assessmentType:assessmentType || null, assessmentName:assessmentName || null, assessmentSettings, countedAssessments:countedSettings,
     subjects, totalMarks:summary?.totalMarks ?? subjects.filter(row=>row.counted&&row.average!==null).reduce((sum,row)=>sum+Number(row.average),0),
     countedSubjects:summary?.countedSubjects ?? subjects.filter(row=>row.counted&&row.average!==null).length,
     pendingSubjects:summary?.pendingSubjects ?? subjects.filter(row=>row.average===null&&row.status!=='Not Taken').length,
@@ -107,7 +119,7 @@ exports.generateReport = async (req,res) => {
       term, year:Number(year), curriculum:built.snapshot.curriculum, reportType:'academic',
       assessmentType, assessmentName, snapshot:built.snapshot, sourceRecordIds:built.records.map(record=>record.id),
       generatedBy:req.user.id, publishedBy:req.user.id, publishedAt:new Date(),
-      metadata:{ engine:'v143_immutable_curriculum_report_card' }
+      metadata:{ engine:'v149_final_selected_assessment_report_card', assessmentSettings:built.snapshot.assessmentSettings }
     });
     await AuditLog.create({ schoolCode:schoolCode(req), actorUserId:req.user.id, actorRole:req.user.role, module:'reports', action:'report_published', entityType:'ReportSnapshot', entityId:String(result.row.id), after:{ version:result.row.version, studentId:Number(studentId), term, year:Number(year) } }).catch(()=>null);
     res.status(result.created?201:200).json({ success:true, message:result.unchanged?'The identical published report already exists.':'Report card published as an immutable historical version.', data:result.row });

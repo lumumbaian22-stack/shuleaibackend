@@ -498,9 +498,9 @@ exports.transferOptions=async(req,res)=>{
           if(ids.includes(Number(teacher.id)))ownClasses.push(cls);
         }
       }
-      if(ownClasses.length)students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{classId:{[Op.in]:ownClasses.map(c=>c.id)},status:'active'},include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name']}],attributes:['id','elimuid','classId','grade'],order:[[User,'name','ASC']]});
+      if(ownClasses.length)students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{classId:{[Op.in]:ownClasses.map(c=>c.id)},status:'active'},include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name']},{model:Class,required:false,attributes:['id','name','grade','stream']}],attributes:['id','elimuid','classId','grade'],order:[[User,'name','ASC']]});
     }else{
-      students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{status:'active',classId:{[Op.in]:classes.map(c=>c.id)}},include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name']}],attributes:['id','elimuid','classId','grade'],order:[[User,'name','ASC']]});
+      students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{status:'active',classId:{[Op.in]:classes.map(c=>c.id)}},include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name']},{model:Class,required:false,attributes:['id','name','grade','stream']}],attributes:['id','elimuid','classId','grade'],order:[[User,'name','ASC']]});
     }
     res.json({success:true,data:{classes,students}});
   }catch(error){fail(res,error);}

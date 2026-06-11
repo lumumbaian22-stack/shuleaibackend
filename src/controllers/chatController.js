@@ -1,4 +1,4 @@
-const { User, Teacher, Message, Student, Parent, Class, sequelize } = require('../models');
+const { User, Teacher, Message, Student, Parent, Class, TeacherSubjectAssignment, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 const { literal } = require('sequelize'); // Add at top of file
@@ -288,17 +288,22 @@ exports.getParentConversations = async (req, res) => {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.json({ success: true, data: [] });
 
-    const classWhere = {
-      schoolCode: req.user.schoolCode,
-      isActive: true,
-      [Op.or]: [
-        { teacherId: teacher.id },
-        { id: teacher.classId || 0 },
-        ...(teacher.classTeacher ? [{ name: teacher.classTeacher }] : [])
-      ]
-    };
-    const classes = await Class.findAll({ where: classWhere, attributes: ['id','name','grade'] }).catch(() => []);
-    const classIds = classes.map(c => c.id).filter(Boolean);
+    let classIds = Array.isArray(req.classTeacherClassIds) ? req.classTeacherClassIds.map(Number).filter(Boolean) : [];
+    if (!classIds.length) {
+      const classWhere = {
+        schoolCode: req.user.schoolCode,
+        isActive: true,
+        [Op.or]: [
+          { teacherId: teacher.id },
+          { id: teacher.classId || 0 },
+          ...(teacher.classTeacher ? [{ name: teacher.classTeacher }] : [])
+        ]
+      };
+      const directClasses = await Class.findAll({ where: classWhere, attributes: ['id','name','grade'] }).catch(() => []);
+      const assignmentRows = await TeacherSubjectAssignment.findAll({ where: { teacherId: teacher.id, isClassTeacher: true }, attributes: ['classId'] }).catch(() => []);
+      classIds = [...new Set([...directClasses.map(c => c.id), ...assignmentRows.map(a => a.classId)].filter(Boolean).map(Number))];
+    }
+    const classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds }, schoolCode: req.user.schoolCode, isActive: true }, attributes: ['id','name','grade'] }).catch(() => []) : [];
     if (!classIds.length) return res.json({ success: true, data: [] });
 
     const messages = await Message.findAll({

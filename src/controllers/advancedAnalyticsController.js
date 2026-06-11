@@ -6,69 +6,83 @@ const { getGradeFromScore } = require('../utils/curriculumHelper');
 
 function schoolCode(req){return req.user?.schoolCode;}
 function n(v){const x=Number(v);return Number.isFinite(x)?x:null;}
-function round(v,d=2){return Math.round((Number(v)||0)*10**d)/10**d;}
-function avg(arr){const valid=arr.map(n).filter(v=>v!==null);return valid.length?valid.reduce((a,b)=>a+b,0)/valid.length:null;}
+function round(v,d=2){if(v==null||Number.isNaN(Number(v)))return null;return Math.round(Number(v)*10**d)/10**d;}
+function avg(arr){const valid=(arr||[]).map(n).filter(v=>v!==null);return valid.length?valid.reduce((a,b)=>a+b,0)/valid.length:null;}
 function safeCsv(value){const s=String(value??'');return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;}
 function assessmentLabel(record){return record.assessmentName||record.assessmentType||'Assessment';}
+function uniq(list){return [...new Set((list||[]).filter(v=>v!==undefined&&v!==null&&String(v).trim()!==''))];}
+function lower(v){return String(v||'').trim().toLowerCase();}
 
 async function allowedScope(req){
-  if(['admin','super_admin'].includes(req.user.role))return {all:true,classIds:null,subjects:null};
-  if(req.user.role!=='teacher')return {all:false,classIds:[],subjects:[]};
-  const teacher=await Teacher.findOne({where:{userId:req.user.id}});if(!teacher)return {all:false,classIds:[],subjects:[]};
-  const assignments=await TeacherSubjectAssignment.findAll({where:{teacherId:teacher.id}}).catch(()=>[]);
+  if(['admin','super_admin'].includes(req.user.role))return {all:true,classIds:null,subjects:null,classTeacherIds:[]};
+  if(req.user.role!=='teacher')return {all:false,classIds:[],subjects:[],classTeacherIds:[]};
+  const teacher=await Teacher.findOne({where:{userId:req.user.id}});if(!teacher)return {all:false,classIds:[],subjects:[],classTeacherIds:[]};
+  const assignments=await TeacherSubjectAssignment.findAll({where:{teacherId:teacher.id},include:[{model:Class,required:false,where:{schoolCode:schoolCode(req)},attributes:['id','schoolCode']}]}).catch(()=>[]);
   const ownedClasses=await Class.findAll({where:{schoolCode:schoolCode(req),[Op.or]:[{teacherId:teacher.id},{id:teacher.classId||-1}]},attributes:['id']}).catch(()=>[]);
-  const classTeacherIds=ownedClasses.map(c=>Number(c.id));
-  const classIds=[...new Set([...classTeacherIds,...assignments.map(a=>a.classId)].filter(Boolean).map(Number))];
-  const subjects=[...new Set(assignments.map(a=>String(a.subject||a.subjectName||'').trim()).filter(Boolean))];
+  const classTeacherIds=uniq([...ownedClasses.map(c=>c.id),...assignments.filter(a=>a.isClassTeacher).map(a=>a.classId)]).map(Number);
+  const classIds=uniq([...classTeacherIds,...assignments.map(a=>a.classId)]).map(Number);
+  const subjects=uniq(assignments.filter(a=>!a.isClassTeacher).map(a=>String(a.subject||a.subjectName||'').trim()));
   return {all:false,classIds,subjects,classTeacherIds,isClassTeacher:classTeacherIds.length>0};
 }
 
 async function build(req){
-  const scope=await allowedScope(req);if(!scope.all&&!scope.classIds.length){const err=new Error('No assigned classes are available for analytics');err.status=403;throw err;}
-  const q=req.query||{};const where={schoolCode:schoolCode(req)};
-  if(q.year)where.year=Number(q.year);if(q.term)where.term=q.term;if(q.assessmentType)where.assessmentType=q.assessmentType;if(q.assessmentName)where.assessmentName=q.assessmentName;if(q.subject)where.subject=q.subject;
-  if(String(q.publishedOnly||'').toLowerCase()==='true')where[Op.or]=[{isPublished:true},{status:'published'},{status:'locked'}];
-  const records=await AcademicRecord.unscoped().findAll({where,include:[{model:Student,required:true,include:[{model:User,required:true,where:{schoolCode:schoolCode(req),role:'student'},attributes:['id','name','profileImage']}]}],order:[['year','DESC'],['term','DESC'],['date','DESC']]});
-  const classes=await Class.findAll({where:{schoolCode:schoolCode(req)},attributes:['id','name','grade','stream','levelCode']});const classMap=new Map(classes.map(c=>[Number(c.id),c]));
-  let filtered=records.filter(r=>scope.all||scope.classIds.includes(Number(r.classId||r.Student?.classId)));
-  if(!scope.all&&scope.subjects.length)filtered=filtered.filter(r=>scope.classTeacherIds?.includes(Number(r.classId||r.Student?.classId))||scope.subjects.map(x=>x.toLowerCase()).includes(String(r.subject||'').toLowerCase()));
-  if(q.classId)filtered=filtered.filter(r=>Number(r.classId||r.Student?.classId)===Number(q.classId));
-  if(q.studentId)filtered=filtered.filter(r=>Number(r.studentId)===Number(q.studentId));
-  if(q.gender)filtered=filtered.filter(r=>String(r.Student?.gender||'').toLowerCase()===String(q.gender).toLowerCase());
-  if(q.stream)filtered=filtered.filter(r=>String(classMap.get(Number(r.classId||r.Student?.classId))?.stream||'').toLowerCase()===String(q.stream).toLowerCase());
+  const q=req.query||{};const sc=schoolCode(req);const scope=await allowedScope(req);
+  if(!scope.all&&!scope.classIds.length){const err=new Error('No assigned classes are available for analytics');err.status=403;throw err;}
+  const classWhere={schoolCode:sc,[Op.or]:[{isActive:true},{isActive:null}]};
+  const allClasses=await Class.findAll({where:classWhere,attributes:['id','name','grade','stream','levelCode'],order:[['grade','ASC'],['name','ASC']]}).catch(()=>[]);
+  const classMap=new Map(allClasses.map(c=>[Number(c.id),c]));
+  let eligibleClassIds=scope.all?allClasses.map(c=>Number(c.id)):scope.classIds.map(Number);
+  if(q.classId)eligibleClassIds=eligibleClassIds.filter(id=>id===Number(q.classId));
+  if(q.stream){const wanted=lower(q.stream);eligibleClassIds=eligibleClassIds.filter(id=>lower(classMap.get(id)?.stream)===wanted);}
+  eligibleClassIds=uniq(eligibleClassIds).map(Number);
 
-  const school=await School.findOne({where:{schoolId:schoolCode(req)}});const curriculum=school?.system||'cbc';const scale=school?.settings?.gradingScale||null;const level=school?.settings?.schoolLevel||school?.schoolStructure||'secondary';
+  const school=await School.findOne({where:{schoolId:sc}});const curriculum=school?.system||'cbc';const scale=school?.settings?.gradingScale||null;const level=school?.settings?.schoolLevel||school?.schoolStructure||'secondary';
   const grade=v=>v==null?null:getGradeFromScore(round(v),curriculum,level,scale);
   const passMark=Number(school?.settings?.passMark ?? school?.settings?.gradingScalePassMark ?? 50);
+
+  const studentWhere={status:'active'}; if(eligibleClassIds.length)studentWhere.classId={[Op.in]:eligibleClassIds}; if(q.studentId)studentWhere.id=Number(q.studentId);
+  const scopedStudents=await (Student.unscoped?Student.unscoped():Student).findAll({where:studentWhere,include:[{model:User,required:true,where:{schoolCode:sc,role:'student'},attributes:['id','name','profileImage']},{model:Class,required:false,attributes:['id','name','grade','stream']}],attributes:['id','elimuid','gender','grade','classId'],order:[[User,'name','ASC']]}).catch(()=>[]);
+
+  const where={schoolCode:sc};
+  if(q.year)where.year=Number(q.year);if(q.term)where.term=q.term;if(q.assessmentType)where.assessmentType=q.assessmentType;if(q.assessmentName)where.assessmentName=q.assessmentName;if(q.subject)where.subject=q.subject;if(q.studentId)where.studentId=Number(q.studentId);
+  if(String(q.publishedOnly||'').toLowerCase()==='true')where[Op.or]=[{isPublished:true},{status:'published'},{status:'locked'}];
+  const records=await AcademicRecord.unscoped().findAll({where,include:[{model:Student,required:true,include:[{model:User,required:true,where:{schoolCode:sc,role:'student'},attributes:['id','name','profileImage']},{model:Class,required:false,attributes:['id','name','grade','stream']}]}],order:[['year','DESC'],['term','DESC'],['date','DESC'],['updatedAt','DESC']]});
+  let filtered=records.filter(r=>{
+    const cid=Number(r.classId||r.Student?.classId||0)||null;
+    if(eligibleClassIds.length && !eligibleClassIds.includes(cid))return false;
+    if(!scope.all&&scope.subjects.length&&!scope.classTeacherIds?.includes(cid)&&!scope.subjects.map(lower).includes(lower(r.subject)))return false;
+    if(q.gender&&lower(r.Student?.gender)!==lower(q.gender))return false;
+    if(q.stream&&lower(classMap.get(cid)?.stream)!==lower(q.stream))return false;
+    return true;
+  });
+
   const byStudent=new Map();
-  for(const r of filtered){const st=r.Student;if(!st)continue;const key=Number(st.id);if(!byStudent.has(key))byStudent.set(key,{studentId:key,name:st.User?.name||`Student ${key}`,gender:st.gender||null,classId:Number(r.classId||st.classId)||null,subjects:new Map(),records:[]});const row=byStudent.get(key);row.records.push(r);const subject=String(r.subject||'Unknown');if(!row.subjects.has(subject))row.subjects.set(subject,[]);if(n(r.score)!==null)row.subjects.get(subject).push(Number(r.score));}
+  for(const st of scopedStudents){const cid=Number(st.classId||st.Class?.id||0)||null; if(q.gender&&lower(st.gender)!==lower(q.gender))continue; byStudent.set(Number(st.id),{studentId:Number(st.id),elimuid:st.elimuid||'',name:st.User?.name||`Student ${st.id}`,gender:st.gender||null,classId:cid,className:st.Class?.name||classMap.get(cid)?.name||null,gradeLevel:st.Class?.grade||classMap.get(cid)?.grade||st.grade||null,stream:st.Class?.stream||classMap.get(cid)?.stream||null,subjects:new Map(),records:[]});}
+  for(const r of filtered){const st=r.Student;if(!st)continue;const key=Number(st.id);const cid=Number(r.classId||st.classId||st.Class?.id||0)||null;if(!byStudent.has(key))byStudent.set(key,{studentId:key,elimuid:st.elimuid||'',name:st.User?.name||`Student ${key}`,gender:st.gender||null,classId:cid,className:st.Class?.name||classMap.get(cid)?.name||null,gradeLevel:st.Class?.grade||classMap.get(cid)?.grade||st.grade||null,stream:st.Class?.stream||classMap.get(cid)?.stream||null,subjects:new Map(),records:[]});const row=byStudent.get(key);row.records.push(r);const subject=String(r.subject||'Unknown');if(!row.subjects.has(subject))row.subjects.set(subject,[]);if(n(r.score)!==null)row.subjects.get(subject).push(Number(r.score));}
+
   const students=[...byStudent.values()].map(st=>{
     const subjectResults=[...st.subjects].map(([subject,scores])=>({subject,meanScore:round(avg(scores)),meanGrade:grade(avg(scores)),assessmentCount:scores.length}));
-    const mean=avg(subjectResults.map(x=>x.meanScore));const cls=classMap.get(st.classId);
+    const mean=avg(subjectResults.map(x=>x.meanScore));
     const assessmentGroups=new Map();
     for(const record of st.records){const key=[record.year,record.term,assessmentLabel(record),record.date?new Date(record.date).toISOString().slice(0,10):''].join('|');if(!assessmentGroups.has(key))assessmentGroups.set(key,{key,label:assessmentLabel(record),date:record.date||record.updatedAt||record.createdAt,scores:[]});if(n(record.score)!==null)assessmentGroups.get(key).scores.push(Number(record.score));}
     const assessmentMeans=[...assessmentGroups.values()].map(group=>({...group,meanScore:avg(group.scores)})).filter(group=>group.meanScore!==null).sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
-    const currentAssessment=assessmentMeans[0]||null,previousAssessment=assessmentMeans[1]||null;
-    const improvement=currentAssessment&&previousAssessment?round(currentAssessment.meanScore-previousAssessment.meanScore):null;
-    return {studentId:st.studentId,name:st.name,gender:st.gender,classId:st.classId,className:cls?.name||null,gradeLevel:cls?.grade||null,stream:cls?.stream||null,meanScore:mean==null?null:round(mean),meanGrade:grade(mean),countedSubjects:subjectResults.length,subjects:subjectResults,assessment:currentAssessment?.label||(filtered[0]?assessmentLabel(filtered[0]):null),term:q.term||filtered[0]?.term||null,year:Number(q.year||filtered[0]?.year)||null,previousAssessment:previousAssessment?.label||null,currentAssessmentMean:currentAssessment?.meanScore==null?null:round(currentAssessment.meanScore),previousMeanScore:previousAssessment?.meanScore==null?null:round(previousAssessment.meanScore),improvement};
-  }).sort((a,b)=>(b.meanScore??-1)-(a.meanScore??-1)).map((x,i)=>({...x,position:i+1}));
+    const currentAssessment=assessmentMeans[0]||null,previousAssessment=assessmentMeans[1]||null;const improvement=currentAssessment&&previousAssessment?round(currentAssessment.meanScore-previousAssessment.meanScore):null;
+    return {studentId:st.studentId,elimuid:st.elimuid,name:st.name,gender:st.gender,classId:st.classId,className:st.className,gradeLevel:st.gradeLevel,stream:st.stream,meanScore:mean==null?null:round(mean),meanGrade:grade(mean),countedSubjects:subjectResults.length,subjects:subjectResults,assessment:currentAssessment?.label||(filtered[0]?assessmentLabel(filtered[0]):null),term:q.term||filtered[0]?.term||null,year:Number(q.year||filtered[0]?.year)||null,previousAssessment:previousAssessment?.label||null,currentAssessmentMean:currentAssessment?.meanScore==null?null:round(currentAssessment.meanScore),previousMeanScore:previousAssessment?.meanScore==null?null:round(previousAssessment.meanScore),improvement,hasRecords:st.records.length>0};
+  }).sort((a,b)=>(b.meanScore??-1)-(a.meanScore??-1)||String(a.name).localeCompare(String(b.name))).map((x,i)=>({...x,position:i+1}));
 
-  const studentIds=students.map(x=>x.studentId);
-  const attendanceRows=studentIds.length?await Attendance.findAll({where:{schoolCode:schoolCode(req),studentId:{[Op.in]:studentIds}},attributes:['studentId','status']}):[];
-  const attendanceMap=new Map();for(const row of attendanceRows){if(!attendanceMap.has(Number(row.studentId)))attendanceMap.set(Number(row.studentId),[]);attendanceMap.get(Number(row.studentId)).push(row.status);}
-  students.forEach(st=>{const statuses=attendanceMap.get(Number(st.studentId))||[];const present=statuses.filter(x=>x==='present').length;st.attendanceRate=statuses.length?round(present/statuses.length*100):null;st.attendanceRecords=statuses.length;});
+  const studentIds=students.map(x=>x.studentId);const attendanceRows=studentIds.length?await Attendance.findAll({where:{schoolCode:sc,studentId:{[Op.in]:studentIds}},attributes:['studentId','status']}):[];
+  const attendanceMap=new Map();for(const row of attendanceRows){if(!attendanceMap.has(Number(row.studentId)))attendanceMap.set(Number(row.studentId),[]);attendanceMap.get(Number(row.studentId)).push(row.status);}students.forEach(st=>{const statuses=attendanceMap.get(Number(st.studentId))||[];const present=statuses.filter(x=>String(x).toLowerCase()==='present').length;st.attendanceRate=statuses.length?round(present/statuses.length*100):null;st.attendanceRecords=statuses.length;});
 
-  const group=(keyFn)=>{const m=new Map();for(const st of students){const key=keyFn(st)||'Unassigned';if(!m.has(key))m.set(key,[]);m.get(key).push(st);}return [...m].map(([name,rows])=>({name,learnerCount:rows.length,meanScore:round(avg(rows.map(x=>x.meanScore))),meanGrade:grade(avg(rows.map(x=>x.meanScore)))})).sort((a,b)=>b.meanScore-a.meanScore);};
-  const subjectMap=new Map();for(const st of students)for(const sub of st.subjects){if(!subjectMap.has(sub.subject))subjectMap.set(sub.subject,[]);subjectMap.get(sub.subject).push(sub.meanScore);}
-  const subjectMeans=[...subjectMap].map(([name,scores])=>({name,learnerCount:scores.length,meanScore:round(avg(scores)),meanGrade:grade(avg(scores))})).sort((a,b)=>b.meanScore-a.meanScore);
-  const genderRows={};for(const st of students){const key=String(st.gender||'unspecified').toLowerCase();if(!genderRows[key])genderRows[key]=[];genderRows[key].push(st);}
-  const genderAnalysis=Object.entries(genderRows).map(([gender,rows])=>({gender,learnerCount:rows.length,meanScore:round(avg(rows.map(x=>x.meanScore))),meanGrade:grade(avg(rows.map(x=>x.meanScore))),leadingLearner:rows.slice().sort((a,b)=>(b.meanScore??-1)-(a.meanScore??-1))[0]||null,competencyPercentage:round(rows.filter(x=>(x.meanScore??0)>=passMark).length/Math.max(rows.length,1)*100),meanImprovement:round(avg(rows.map(x=>x.improvement))),attendanceRate:round(avg(rows.map(x=>x.attendanceRate)))}));
-  const distributions={};for(const st of students){const g=st.meanGrade||'Not graded';distributions[g]=(distributions[g]||0)+1;}
-  const schoolMean=avg(students.map(x=>x.meanScore));
-  const classMeans=group(x=>x.gradeLevel||x.className),streamMeans=group(x=>x.stream?`${x.className||x.gradeLevel||'Class'} — ${x.stream}`:(x.className||'Unassigned'));
-  const attendanceComparison=group(x=>x.className).map(row=>{const members=students.filter(st=>(st.className||'Unassigned')===row.name);return {...row,attendanceRate:round(avg(members.map(st=>st.attendanceRate))),academicMeanScore:row.meanScore};});
+  const group=(keyFn)=>{const m=new Map();for(const st of students){const key=keyFn(st)||'Unassigned';if(!m.has(key))m.set(key,[]);m.get(key).push(st);}return [...m].map(([name,rows])=>({name,learnerCount:rows.length,learnersWithRecords:rows.filter(x=>x.hasRecords).length,meanScore:round(avg(rows.map(x=>x.meanScore))),meanGrade:grade(avg(rows.map(x=>x.meanScore)))})).sort((a,b)=>(b.meanScore??-1)-(a.meanScore??-1));};
+  const subjectMap=new Map();for(const st of students)for(const sub of st.subjects){if(!subjectMap.has(sub.subject))subjectMap.set(sub.subject,[]);subjectMap.get(sub.subject).push(sub.meanScore);}const subjectMeans=[...subjectMap].map(([name,scores])=>({name,learnerCount:scores.length,meanScore:round(avg(scores)),meanGrade:grade(avg(scores))})).sort((a,b)=>(b.meanScore??-1)-(a.meanScore??-1));
+  const genderRows={};for(const st of students){const key=lower(st.gender||'unspecified');if(!genderRows[key])genderRows[key]=[];genderRows[key].push(st);}const genderAnalysis=Object.entries(genderRows).map(([gender,rows])=>({gender,learnerCount:rows.length,meanScore:round(avg(rows.map(x=>x.meanScore))),meanGrade:grade(avg(rows.map(x=>x.meanScore))),leadingLearner:rows.slice().sort((a,b)=>(b.meanScore??-1)-(a.meanScore??-1))[0]||null,competencyPercentage:round(rows.filter(x=>(x.meanScore??0)>=passMark).length/Math.max(rows.filter(x=>x.hasRecords).length,1)*100),meanImprovement:round(avg(rows.map(x=>x.improvement))),attendanceRate:round(avg(rows.map(x=>x.attendanceRate)))}));
+  const distributions={};for(const st of students){const g=st.meanGrade||'No marks';distributions[g]=(distributions[g]||0)+1;}const schoolMean=avg(students.map(x=>x.meanScore));
+  const classMeans=group(x=>x.className||x.gradeLevel),streamMeans=group(x=>x.stream?`${x.className||x.gradeLevel||'Class'} — ${x.stream}`:(x.className||'Unassigned'));const attendanceComparison=group(x=>x.className).map(row=>{const members=students.filter(st=>(st.className||'Unassigned')===row.name);return {...row,attendanceRate:round(avg(members.map(st=>st.attendanceRate))),academicMeanScore:row.meanScore};});
   const improvementTrends=students.filter(x=>x.improvement!==null).slice().sort((a,b)=>b.improvement-a.improvement).map((x,index)=>({position:index+1,studentId:x.studentId,name:x.name,className:x.className,stream:x.stream,currentAssessment:x.assessment,previousAssessment:x.previousAssessment,currentMeanScore:x.currentAssessmentMean,previousMeanScore:x.previousMeanScore,improvement:x.improvement}));
-  return {filters:{year:q.year||null,term:q.term||null,assessmentType:q.assessmentType||null,assessmentName:q.assessmentName||null,classId:q.classId||null,stream:q.stream||null,subject:q.subject||null,studentId:q.studentId||null,gender:q.gender||null,publishedOnly:String(q.publishedOnly||'false')==='true'},school:{name:school?.name||'School',schoolCode:schoolCode(req),curriculum},overview:{learnerCount:students.length,recordCount:filtered.length,schoolMeanScore:schoolMean==null?null:round(schoolMean),schoolMeanGrade:grade(schoolMean),topLearner:students[0]||null},studentRankings:students,classMeans,streamMeans,subjectMeans,genderAnalysis,gradeDistribution:Object.entries(distributions).map(([grade,count])=>({grade,count})),topBoys:students.filter(x=>String(x.gender||'').toLowerCase()==='male').slice(0,10),topGirls:students.filter(x=>String(x.gender||'').toLowerCase()==='female').slice(0,10),improvementTrends,attendanceComparison,passMark,riskIndicators:students.filter(x=>(x.meanScore??100)<passMark).map(x=>({studentId:x.studentId,name:x.name,className:x.className,meanScore:x.meanScore,meanGrade:x.meanGrade,attendanceRate:x.attendanceRate,improvement:x.improvement,risk:(x.meanScore??0)<Math.max(30,passMark-20)?'critical':'needs_support'})),generatedAt:new Date().toISOString()};
+  const missingLearners=students.filter(x=>!x.hasRecords).map(x=>({studentId:x.studentId,name:x.name,className:x.className,stream:x.stream,attendanceRate:x.attendanceRate}));
+  const filterOptions={years:uniq([...filtered.map(r=>r.year),new Date().getFullYear()]).sort((a,b)=>b-a),terms:uniq([...filtered.map(r=>r.term),'Term 1','Term 2','Term 3']),assessmentNames:uniq(filtered.map(r=>r.assessmentName||r.assessmentType)),assessmentTypes:uniq([...filtered.map(r=>r.assessmentType),'CAT','Midterm','End Term','SBA','Project','Practical']),classes:allClasses.filter(c=>!eligibleClassIds.length||eligibleClassIds.includes(Number(c.id))).map(c=>({id:c.id,name:c.name,grade:c.grade,stream:c.stream})),streams:uniq(allClasses.map(c=>c.stream)),subjects:uniq(filtered.map(r=>r.subject)),students:students.map(s=>({id:s.studentId,name:s.name,className:s.className,elimuid:s.elimuid})),genders:uniq(students.map(s=>s.gender))};
+  const coverage={totalLearners:students.length,learnersWithRecords:students.filter(x=>x.hasRecords).length,learnersWithoutRecords:missingLearners.length,recordCoveragePercent:students.length?round(students.filter(x=>x.hasRecords).length/students.length*100):0};
+  return {filters:{year:q.year||null,term:q.term||null,assessmentType:q.assessmentType||null,assessmentName:q.assessmentName||null,classId:q.classId||null,stream:q.stream||null,subject:q.subject||null,studentId:q.studentId||null,gender:q.gender||null,publishedOnly:String(q.publishedOnly||'false')==='true'},filterOptions,school:{name:school?.name||'School',schoolCode:sc,curriculum},overview:{learnerCount:students.length,recordCount:filtered.length,schoolMeanScore:schoolMean==null?null:round(schoolMean),schoolMeanGrade:grade(schoolMean),topLearner:students.find(x=>x.hasRecords)||students[0]||null,coverage},studentRankings:students,classMeans,streamMeans,subjectMeans,genderAnalysis,gradeDistribution:Object.entries(distributions).map(([grade,count])=>({grade,count})),topBoys:students.filter(x=>lower(x.gender)==='male').slice(0,10),topGirls:students.filter(x=>lower(x.gender)==='female').slice(0,10),improvementTrends,attendanceComparison,passMark,missingLearners,riskIndicators:[...students.filter(x=>x.hasRecords&&(x.meanScore??100)<passMark).map(x=>({studentId:x.studentId,name:x.name,className:x.className,meanScore:x.meanScore,meanGrade:x.meanGrade,attendanceRate:x.attendanceRate,improvement:x.improvement,risk:(x.meanScore??0)<Math.max(30,passMark-20)?'critical':'needs_support'})),...missingLearners.map(x=>({studentId:x.studentId,name:x.name,className:x.className,meanScore:null,meanGrade:null,attendanceRate:x.attendanceRate,risk:'missing_marks'}))],generatedAt:new Date().toISOString()};
 }
 
 exports.summary=async(req,res)=>{try{res.json({success:true,data:await build(req)});}catch(error){res.status(error.status||500).json({success:false,message:error.message});}};

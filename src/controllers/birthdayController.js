@@ -165,6 +165,7 @@ exports.upcoming = async (req,res) => {
         reminderSentAt:event?.updatedAt || null
       };
     }).filter(Boolean).sort((a,b)=>a.daysUntil-b.daysUntil || a.studentName.localeCompare(b.studentName));
-    res.json({ success:true, data:{ today, days, settings, birthdays:rows, reminders:eventRows } });
+    const missingDobCount = await (Student.unscoped ? Student.unscoped() : Student).count({ where:{ status:'active', [Op.or]:[{dateOfBirth:null}] }, include:[{ model:User, where:{ schoolCode:schoolCode(req), role:'student', isActive:true }, attributes:['id'] }] }).catch(()=>0);
+    res.json({ success:true, data:{ today, days, settings, birthdays:rows, reminders:eventRows, missingDobCount } });
   } catch (error) { res.status(500).json({ success:false, message:error.message }); }
 };

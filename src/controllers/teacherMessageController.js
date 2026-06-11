@@ -1,6 +1,6 @@
 // src/controllers/teacherMessageController.js
 const { Op } = require('sequelize');
-const { Message, User, Teacher, Student, Parent, Class, sequelize } = require('../models');
+const { Message, User, Teacher, Student, Parent, Class, TeacherSubjectAssignment, sequelize } = require('../models');
 const {createAlert}=require('../services/notificationService');
 const realtime=require('../services/realtimeService');
 
@@ -15,19 +15,23 @@ function isTeacherParentConversation(message, user) {
 async function resolveClassTeacherParentContext(req, parentUserId) {
   const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
   if (!teacher) return null;
-  const classes = await Class.findAll({
-    where: {
-      schoolCode: req.user.schoolCode,
-      isActive: true,
-      [Op.or]: [
-        { teacherId: teacher.id },
-        { id: teacher.classId || 0 },
-        ...(teacher.classTeacher ? [{ name: teacher.classTeacher }] : [])
-      ]
-    },
-    attributes: ['id','name','grade']
-  }).catch(() => []);
-  const classIds = classes.map(c => c.id).filter(Boolean);
+  let classIds = Array.isArray(req.classTeacherClassIds) ? req.classTeacherClassIds.map(Number).filter(Boolean) : [];
+  if (!classIds.length) {
+    const classes = await Class.findAll({
+      where: {
+        schoolCode: req.user.schoolCode,
+        isActive: true,
+        [Op.or]: [
+          { teacherId: teacher.id },
+          { id: teacher.classId || 0 },
+          ...(teacher.classTeacher ? [{ name: teacher.classTeacher }] : [])
+        ]
+      },
+      attributes: ['id','name','grade']
+    }).catch(() => []);
+    const rows = await TeacherSubjectAssignment.findAll({ where: { teacherId: teacher.id, isClassTeacher: true }, attributes:['classId'] }).catch(() => []);
+    classIds = [...new Set([...classes.map(c => c.id), ...rows.map(a => a.classId)].filter(Boolean).map(Number))];
+  }
   if (!classIds.length) return null;
 
   const rows = await sequelize.query(

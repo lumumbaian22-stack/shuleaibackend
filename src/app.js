@@ -146,10 +146,10 @@ app.get('/homework-files/:filename', publicHomeworkFileController.serveHomeworkA
 
 // ============ TEST ENDPOINT ============
 app.get('/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v148.4-enrollment-lifecycle-complete', timestamp: new Date().toISOString() });
+  res.json({ success: true, version: require('../package.json').version, build:'v149.0-final-locked', timestamp: new Date().toISOString() });
 });
 app.get('/api/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v148.4-enrollment-lifecycle-complete', timestamp: new Date().toISOString() });
+  res.json({ success: true, version: require('../package.json').version, build:'v149.0-final-locked', timestamp: new Date().toISOString() });
 });
 
 app.get('/api/health/detailed', async (req, res) => {
