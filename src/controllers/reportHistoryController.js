@@ -45,6 +45,7 @@ function drawImageSafe(doc, source, x, y, options) {
   try { doc.image(resolved, x, y, options); return true; } catch (_) { return false; }
 }
 
+
 async function streamReportPdf(res, report) {
   const snap = report.snapshot || {};
   const student = snap.student || {};
@@ -55,71 +56,88 @@ async function streamReportPdf(res, report) {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Cache-Control', 'private, no-store');
-  const doc = new PDFDocument({ size:'A4', margin:30, autoFirstPage:true, info:{ Title:filename, Author:school.name || 'Shule AI' } });
+  const doc = new PDFDocument({ size:'A4', margin:24, autoFirstPage:true, info:{ Title:filename, Author:school.name || 'Shule AI' } });
   doc.pipe(res);
+  const pageW = doc.page.width, pageH = doc.page.height, contentW = pageW - 48;
   const primary = school.branding?.primaryColor || '#083A85';
   const accent = school.branding?.accentColor || '#11B5B1';
-  const pageW = doc.page.width, contentW = pageW - 60;
-
-  // Light watermark, safely skipped if the saved image is no longer locally available.
-  if (school.logo) {
+  const logo = school.logo || school.branding?.logoUrl || null;
+  // Watermark: official logo if available; otherwise a neutral Shule AI text mark.
+  let drewWatermark = false;
+  if (logo) {
     doc.save().opacity(0.055);
-    drawImageSafe(doc, school.logo, pageW/2 - 130, 220, { fit:[260,260], align:'center', valign:'center' });
-    doc.restore().opacity(1);
+    drewWatermark = drawImageSafe(doc, logo, pageW/2 - 135, 220, { fit:[270,270], align:'center', valign:'center' });
+    doc.restore();
   }
-  if (!drawImageSafe(doc, school.logo, 32, 30, { fit:[58,58] })) {
-    doc.roundedRect(34,32,54,54,10).fill(primary).fillColor('#ffffff').fontSize(20).text('SA',34,48,{width:54,align:'center'});
+  if (!drewWatermark) {
+    doc.save().opacity(0.055).fillColor(primary).font('Helvetica-Bold').fontSize(72).text('Shule AI', 0, 330, { align:'center' }).restore();
   }
-  doc.fillColor(primary).font('Helvetica-Bold').fontSize(17).text(school.name || 'Shule AI School', 98, 34, { width:contentW-100, align:'center' });
-  doc.fillColor('#172033').fontSize(12).text('OFFICIAL STUDENT REPORT CARD', 98, 57, { width:contentW-100, align:'center' });
-  doc.fillColor('#64748b').font('Helvetica').fontSize(8).text(`${String(snap.curriculum || report.curriculum || '').toUpperCase()} • ${report.term} ${report.year} • Version ${report.version}`,98,75,{width:contentW-100,align:'center'});
-  doc.moveTo(30,94).lineTo(pageW-30,94).lineWidth(2).strokeColor(primary).stroke();
-
-  const photoX = pageW - 92;
-  if (!drawImageSafe(doc, student.photo, photoX, 105, { fit:[58,58], align:'center', valign:'center' })) {
-    doc.circle(photoX+29,134,29).fill('#e2e8f0').fillColor(primary).font('Helvetica-Bold').fontSize(16).text(String(student.name || 'S').split(/\s+/).map(x=>x[0]).join('').slice(0,2).toUpperCase(),photoX,127,{width:58,align:'center'});
+  // Header
+  if (!drawImageSafe(doc, logo, 28, 26, { fit:[54,54] })) {
+    doc.roundedRect(30,28,50,50,10).fill(primary).fillColor('#ffffff').font('Helvetica-Bold').fontSize(16).text('SA',30,45,{width:50,align:'center'});
   }
-  doc.fillColor('#172033').font('Helvetica-Bold').fontSize(11).text(student.name || 'Student',32,107,{width:pageW-140});
-  doc.font('Helvetica').fontSize(9).fillColor('#475569');
-  const identity = [student.elimuid ? `ELIMU ID: ${student.elimuid}` : null, `Class: ${student.className || student.grade || '—'}`, snap.class?.stream ? `Stream: ${snap.class.stream}` : null].filter(Boolean);
-  identity.forEach((line,i)=>doc.text(line,32,126+i*14,{width:pageW-145}));
-  doc.fillColor('#172033').font('Helvetica-Bold').fontSize(10).text(`Mean: ${snap.overallAverage ?? '—'}%`,pageW-210,173,{width:85,align:'center'});
-  doc.text(`Grade: ${snap.overallGrade || '—'}`,pageW-120,173,{width:75,align:'center'});
-
-  let y=197;
-  const col={ subject:32, score:292, grade:355, status:420, width:143 };
-  doc.rect(30,y,contentW,22).fill(primary);
-  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8.5);
-  doc.text('SUBJECT',col.subject,y+7,{width:250}); doc.text('SCORE',col.score,y+7,{width:55,align:'center'}); doc.text('GRADE',col.grade,y+7,{width:55,align:'center'}); doc.text('STATUS',col.status,y+7,{width:col.width,align:'center'});
+  doc.fillColor(primary).font('Helvetica-Bold').fontSize(18).text(school.name || 'Shule AI School', 88, 28, { width:pageW-176, align:'center' });
+  doc.fillColor(accent).fontSize(12).text('END TERM REPORT CARD', 88, 50, { width:pageW-176, align:'center' });
+  doc.fillColor('#475569').font('Helvetica').fontSize(8).text(`${String(snap.curriculum || report.curriculum || 'CBC / CBE').toUpperCase()} • ${report.term} ${report.year} • Version ${report.version}`,88,67,{width:pageW-176,align:'center'});
+  doc.moveTo(24,86).lineTo(pageW-24,86).lineWidth(2).strokeColor(primary).stroke();
+  // Student identity
+  const topY=98;
+  doc.roundedRect(24,topY,contentW,58,8).fill('#f8fafc').strokeColor('#dbe5f0').stroke();
+  const photoX=pageW-86;
+  if (!drawImageSafe(doc, student.photo, photoX, topY+8, { fit:[46,46] })) {
+    doc.circle(photoX+23,topY+31,23).fill('#e2e8f0').fillColor(primary).font('Helvetica-Bold').fontSize(13).text(String(student.name || 'S').split(/\s+/).map(x=>x[0]).join('').slice(0,2).toUpperCase(),photoX,topY+25,{width:46,align:'center'});
+  }
+  doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(11).text(student.name || 'Student',36,topY+10,{width:pageW-135});
+  doc.font('Helvetica').fontSize(8).fillColor('#475569');
+  const identity=[student.elimuid?`Elimu ID: ${student.elimuid}`:null,`Class: ${student.className || student.grade || '—'}`,snap.class?.stream?`Stream: ${snap.class.stream}`:null,student.gender?`Gender: ${student.gender}`:null].filter(Boolean);
+  identity.forEach((line,i)=>doc.text(line,36,topY+27+i*12,{width:pageW-145}));
+  // Assessment table
+  let y=168;
+  const selected = Array.isArray(snap.assessmentSettings) && snap.assessmentSettings.length ? snap.assessmentSettings.filter(x=>x.showOnReport!==false).sort((a,b)=>(a.displayOrder||0)-(b.displayOrder||0)).slice(0,5) : [
+    {label:'CAT 1'}, {label:'CAT 2'}, {label:'Midterm'}, {label:'End Term'}, {label:'SBA/Project'}
+  ];
+  const widths=[22,126,42,42,48,48,54,42,36,94];
+  const xs=[]; widths.reduce((acc,w)=>{xs.push(acc);return acc+w;},24);
+  const tableW=widths.reduce((a,b)=>a+b,0);
+  doc.rect(24,y,tableW,22).fill(primary);
+  doc.fillColor('#fff').font('Helvetica-Bold').fontSize(6.8);
+  ['No','Learning Area',...selected.map(x=>x.label||x.assessmentName||x.key),'Final','Grade','Remark'].slice(0,10).forEach((h,i)=>doc.text(String(h),xs[i]+2,y+7,{width:widths[i]-4,align:i>1?'center':'left'}));
   y+=22;
-  const maxRows=Math.min(subjects.length,18);
+  const maxRows=Math.min(subjects.length || 1, 12);
   for(let i=0;i<maxRows;i++){
-    const row=subjects[i]||{}; const rowH=19;
-    if(i%2===0) doc.rect(30,y,contentW,rowH).fill('#f8fafc');
-    doc.strokeColor('#e2e8f0').lineWidth(.5).moveTo(30,y+rowH).lineTo(pageW-30,y+rowH).stroke();
-    doc.fillColor('#172033').font('Helvetica').fontSize(8.2).text(String(row.subject||'Subject').slice(0,46),col.subject,y+5,{width:250,ellipsis:true});
-    doc.text(row.average==null?'—':`${row.average}%`,col.score,y+5,{width:55,align:'center'});
-    doc.font('Helvetica-Bold').text(row.grade||'—',col.grade,y+5,{width:55,align:'center'});
-    doc.font('Helvetica').text(row.counted===false?(row.status||'Not counted'):(row.status||'Counted'),col.status,y+5,{width:col.width,align:'center'});
+    const row=subjects[i]||{}; const rowH=24;
+    if(i%2===0) doc.rect(24,y,tableW,rowH).fill('#f8fafc');
+    doc.strokeColor('#dbe5f0').lineWidth(.5).rect(24,y,tableW,rowH).stroke();
+    const comps = Array.isArray(row.components) ? row.components : (Array.isArray(row.assessments) ? row.assessments : []);
+    doc.fillColor('#0f172a').font('Helvetica').fontSize(7.3);
+    doc.text(String(i+1),xs[0]+2,y+7,{width:widths[0]-4,align:'center'});
+    doc.font('Helvetica-Bold').text(String(row.subject||row.name||'Learning Area').slice(0,30),xs[1]+2,y+5,{width:widths[1]-4,height:16,ellipsis:true});
+    selected.forEach((col,idx)=>{ const item=comps[idx]; const val=item?.score ?? item?.mark ?? item ?? ''; doc.font('Helvetica').text(String(val),xs[2+idx]+2,y+7,{width:widths[2+idx]-4,align:'center'}); });
+    const finalIndex=2+selected.length;
+    doc.font('Helvetica-Bold').text(row.average==null?(row.finalScore??row.score??'—'):`${row.average}`,xs[finalIndex]+2,y+7,{width:widths[finalIndex]-4,align:'center'});
+    doc.text(row.grade||row.meanGrade||'—',xs[finalIndex+1]+2,y+7,{width:widths[finalIndex+1]-4,align:'center'});
+    doc.font('Helvetica').fontSize(6.7).text(String(row.remark||row.teacherRemark||row.status||'').slice(0,56),xs[finalIndex+2]+2,y+5,{width:widths[finalIndex+2]-4,height:16});
     y+=rowH;
   }
-  if(subjects.length>maxRows){doc.fillColor('#64748b').fontSize(7.5).text(`+ ${subjects.length-maxRows} additional subject(s) retained in the immutable digital snapshot.`,32,y+3);y+=14;}
-
-  const attendance=snap.attendance||{};
-  y+=10;
-  doc.roundedRect(30,y,contentW,47,8).fill('#f1f5f9');
-  doc.fillColor(primary).font('Helvetica-Bold').fontSize(9).text('RESULT SUMMARY',42,y+8);
-  doc.fillColor('#172033').font('Helvetica').fontSize(8.5).text(`Total marks: ${snap.totalMarks ?? '—'}   •   Counted subjects: ${snap.countedSubjects ?? '—'}   •   Pending: ${snap.pendingSubjects ?? 0}   •   Not taken/exempted: ${snap.notTakenSubjects ?? 0}`,42,y+23,{width:contentW-24});
-  doc.text(`Attendance: ${attendance.rate ?? 0}% (${attendance.present ?? 0} present, ${attendance.absent ?? 0} absent, ${attendance.late ?? 0} late)${snap.feeBalance==null?'':`   •   Fee balance: KES ${Number(snap.feeBalance).toLocaleString('en-KE')}`}`,42,y+35,{width:contentW-24});
-  y+=58;
-
-  const comment=snap.comments?.classTeacher||snap.comments?.general;
-  if(comment){doc.fillColor(primary).font('Helvetica-Bold').fontSize(9).text('CLASS TEACHER COMMENT',32,y);doc.fillColor('#172033').font('Helvetica').fontSize(8).text(String(comment),32,y+13,{width:contentW,height:28,ellipsis:true});y+=44;}
-
-  const signatureY=Math.min(Math.max(y+8, doc.page.height-132), doc.page.height-132);
-  const sigs=[['Class Teacher',signatures.classTeacher],['Headteacher / Principal',signatures.headteacher]];
-  sigs.forEach((entry,index)=>{const x=index===0?45:pageW/2+18;const width=210;const info=entry[1]||{};drawImageSafe(doc,info.image,x,signatureY-35,{fit:[145,32]});doc.strokeColor('#64748b').lineWidth(.7).moveTo(x,signatureY).lineTo(x+width,signatureY).stroke();doc.fillColor('#172033').font('Helvetica').fontSize(8).text(info.name||'',x,signatureY+4,{width});doc.fillColor('#64748b').text(entry[0],x,signatureY+15,{width});});
-  doc.fillColor('#64748b').fontSize(7).text(`Published ${report.publishedAt ? new Date(report.publishedAt).toLocaleString('en-KE',{timeZone:'Africa/Nairobi'}) : ''} • Immutable report ID ${report.id} • ${snap.calculationRule || 'Only counted subjects are included in the mean.'}`,30,doc.page.height-42,{width:contentW,align:'center'});
+  y+=8;
+  // Summary cards
+  const cardW=(contentW-18)/4;
+  const summary=[['Overall Mean',`${snap.overallAverage ?? '—'}%`],['Overall Grade',snap.overallGrade||'—'],['Attendance',`${snap.attendance?.rate ?? '—'}%`],['Counted Subjects',snap.countedSubjects ?? subjects.length ?? '—']];
+  summary.forEach((c,i)=>{const x=24+i*(cardW+6);doc.roundedRect(x,y,cardW,38,6).fill(i%2? '#eef9f9':'#f1f5f9');doc.fillColor('#64748b').font('Helvetica').fontSize(7).text(c[0],x+6,y+7,{width:cardW-12,align:'center'});doc.fillColor(primary).font('Helvetica-Bold').fontSize(13).text(String(c[1]),x+6,y+20,{width:cardW-12,align:'center'});});
+  y+=48;
+  // Insights, attendance, account
+  const leftW=contentW*.47, midW=contentW*.24, rightW=contentW-leftW-midW-12;
+  function panel(x,w,title,body,color=primary){doc.roundedRect(x,y,w,86,6).strokeColor('#dbe5f0').stroke();doc.rect(x,y,w,18).fill(color);doc.fillColor('#fff').font('Helvetica-Bold').fontSize(7.5).text(title,x+6,y+6,{width:w-12});doc.fillColor('#0f172a').font('Helvetica').fontSize(7.3).text(body,x+7,y+25,{width:w-14,height:54});}
+  panel(24,leftW,'COMPETENCY INSIGHTS',`Strengths: ${snap.insights?.strengths || 'Derived from real learning evidence.'}\nNeeds support: ${snap.insights?.support || 'Teacher support areas appear here.'}\nNext steps: ${snap.insights?.nextSteps || 'Parent-friendly next steps appear here.'}`);
+  panel(30+leftW,midW,'ATTENDANCE',`Present: ${snap.attendance?.present ?? '—'}\nAbsent: ${snap.attendance?.absent ?? '—'}\nLate: ${snap.attendance?.late ?? '—'}\nRate: ${snap.attendance?.rate ?? '—'}%`,accent);
+  panel(36+leftW+midW,rightW,'ACCOUNT SUMMARY',snap.feeBalance==null?'Fee balance is hidden by school settings.':`Fee balance: KES ${Number(snap.feeBalance||0).toLocaleString('en-KE')}\nShown according to school report settings.`);
+  y+=100;
+  // Comments/signatures
+  const half=(contentW-16)/2;
+  function commentBox(x,title,text,sigTitle,sig){doc.fillColor(primary).font('Helvetica-Bold').fontSize(8).text(title,x,y,{width:half});doc.roundedRect(x,y+14,half,62,6).strokeColor('#dbe5f0').stroke();doc.fillColor('#0f172a').font('Helvetica').fontSize(7.5).text(String(text||'').slice(0,180),x+7,y+23,{width:half-14,height:26});drawImageSafe(doc,sig?.image,x+10,y+48,{fit:[100,24]});doc.moveTo(x+7,y+60).lineTo(x+half-7,y+60).strokeColor('#64748b').stroke();doc.fillColor('#64748b').fontSize(7).text(sig?.name||sigTitle,x+7,y+64,{width:half-14,align:'center'});}
+  commentBox(24,'CLASS TEACHER COMMENT',snap.comments?.classTeacher||snap.comments?.general||'Teacher comment appears here.','Class Teacher',signatures.classTeacher||{});
+  commentBox(40+half,'HEAD TEACHER COMMENT',snap.comments?.headteacher||'Head teacher comment appears here.','Head Teacher',signatures.headteacher||{});
+  doc.fillColor('#64748b').fontSize(7).text(`Published ${report.publishedAt ? new Date(report.publishedAt).toLocaleString('en-KE',{timeZone:'Africa/Nairobi'}) : ''} • Immutable report ID ${report.id} • Generated with Shule AI`,24,pageH-34,{width:contentW,align:'center'});
   doc.end();
 }
 

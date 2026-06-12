@@ -24,7 +24,7 @@ const commonOptions = {
   benchmark: process.env.DB_BENCHMARK === 'true',
   retry: {
     max: intEnv('DB_RETRY_MAX', 3),
-    match: [/SequelizeConnectionError/, /SequelizeConnectionRefusedError/, /SequelizeHostNotFoundError/, /SequelizeHostNotReachableError/, /SequelizeInvalidConnectionError/, /SequelizeConnectionTimedOutError/, /TimeoutError/]
+    match: [/SequelizeConnectionError/, /SequelizeConnectionRefusedError/, /SequelizeHostNotFoundError/, /SequelizeHostNotReachableError/, /SequelizeInvalidConnectionError/, /SequelizeConnectionTimedOutError/, /TimeoutError/, /Connection terminated unexpectedly/i, /Connection terminated/i, /Connection reset/i, /ECONNRESET/i, /Client has encountered a connection error/i]
   },
   dialectOptions: shouldUseSsl ? {
     ssl: { require: true, rejectUnauthorized: false },

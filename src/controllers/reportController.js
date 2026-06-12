@@ -22,6 +22,18 @@ function reportAssessmentSettings(school) { const raw = school?.settings?.curric
 function normAssess(x){return String(x||'').toLowerCase().replace(/[^a-z0-9]+/g,'');}
 function recordMatchesAssessment(record, setting){ const keys=[record.assessmentType,record.assessmentName,record.testType,record.examType,record.type].map(normAssess); return keys.includes(normAssess(setting.assessmentType))||keys.includes(normAssess(setting.label))||keys.includes(normAssess(setting.key)); }
 
+const REPORT_RECORD_ASSESSMENT_ENUMS = new Set(['test','exam','assignment','project','quiz']);
+function enumReportAssessmentType(value){const raw=String(value||'').trim().toLowerCase().replace(/[\s-]+/g,'_');return REPORT_RECORD_ASSESSMENT_ENUMS.has(raw)?raw:null;}
+function recordMatchesRequestedAssessment(record, requested){
+  const wanted=normAssess(requested);
+  if(!wanted) return true;
+  const keys=[record.assessmentType,record.assessmentName,record.testType,record.examType,record.type].map(normAssess);
+  if(keys.includes(wanted)) return true;
+  const aliases={cat:['cat','cat1','cat2','continuousassessment','continuousassessmenttest'],midterm:['midterm','midtermexam'],endterm:['endterm','endtermexam','finalexam','exam'],sba:['sba','schoolbasedassessment'],project:['project','sbaproject'],practical:['practical','practicalassessment']};
+  const accepted=aliases[wanted]||[];
+  return keys.some(k=>accepted.includes(k) || k.includes(wanted));
+}
+
 
 async function studentForUser(userId) {
   return (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ userId } });
@@ -57,11 +69,12 @@ async function buildSnapshot({ studentId, schoolCode:code, term, year, assessmen
     ? await Class.findOne({ where:{ id:student.classId, schoolCode:code } })
     : await Class.findOne({ where:{ schoolCode:code, [Op.or]:[{ name:student.grade }, { grade:student.grade }] } });
   const where = { studentId:student.id, schoolCode:code, term, year:Number(year) };
-  if (assessmentType) where.assessmentType = assessmentType;
+  if (assessmentType) { const safeType = enumReportAssessmentType(assessmentType); if (safeType) where.assessmentType = safeType; }
   if (assessmentName) where.assessmentName = assessmentName;
   let records = await AcademicRecord.unscoped().findAll({ where, order:[['subject','ASC'],['assessmentName','ASC'],['date','ASC']] });
   const assessmentSettings = reportAssessmentSettings(school).filter(x => x.showOnReport !== false).sort((a,b)=>Number(a.displayOrder||0)-Number(b.displayOrder||0));
   const countedSettings = assessmentSettings.filter(x => x.countInFinal !== false);
+  if (assessmentType) records = records.filter(record => recordMatchesRequestedAssessment(record, assessmentType));
   if (!assessmentType && !assessmentName && assessmentSettings.length) {
     records = records.filter(record => assessmentSettings.some(setting => recordMatchesAssessment(record, setting)));
   }

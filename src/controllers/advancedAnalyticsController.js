@@ -13,6 +13,34 @@ function assessmentLabel(record){return record.assessmentName||record.assessment
 function uniq(list){return [...new Set((list||[]).filter(v=>v!==undefined&&v!==null&&String(v).trim()!==''))];}
 function lower(v){return String(v||'').trim().toLowerCase();}
 
+const ACADEMIC_RECORD_ASSESSMENT_ENUMS = new Set(['test','exam','assignment','project','quiz']);
+function normalizeAssessmentText(value){return String(value||'').trim().toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ');}
+function enumAssessmentType(value){
+  const raw=normalizeAssessmentText(value).replace(/\s+/g,'_');
+  return ACADEMIC_RECORD_ASSESSMENT_ENUMS.has(raw) ? raw : null;
+}
+function recordMatchesAssessmentFilter(record, requested){
+  const wanted=normalizeAssessmentText(requested);
+  if(!wanted) return true;
+  const wantedCompact=wanted.replace(/\s+/g,'');
+  const values=[record.assessmentType,record.assessmentName,record.testType,record.examType,record.type,record.assessment,assessmentLabel(record)]
+    .map(normalizeAssessmentText)
+    .filter(Boolean);
+  if(values.some(v=>v===wanted || v.replace(/\s+/g,'')===wantedCompact)) return true;
+  // Friendly labels selected in the UI should map to common stored assessment names.
+  const aliases={
+    cat:['cat','cat 1','cat1','cat 2','cat2','continuous assessment test','continuous assessment'],
+    midterm:['midterm','mid term','mid term exam','midterm exam'],
+    endterm:['end term','endterm','end term exam','final exam','exam'],
+    sba:['sba','school based assessment','school based assessment tests'],
+    practical:['practical','practical assessment'],
+    project:['project','sba project','project work']
+  };
+  const aliasKey=wantedCompact;
+  const accepted=aliases[aliasKey] || [];
+  return values.some(v=>accepted.includes(v) || accepted.includes(v.replace(/\s+/g,'')) || v.includes(wanted));
+}
+
 async function allowedScope(req){
   if(['admin','super_admin'].includes(req.user.role))return {all:true,classIds:null,subjects:null,classTeacherIds:[]};
   if(req.user.role!=='teacher')return {all:false,classIds:[],subjects:[],classTeacherIds:[]};
@@ -44,10 +72,11 @@ async function build(req){
   const scopedStudents=await (Student.unscoped?Student.unscoped():Student).findAll({where:studentWhere,include:[{model:User,required:true,where:{schoolCode:sc,role:'student'},attributes:['id','name','profileImage']},{model:Class,required:false,attributes:['id','name','grade','stream']}],attributes:['id','elimuid','gender','grade','classId'],order:[[User,'name','ASC']]}).catch(()=>[]);
 
   const where={schoolCode:sc};
-  if(q.year)where.year=Number(q.year);if(q.term)where.term=q.term;if(q.assessmentType)where.assessmentType=q.assessmentType;if(q.assessmentName)where.assessmentName=q.assessmentName;if(q.subject)where.subject=q.subject;if(q.studentId)where.studentId=Number(q.studentId);
+  if(q.year)where.year=Number(q.year);if(q.term)where.term=q.term;if(q.assessmentType){const safeType=enumAssessmentType(q.assessmentType);if(safeType)where.assessmentType=safeType;}if(q.assessmentName)where.assessmentName=q.assessmentName;if(q.subject)where.subject=q.subject;if(q.studentId)where.studentId=Number(q.studentId);
   if(String(q.publishedOnly||'').toLowerCase()==='true')where[Op.or]=[{isPublished:true},{status:'published'},{status:'locked'}];
   const records=await AcademicRecord.unscoped().findAll({where,include:[{model:Student,required:true,include:[{model:User,required:true,where:{schoolCode:sc,role:'student'},attributes:['id','name','profileImage']},{model:Class,required:false,attributes:['id','name','grade','stream']}]}],order:[['year','DESC'],['term','DESC'],['date','DESC'],['updatedAt','DESC']]});
   let filtered=records.filter(r=>{
+    if(q.assessmentType && !recordMatchesAssessmentFilter(r,q.assessmentType))return false;
     const cid=Number(r.classId||r.Student?.classId||0)||null;
     if(eligibleClassIds.length && !eligibleClassIds.includes(cid))return false;
     if(!scope.all&&scope.subjects.length&&!scope.classTeacherIds?.includes(cid)&&!scope.subjects.map(lower).includes(lower(r.subject)))return false;

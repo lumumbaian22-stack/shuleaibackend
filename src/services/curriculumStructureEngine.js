@@ -259,12 +259,13 @@ const LEVEL_GROUPS = {
 };
 
 const DEFAULT_ASSESSMENT_SETTINGS = [
-  { key:'cat', label:'CAT', showOnReport:true, countInFinal:true, weight:10, displayOrder:1, assessmentType:'CAT' },
-  { key:'midterm', label:'Midterm', showOnReport:true, countInFinal:true, weight:20, displayOrder:2, assessmentType:'Midterm' },
-  { key:'endterm', label:'End Term', showOnReport:true, countInFinal:true, weight:50, displayOrder:3, assessmentType:'End Term' },
-  { key:'sba', label:'SBA', showOnReport:false, countInFinal:false, weight:10, displayOrder:4, assessmentType:'SBA' },
-  { key:'project', label:'Project', showOnReport:false, countInFinal:false, weight:5, displayOrder:5, assessmentType:'Project' },
-  { key:'practical', label:'Practical', showOnReport:false, countInFinal:false, weight:5, displayOrder:6, assessmentType:'Practical' }
+  { key:'cat1', label:'CAT 1', showOnReport:true, countInFinal:true, weight:10, displayOrder:1, assessmentType:'CAT 1' },
+  { key:'cat2', label:'CAT 2', showOnReport:true, countInFinal:true, weight:10, displayOrder:2, assessmentType:'CAT 2' },
+  { key:'midterm', label:'Midterm', showOnReport:true, countInFinal:true, weight:20, displayOrder:3, assessmentType:'Midterm' },
+  { key:'endterm', label:'End Term', showOnReport:true, countInFinal:true, weight:40, displayOrder:4, assessmentType:'End Term' },
+  { key:'sba', label:'SBA', showOnReport:false, countInFinal:false, weight:20, displayOrder:5, assessmentType:'SBA' },
+  { key:'project', label:'Project', showOnReport:false, countInFinal:false, weight:0, displayOrder:6, assessmentType:'Project' },
+  { key:'practical', label:'Practical', showOnReport:false, countInFinal:false, weight:0, displayOrder:7, assessmentType:'Practical' }
 ];
 
 function getLevelGroups(curriculum='cbc') {
