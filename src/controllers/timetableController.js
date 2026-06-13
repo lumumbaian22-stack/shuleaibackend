@@ -41,20 +41,33 @@ async function ensureTimetableRuntimeReady() {
 
 function isTransientDbError(error) {
   const text = `${error?.name || ''} ${error?.message || ''} ${error?.original?.message || ''} ${error?.parent?.message || ''}`;
-  return /connection terminated|connection reset|econnreset|etimedout|timeout|terminating connection|server closed the connection|SequelizeConnection|ConnectionAcquireTimeout/i.test(text);
+  return /connection terminated|connection reset|econnreset|etimedout|timeout|terminating connection|server closed the connection|Connection terminated unexpectedly|Client has encountered a connection error|SequelizeConnection|ConnectionAcquireTimeout/i.test(text);
+}
+
+async function resetTimetableDbPool(label, error) {
+  // Render/Postgres can leave a dead client in Sequelize's pool after "Connection terminated unexpectedly".
+  // A normal authenticate() may reuse that dead client, so for timetable writes we force the pool closed
+  // before retrying. The next query opens a fresh connection. This is safer than keeping asking schools to retry.
+  console.warn(`[timetable] ${label} resetting DB pool after transient error`, { message: error?.message });
+  try {
+    if (sequelize?.connectionManager?.close) await sequelize.connectionManager.close();
+  } catch (closeError) {
+    console.warn('[timetable] DB pool close skipped/failed:', closeError?.message || closeError);
+  }
 }
 
 async function withTimetableRetry(label, operation) {
   let lastError;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  const attempts = Number(process.env.TIMETABLE_DB_WRITE_ATTEMPTS || 4);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
+      if (attempt > 1) await sequelize.query('SELECT 1');
       return await operation(attempt);
     } catch (error) {
       lastError = error;
-      if (!isTransientDbError(error) || attempt >= 2) throw error;
-      console.warn(`[timetable] ${label} transient DB error; retrying once`, { attempt, message: error.message });
-      try { await sequelize.authenticate(); } catch (_) {}
-      await new Promise(resolve => setTimeout(resolve, 450));
+      if (!isTransientDbError(error) || attempt >= attempts) throw error;
+      await resetTimetableDbPool(label, error);
+      await new Promise(resolve => setTimeout(resolve, 350 * attempt));
     }
   }
   throw lastError;
@@ -327,6 +340,95 @@ function classBlockFromGlobalSlots(tt, cls) {
   });
   return count ? block : null;
 }
+
+function compactLesson(lesson = {}, period = {}, day = '') {
+  const subject = String(lesson.subject || '').trim();
+  const out = {
+    classId: lesson.classId == null || lesson.classId === '' ? null : Number(lesson.classId),
+    className: String(lesson.className || lesson.name || '').trim(),
+    grade: String(lesson.grade || '').trim(),
+    stream: String(lesson.stream || '').trim(),
+    subject,
+    teacherId: lesson.teacherId == null || lesson.teacherId === '' ? null : Number(lesson.teacherId),
+    teacherName: String(lesson.teacherName || lesson.teacher || '').trim() || 'Unassigned Teacher',
+    room: String(lesson.room || '').trim(),
+    startTime: String(lesson.startTime || period.startTime || '').slice(0, 5),
+    endTime: String(lesson.endTime || period.endTime || '').slice(0, 5),
+    day: normalizeDay(day || lesson.day)
+  };
+  Object.keys(out).forEach(key => {
+    if (out[key] === '' || Number.isNaN(out[key])) delete out[key];
+  });
+  return subject ? out : null;
+}
+
+function compactSlotsForStorage(slots = []) {
+  return (Array.isArray(slots) ? slots : []).map((dayBlock) => {
+    const day = normalizeDay(dayBlock.day || dayBlock.dayOfWeek);
+    return {
+      day,
+      periods: (Array.isArray(dayBlock.periods) ? dayBlock.periods : []).map((period, idx) => {
+        const clean = cleanPeriod(period, idx);
+        const lessons = (Array.isArray(period.classes) ? period.classes : [])
+          .map(lesson => compactLesson(lesson, clean, day))
+          .filter(Boolean);
+        return {
+          id: clean.id,
+          label: clean.label,
+          startTime: clean.startTime,
+          endTime: clean.endTime,
+          type: clean.type,
+          break: !!clean.break,
+          classes: clean.break ? [] : lessons
+        };
+      })
+    };
+  });
+}
+
+function summarizeClassBlocksFromSlots(slots = [], classBlocks = []) {
+  const byClass = new Map();
+  (Array.isArray(classBlocks) ? classBlocks : []).forEach(block => {
+    const key = String(block.classId ?? block.id ?? block.className ?? block.name ?? '').trim();
+    if (!key) return;
+    byClass.set(key, {
+      classId: block.classId ?? block.id ?? null,
+      className: block.className || block.name || 'Class',
+      grade: block.grade || '',
+      stream: block.stream || '',
+      lessonCount: Number(block.lessonCount || 0),
+      subjects: Array.isArray(block.subjects) ? [...new Set(block.subjects.filter(Boolean))] : []
+    });
+  });
+  (Array.isArray(slots) ? slots : []).forEach(day => (day.periods || []).forEach(period => {
+    if (period.break) return;
+    (period.classes || []).forEach(lesson => {
+      if (!String(lesson.subject || '').trim()) return;
+      const key = String(lesson.classId ?? lesson.className ?? lesson.grade ?? '').trim();
+      if (!key) return;
+      if (!byClass.has(key)) byClass.set(key, {
+        classId: lesson.classId ?? null,
+        className: lesson.className || lesson.grade || 'Class',
+        grade: lesson.grade || '',
+        stream: lesson.stream || '',
+        lessonCount: 0,
+        subjects: []
+      });
+      const row = byClass.get(key);
+      row.lessonCount += 1;
+      if (lesson.subject && !row.subjects.includes(lesson.subject)) row.subjects.push(lesson.subject);
+    });
+  }));
+  return Array.from(byClass.values());
+}
+
+function responseTimetable(row, slotsOverride = null, classesOverride = null) {
+  const json = row?.toJSON ? row.toJSON() : (row || {});
+  const slots = Array.isArray(slotsOverride) ? slotsOverride : (Array.isArray(json.slots) ? json.slots : []);
+  const classes = Array.isArray(classesOverride) ? classesOverride : (Array.isArray(json.classes) ? json.classes : []);
+  return { ...json, slots, classes, lessonCount: countLessonsFromSlots(slots) };
+}
+
 function validateTimetablePayload(slots = []) {
   const errors = [];
   const teacherBusy = new Map();
@@ -402,8 +504,8 @@ exports.generate = async (req, res) => {
         term,
         year: numericYear,
         scope: safeScope,
-        slots: Array.isArray(generated.slots) ? generated.slots : [],
-        classes: Array.isArray(generated.classes) ? generated.classes : [],
+        slots: compactSlotsForStorage(Array.isArray(generated.slots) ? generated.slots : []),
+        classes: summarizeClassBlocksFromSlots(generated.slots || [], generated.classes || []),
         warnings: Array.isArray(generated.warnings) ? generated.warnings : [],
         isPublished: false,
         status: 'draft'
@@ -439,7 +541,7 @@ exports.generate = async (req, res) => {
       return { status: 200, body: {
         success:true,
         message:`Draft generated for ${payload.classes.length} class(es) with ${countLessonsFromSlots(payload.slots)} lesson(s)`,
-        data:{ ...tt.toJSON(), lessonCount:countLessonsFromSlots(payload.slots), visibility:'draft', requiresPublish:true }
+        data:{ ...responseTimetable(tt, payload.slots, payload.classes), visibility:'draft', requiresPublish:true }
       } };
     });
     return res.status(result.status || 200).json(result.body);
@@ -482,8 +584,8 @@ exports.manualUpdate = async (req, res) => {
           term: req.body.term || tt.term || 'Term 1',
           year: req.body.year ? Number(req.body.year) : (tt.year || new Date().getFullYear()),
           scope: req.body.scope || tt.scope || 'term',
-          slots: Array.isArray(tt.slots) ? tt.slots : [],
-          classes: Array.isArray(tt.classes) ? tt.classes : [],
+          slots: compactSlotsForStorage(Array.isArray(tt.slots) ? tt.slots : []),
+          classes: summarizeClassBlocksFromSlots(Array.isArray(tt.slots) ? tt.slots : [], Array.isArray(tt.classes) ? tt.classes : []),
           warnings: Array.isArray(tt.warnings) ? tt.warnings : [],
           isPublished: false,
           status: 'draft',
@@ -492,8 +594,8 @@ exports.manualUpdate = async (req, res) => {
         }, { realtimeHandled:true });
       }
 
-      const slots = Array.isArray(req.body.slots) ? req.body.slots : (Array.isArray(tt.slots) ? tt.slots : []);
-      const classes = Array.isArray(req.body.classes) ? req.body.classes : (Array.isArray(tt.classes) ? tt.classes : []);
+      const slots = compactSlotsForStorage(Array.isArray(req.body.slots) ? req.body.slots : (Array.isArray(tt.slots) ? tt.slots : []));
+      const classes = summarizeClassBlocksFromSlots(slots, Array.isArray(req.body.classes) ? req.body.classes : (Array.isArray(tt.classes) ? tt.classes : []));
       const conflicts = validateTimetablePayload(slots);
       if (conflicts.length) return { status: 400, body: { success:false, message:'Resolve timetable conflicts before saving.', data:{ conflicts } } };
 
@@ -519,7 +621,7 @@ exports.manualUpdate = async (req, res) => {
 
       return { status: 200, body: {
         success:true,
-        data:{ ...tt.toJSON(), visibility:'draft', requiresPublish:true, liveTimetableId:tt.supersedesId || null, createdFromPublished:sourceWasPublished },
+        data:{ ...responseTimetable(tt, slots, classes), visibility:'draft', requiresPublish:true, liveTimetableId:tt.supersedesId || null, createdFromPublished:sourceWasPublished },
         message: sourceWasPublished ? 'Edits saved as a draft. Publish changes for teachers, students and parents to see them.' : 'Timetable draft saved. Publish changes for users to see them.'
       } };
     });
@@ -555,7 +657,7 @@ exports.publish = async (req, res) => {
         const scope = req.body.scope || tt.scope || 'term';
         const term = req.body.term || tt.term || 'Term 1';
         const year = req.body.year ? Number(req.body.year) : (tt.year || new Date().getFullYear());
-        const slots = Array.isArray(tt.slots) ? tt.slots : [];
+        const slots = compactSlotsForStorage(Array.isArray(tt.slots) ? tt.slots : []);
         const lessonCount = countLessonsFromSlots(slots);
         if (!lessonCount) {
           await safeRollback(transaction);
@@ -572,8 +674,9 @@ exports.publish = async (req, res) => {
           { isPublished:false, status:'archived' },
           { where:{ schoolId, scope, term, year, isPublished:true, id:{ [Op.ne]:tt.id } }, transaction, realtimeHandled:true }
         );
+        const classes = summarizeClassBlocksFromSlots(slots, Array.isArray(tt.classes) ? tt.classes : []);
         await tt.update(
-          { isPublished:true, status:'published', scope, term, year, publishedAt:new Date(), publishedBy:req.user.id },
+          { slots, classes, isPublished:true, status:'published', scope, term, year, publishedAt:new Date(), publishedBy:req.user.id },
           { transaction, realtimeHandled:true }
         );
         await transaction.commit();
@@ -588,7 +691,7 @@ exports.publish = async (req, res) => {
           viewersUpdated: true
         }, { entityType:'Timetable', entityId:tt.id, version:tt.version || 1 }).catch(error => console.warn('[timetable] publish realtime skipped:', error.message));
 
-        return { status: 200, body: { success:true, data:{ ...tt.toJSON(), visibility:'published', requiresPublish:false, viewersUpdated:true }, message:'Timetable published. Teachers, students and parents can now see the latest changes.' } };
+        return { status: 200, body: { success:true, data:{ ...responseTimetable(tt, slots, classes), visibility:'published', requiresPublish:false, viewersUpdated:true }, message:'Timetable published. Teachers, students and parents can now see the latest changes.' } };
       } catch (error) {
         await safeRollback(transaction);
         throw error;
@@ -633,7 +736,10 @@ exports.getByWeek = async (req, res) => { try {
     });
   }
   const classLessonCounts = {};
-  if (tt) (tt.classes || []).forEach(block => { classLessonCounts[String(block.classId ?? block.id ?? block.className)] = countLessonsFromSlots(filterClassTimetable(block)); });
+  if (tt) (tt.classes || []).forEach(block => {
+    const key = String(block.classId ?? block.id ?? block.className);
+    classLessonCounts[key] = block.lessonCount != null ? Number(block.lessonCount) : countLessonsFromSlots(filterClassTimetable(block));
+  });
   const total = tt ? (countLessonsFromSlots(tt.slots || []) || Object.values(classLessonCounts).reduce((a,b)=>a+b,0)) : 0;
   res.json({ success: true, data: tt ? {
     ...tt.toJSON(), lessonCount: total, classLessonCounts,

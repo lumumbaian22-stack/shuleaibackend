@@ -160,10 +160,10 @@ app.get('/homework-files/:filename', publicHomeworkFileController.serveHomeworkA
 
 // ============ TEST ENDPOINT ============
 app.get('/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v149.8-db-pool-no-runtime-ddl-timetable-lock', timestamp: new Date().toISOString() });
+  res.json({ success: true, version: require('../package.json').version, build:'v149.7-final-cors-cache-timetable-realtime-lock', timestamp: new Date().toISOString() });
 });
 app.get('/api/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v149.8-db-pool-no-runtime-ddl-timetable-lock', timestamp: new Date().toISOString() });
+  res.json({ success: true, version: require('../package.json').version, build:'v149.7-final-cors-cache-timetable-realtime-lock', timestamp: new Date().toISOString() });
 });
 
 app.get('/api/health/detailed', async (req, res) => {
@@ -211,20 +211,16 @@ app.get('/api/health/detailed', async (req, res) => {
 app.use('/api', accessSchemaMiddleware);
 
 // Fire the same guard at boot as well; middleware still protects the first request if boot DB is slow.
-if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR === 'true') {
-  ensureSchoolAccessSchema().catch((err) => {
-    console.error('[access-schema-guard] boot repair failed; run migrations or retry repair:', err.message);
-  });
-} else {
-  console.log('[access-schema-guard] runtime DDL disabled; using deploy migrations only');
-}
+ensureSchoolAccessSchema().catch((err) => {
+  console.error('[access-schema-guard] boot repair failed; first API request will retry:', err.message);
+});
 
 
 // V42: run the schema guard once on first API request too. This protects Render deployments
 // where startup migrations are skipped, delayed, or the old process remains warm.
 let __v42SchemaGuardPromise = null;
 app.use('/api', async (req, res, next) => {
-  const allowRuntimeSchemaRepair = process.env.ALLOW_RUNTIME_SCHEMA_REPAIR === 'true';
+  const allowRuntimeSchemaRepair = process.env.ALLOW_RUNTIME_SCHEMA_REPAIR === 'true' || process.env.NODE_ENV !== 'production';
   if (!allowRuntimeSchemaRepair) return next();
   try {
     if (!__v42SchemaGuardPromise) {
@@ -242,7 +238,7 @@ app.use('/api', async (req, res, next) => {
 
 
 async function ensureCriticalDashboardColumns(req, res, next) {
-  if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') return next();
+  if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true' && process.env.NODE_ENV === 'production') return next();
   try {
     const { sequelize } = require('./models');
     await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
