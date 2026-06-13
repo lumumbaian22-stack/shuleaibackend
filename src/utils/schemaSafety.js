@@ -292,11 +292,40 @@ async function ensureRuntimeSchema() {
   await ensureSchoolCalendarTable();
   await ensureTutorTables();
 
+  await createTableIfMissing('MediaAssets', `
+    CREATE TABLE IF NOT EXISTS "MediaAssets" (
+      "id" SERIAL PRIMARY KEY,
+      "token" UUID NOT NULL UNIQUE,
+      "schoolCode" VARCHAR(255),
+      "ownerUserId" INTEGER,
+      "kind" VARCHAR(40) NOT NULL,
+      "mimeType" VARCHAR(120) NOT NULL,
+      "originalName" VARCHAR(255),
+      "byteSize" INTEGER NOT NULL DEFAULT 0,
+      "checksum" VARCHAR(64) NOT NULL,
+      "data" BYTEA NOT NULL,
+      "metadata" JSONB NOT NULL DEFAULT '{}'::jsonb,
+      "isActive" BOOLEAN NOT NULL DEFAULT true,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await addColumnIfMissing('MediaAssets', 'createdAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
+  await addColumnIfMissing('MediaAssets', 'updatedAt', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()');
+  await addIndexIfMissing('media_assets_token_unique', 'CREATE UNIQUE INDEX media_assets_token_unique ON "MediaAssets" ("token")', { table: 'MediaAssets', columns: ['token'] });
+  await addIndexIfMissing('media_assets_owner_kind_idx', 'CREATE INDEX media_assets_owner_kind_idx ON "MediaAssets" ("ownerUserId", "kind", "isActive")', { table: 'MediaAssets', columns: ['ownerUserId', 'kind', 'isActive'] });
+
   await addColumnIfMissing('Timetables', 'term', 'VARCHAR(255)');
   await addColumnIfMissing('Timetables', 'year', 'INTEGER');
   await addColumnIfMissing('Timetables', 'scope', "VARCHAR(255) DEFAULT 'term'");
   await addColumnIfMissing('Timetables', 'classes', "JSONB DEFAULT '[]'::jsonb");
   await addColumnIfMissing('Timetables', 'warnings', "JSONB DEFAULT '[]'::jsonb");
+  await addColumnIfMissing('Timetables', 'isPublished', 'BOOLEAN DEFAULT false');
+  await addColumnIfMissing('Timetables', 'status', "VARCHAR(24) NOT NULL DEFAULT 'draft'");
+  await addColumnIfMissing('Timetables', 'version', 'INTEGER NOT NULL DEFAULT 1');
+  await addColumnIfMissing('Timetables', 'publishedAt', 'TIMESTAMP WITH TIME ZONE');
+  await addColumnIfMissing('Timetables', 'publishedBy', 'INTEGER');
+  await addColumnIfMissing('Timetables', 'supersedesId', 'INTEGER');
+  await sequelize.query(`UPDATE "Timetables" SET "status" = CASE WHEN COALESCE("isPublished", false) = true THEN 'published' ELSE COALESCE(NULLIF("status", ''), 'draft') END WHERE "status" IS NULL OR "status" = ''`).catch(() => null);
 
   
   const timestampTables = [

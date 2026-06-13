@@ -422,7 +422,7 @@ async function emitModelChange(modelName, action, instance, options = {}) {
     const emit = () => {
       if (modelName === 'Message') {
         const conversation = raw?.metadata?.conversationKey || realtime.directConversationKey(raw?.senderId, raw?.receiverId);
-        return realtime.emit({ type: action === 'created' ? 'chat:message_created' : 'chat:message_updated', schoolCode:String(schoolCode), audience:{ school:false, userIds:[raw?.senderId,raw?.receiverId].filter(Boolean), conversations:[conversation] }, entityType:'Message', entityId:raw?.id, version:Number(raw?.version||1), data:{ ...raw, conversationId:conversation } });
+        return realtime.emit({ type: action === 'created' ? 'chat:message_created' : 'chat:message_updated', schoolCode:String(schoolCode), audience:{ school:false, userIds:[raw?.senderId,raw?.receiverId].filter(Boolean), conversations:[conversation] }, entityType:'Message', entityId:raw?.id, version:Number(raw?.version||1), data:{ ...raw, conversationId:conversation, conversationKey:conversation, metadata:{ ...(raw?.metadata || {}), conversationKey:conversation } } });
       }
       return realtime.emitToSchool(String(schoolCode), type, { model:modelName, action, id:instance?.id||null, version:Number(instance?.version||1), updatedAt:instance?.updatedAt||new Date() });
     };

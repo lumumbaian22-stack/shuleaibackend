@@ -59,9 +59,19 @@ async function emitEventRow(rowLike) {
   if (!global.io || !envelope.type) return false;
   try {
     const rooms = roomsForEnvelope(envelope);
+    const isChat = String(envelope.type || '').startsWith('chat:');
+    const chatPayload = isChat ? {
+      ...(envelope.data || {}),
+      type: envelope.type,
+      eventId: envelope.eventId,
+      schoolCode: envelope.schoolCode,
+      conversationKey: envelope.data?.conversationKey || envelope.data?.conversationId || envelope.data?.metadata?.conversationKey || null,
+      conversationId: envelope.data?.conversationId || envelope.data?.conversationKey || envelope.data?.metadata?.conversationKey || null
+    } : null;
     for (const room of rooms) {
       global.io.to(room).emit('realtime:event', envelope);
       global.io.to(room).emit(envelope.type, envelope);
+      if (chatPayload) global.io.to(room).emit('chat:realtime', { type: envelope.type, envelope, data: chatPayload });
       // Temporary compatibility while active clients move to the canonical envelope.
       if (room.startsWith('school:')) global.io.to(room).emit('realtime:update', { type: envelope.type, schoolCode: envelope.schoolCode, eventId: envelope.eventId, ...envelope.data });
     }

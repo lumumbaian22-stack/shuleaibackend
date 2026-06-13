@@ -519,9 +519,9 @@ exports.sendGroupMessage = async (req, res) => {
       receiverId,
       content,
       replyToMessageId: replyToId || null,
-      metadata: { type: 'student_group', studentName: req.user.name }
+      metadata: { type: 'student_group', studentName: req.user.name, schoolCode: req.user.schoolCode, conversationKey: require('../services/realtimeService').directConversationKey(req.user.id, receiverId) }
     }));
-    await Message.bulkCreate(messages);
+    await Message.bulkCreate(messages, { individualHooks: true });
     if (global.io) {
       recipients.forEach(recipientId => {
         global.io.to(`user-${recipientId}`).emit('new-student-message', { from: req.user.id, content, replyToId });

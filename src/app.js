@@ -137,6 +137,20 @@ if (!fs.existsSync(uploadDir)) {
 app.use('/uploads', (req, res, next) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   res.setHeader('Access-Control-Allow-Origin', '*');
+
+  // Render's local /uploads directory is ephemeral. Older saved profile/signature
+  // URLs can point to files that vanished after redeploy. Do not return 404 for
+  // those legacy image requests; the frontend/report card will use its clean
+  // fallback line/avatar instead of showing a broken image icon.
+  const requestPath = String(req.path || '');
+  if (/\/(profiles|signatures)\//i.test(requestPath)) {
+    const absolutePath = path.join(uploadDir, requestPath.replace(/^\/+/, ''));
+    if (!fs.existsSync(absolutePath)) {
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', 'base64'));
+    }
+  }
   next();
 }, express.static(uploadDir));
 
@@ -146,10 +160,10 @@ app.get('/homework-files/:filename', publicHomeworkFileController.serveHomeworkA
 
 // ============ TEST ENDPOINT ============
 app.get('/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v149.4-final-console-audit-lock', timestamp: new Date().toISOString() });
+  res.json({ success: true, version: require('../package.json').version, build:'v149.7-final-cors-cache-timetable-realtime-lock', timestamp: new Date().toISOString() });
 });
 app.get('/api/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v149.4-final-console-audit-lock', timestamp: new Date().toISOString() });
+  res.json({ success: true, version: require('../package.json').version, build:'v149.7-final-cors-cache-timetable-realtime-lock', timestamp: new Date().toISOString() });
 });
 
 app.get('/api/health/detailed', async (req, res) => {
