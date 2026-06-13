@@ -1676,7 +1676,7 @@ exports.getClassTeacherReportPreviewDetails = async (req, res) => {
 
 exports.publishMarks = async (req,res) => {
   try {
-    const { classId, term='Term 1', year=new Date().getFullYear(), assessmentType, assessmentName } = req.body;
+    const { classId, term='Term 1', year=new Date().getFullYear(), assessmentType, assessmentName, publishAnyway=false, unresolvedIssueSummary=null } = req.body;
     const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
     const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
     const access = await v66CanEnterMarks(teacher, cls, null);
@@ -1700,10 +1700,10 @@ exports.publishMarks = async (req,res) => {
         curriculum:meta.system, reportType:'academic', generatedBy:req.user.id, publishedBy:req.user.id,
         publishedAt:now, snapshot, sourceRecordIds, checksum,
         assessmentType:assessmentType || null, assessmentName:assessmentName || null,
-        metadata:{ classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v143_immutable_curriculum_report_card' }
+        metadata:{ classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v150_1_immutable_curriculum_report_card', publishAnyway:!!publishAnyway, unresolvedIssueSummary:unresolvedIssueSummary || null }
       });
       if (saved.created || saved.unchanged) snapshots++;
     }
-    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. ${snapshots} curriculum-aware report card(s) saved.`, data:{ count, snapshots, classId:cls.id, term, year:Number(year), engine:'v102_curriculum_report_card' } });
+    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. ${snapshots} curriculum-aware report card(s) saved${publishAnyway ? ' (published with unresolved issue confirmation)' : ''}.`, data:{ count, snapshots, classId:cls.id, term, year:Number(year), publishAnyway:!!publishAnyway, unresolvedIssueSummary:unresolvedIssueSummary || null, engine:'v150_1_curriculum_report_card' } });
   } catch(error) { console.error('V102 publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
 };

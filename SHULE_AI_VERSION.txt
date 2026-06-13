@@ -1,0 +1,1 @@
+Shule AI backend v150.1 package - same working v149.8 timetable DB lock backend.

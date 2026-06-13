@@ -32,14 +32,18 @@ async function canJoinClass(socket, schoolCode, classId) {
 
 async function canJoinStudentContext(socket, studentId) {
   const student = await Student.findByPk(Number(studentId), { include: [{ model: User, attributes: ['schoolCode'] }] });
-  if (!student || !sameSchool(socket, student.User?.schoolCode || student.schoolCode || socket.schoolCode)) return false;
-  if (['admin','super_admin'].includes(socket.userRole)) return true;
-  if (socket.userRole === 'student') return Number(student.userId) === Number(socket.userId);
-  if (socket.userRole === 'teacher') return (await teacherClassIds(socket.userId)).includes(Number(student.classId));
+  if (!student) return false;
+  // v150.1: parent ownership is allowed across linked children even if the
+  // parent's default socket schoolCode differs from the child's school.
   if (socket.userRole === 'parent') {
     const parent = await Parent.findOne({ where: { userId: socket.userId } });
     return Boolean(parent && await StudentParent.findOne({ where: { parentId: parent.id, studentId: student.id } }));
   }
+  const studentSchoolCode = student.User?.schoolCode || student.schoolCode || socket.schoolCode;
+  if (!sameSchool(socket, studentSchoolCode)) return false;
+  if (['admin','super_admin'].includes(socket.userRole)) return true;
+  if (socket.userRole === 'student') return Number(student.userId) === Number(socket.userId);
+  if (socket.userRole === 'teacher') return (await teacherClassIds(socket.userId)).includes(Number(student.classId));
   return false;
 }
 
@@ -95,9 +99,12 @@ async function canJoinConversation(socket, key) {
   // schoolCode:parent_class_teacher|parent_admin:parentUserId:studentId:classId:receiverUserId
   if (['parent_class_teacher','parent_admin'].includes(parts[1])) {
     const [schoolCode,type,parentUserId,studentId,classId,receiverUserId] = [parts[0],parts[1],parts[2],parts[3],parts[4],parts[5]];
-    if (!sameSchool(socket, schoolCode)) return false;
+    // v150.1: parents may have linked children across schools. For parent sockets,
+    // verify ownership below instead of rejecting only because socket.schoolCode is the
+    // parent's default/first school. Teachers/admins must still match the room school.
+    if (socket.userRole !== 'parent' && !sameSchool(socket, schoolCode)) return false;
     if (![String(parentUserId), String(receiverUserId)].includes(String(socket.userId))) return false;
-    const parentUser = await User.findOne({ where:{ id:Number(parentUserId), role:'parent', schoolCode, isActive:true }, attributes:['id'] });
+    const parentUser = await User.findOne({ where:{ id:Number(parentUserId), role:'parent', isActive:true }, attributes:['id'] });
     if (!parentUser) return false;
     if (String(socket.userId) === String(parentUserId)) {
       const parent = await Parent.findOne({ where:{ userId:Number(parentUserId) } });
