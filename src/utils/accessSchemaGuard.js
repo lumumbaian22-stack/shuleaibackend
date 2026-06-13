@@ -2,6 +2,15 @@ const { sequelize } = require('../models');
 
 let accessSchemaPromise = null;
 
+function allowRuntimeSchemaRepair() {
+  // Production API requests must not run ALTER TABLE/CREATE INDEX. That DDL can
+  // invalidate/terminate Render PostgreSQL connections while users save data.
+  // Run migrations during deploy instead. Set ALLOW_RUNTIME_SCHEMA_REPAIR=true
+  // only for a one-off emergency repair request.
+  return process.env.ALLOW_RUNTIME_SCHEMA_REPAIR === 'true';
+}
+
+
 async function run(statement) {
   await sequelize.query(statement).catch((error) => {
     const message = error?.original?.message || error?.message || String(error);
@@ -11,6 +20,7 @@ async function run(statement) {
 
 async function ensureSchoolAccessSchema() {
   if (process.env.DISABLE_ACCESS_SCHEMA_GUARD === 'true') return;
+  if (!allowRuntimeSchemaRepair()) return;
   if (!accessSchemaPromise) {
     accessSchemaPromise = (async () => {
       // These fields are required by the School model and login/access checks.
@@ -115,6 +125,7 @@ async function ensureSchoolAccessSchema() {
 
 async function accessSchemaMiddleware(req, res, next) {
   try {
+    if (!allowRuntimeSchemaRepair()) return next();
     await ensureSchoolAccessSchema();
   } catch (error) {
     console.error('[access-schema-guard] required access schema repair failed:', error.message);

@@ -1,7 +1,8 @@
 const { Sequelize } = require('sequelize');
 require('dotenv').config();
 
-const isProduction = process.env.NODE_ENV === 'production';
+const isRender = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_HOSTNAME);
+const isProduction = process.env.NODE_ENV === 'production' || isRender;
 const shouldUseSsl = process.env.DB_SSL === 'false' ? false : true;
 
 function intEnv(name, fallback) {
@@ -10,11 +11,14 @@ function intEnv(name, fallback) {
 }
 
 const pool = {
-  max: intEnv('DB_POOL_MAX', isProduction ? 25 : 10),
-  min: intEnv('DB_POOL_MIN', isProduction ? 2 : 0),
-  acquire: intEnv('DB_POOL_ACQUIRE_MS', 60000),
-  idle: intEnv('DB_POOL_IDLE_MS', 10000),
-  evict: intEnv('DB_POOL_EVICT_MS', 10000)
+  // Render/Postgres free/shared plans can terminate connections when a single
+  // Node process opens too many sockets. Keep the default pool small and let
+  // requests queue instead of overwhelming PostgreSQL during timetable writes.
+  max: intEnv('DB_POOL_MAX', isProduction ? 5 : 10),
+  min: intEnv('DB_POOL_MIN', 0),
+  acquire: intEnv('DB_POOL_ACQUIRE_MS', 45000),
+  idle: intEnv('DB_POOL_IDLE_MS', 30000),
+  evict: intEnv('DB_POOL_EVICT_MS', 30000)
 };
 
 const commonOptions = {
@@ -28,10 +32,16 @@ const commonOptions = {
   },
   dialectOptions: shouldUseSsl ? {
     ssl: { require: true, rejectUnauthorized: false },
+    keepAlive: true,
+    keepAliveInitialDelayMillis: intEnv('DB_KEEPALIVE_INITIAL_DELAY_MS', 10000),
+    keepAlive: true,
+    keepAliveInitialDelayMillis: intEnv('DB_KEEPALIVE_INITIAL_DELAY_MS', 10000),
     statement_timeout: intEnv('DB_STATEMENT_TIMEOUT_MS', 60000),
     connectionTimeoutMillis: intEnv('DB_CONNECTION_TIMEOUT_MS', 10000),
     idle_in_transaction_session_timeout: intEnv('DB_IDLE_TX_TIMEOUT_MS', 60000)
   } : {
+    keepAlive: true,
+    keepAliveInitialDelayMillis: intEnv('DB_KEEPALIVE_INITIAL_DELAY_MS', 10000),
     statement_timeout: intEnv('DB_STATEMENT_TIMEOUT_MS', 60000),
     connectionTimeoutMillis: intEnv('DB_CONNECTION_TIMEOUT_MS', 10000),
     idle_in_transaction_session_timeout: intEnv('DB_IDLE_TX_TIMEOUT_MS', 60000)
@@ -50,7 +60,7 @@ if (process.env.DATABASE_URL) {
 }
 
 sequelize.authenticate()
-  .then(() => console.log(`✅ Database connection ready. Pool max=${pool.max}`))
+  .then(() => console.log(`✅ Database connection ready. Pool max=${pool.max}, min=${pool.min}, render=${isRender}`))
   .catch(err => {
     console.error('❌ Database connection failed:', err.message);
     if (!isProduction) console.error(err);
