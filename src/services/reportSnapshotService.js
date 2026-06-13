@@ -55,7 +55,7 @@ async function createPublishedVersion(input, options = {}) {
       correctionReason: input.correctionReason || null,
       isCurrent: true,
       lockedAt: now,
-      formatVersion: 'v143'
+      formatVersion: process.env.REPORT_FORMAT_VERSION || 'v149.4'
     }, { transaction, hooks: false });
 
     await realtime.emit({

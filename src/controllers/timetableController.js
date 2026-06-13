@@ -358,45 +358,135 @@ exports.generate = async (req, res) => { try {
   res.json({success:true,message:`Draft generated for ${generated.classes.length} class(es) with ${countLessonsFromSlots(generated.slots)} lesson(s)`,data:{...tt.toJSON(),lessonCount:countLessonsFromSlots(generated.slots)}});
 } catch(error){console.error('Generate timetable error:',error);res.status(500).json({success:false,message:error.message});} };
 exports.getClasses = async (req, res) => { try { const classes = await Class.findAll({ where: { schoolCode: req.user.schoolCode, [Op.or]: [{ isActive: true }, { isActive: null }] }, order: [['grade', 'ASC'], ['name', 'ASC']] }); res.json({ success: true, data: classes }); } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
-exports.manualUpdate = async (req,res)=>{ try{
-  let tt=await Timetable.findOne({where:{id:req.params.id,schoolId:req.user.schoolCode}});
-  if(!tt)return res.status(404).json({success:false,message:'Timetable not found'});
-  const sourceWasPublished = !!tt.isPublished;
-  if(sourceWasPublished){
-    tt=await Timetable.create({
-      schoolId:tt.schoolId,weekStartDate:tt.weekStartDate,term:tt.term,year:tt.year,scope:tt.scope,
-      slots:tt.slots,classes:tt.classes,warnings:tt.warnings,isPublished:false,status:'draft',
-      version:Number(tt.version||1)+1,supersedesId:tt.id
-    },{realtimeHandled:true});
+exports.manualUpdate = async (req, res) => {
+  try {
+    const schoolId = String(req.user?.schoolCode || '').trim();
+    const timetableId = Number(req.params.id);
+    if (!schoolId) return res.status(403).json({ success:false, message:'School scope is missing for this user.' });
+    if (!timetableId) return res.status(400).json({ success:false, message:'Invalid timetable id.' });
+
+    let tt = await Timetable.findOne({ where:{ id:timetableId, schoolId } });
+    if (!tt) {
+      console.warn('[timetable] manualUpdate not found', { timetableId, schoolId, userId:req.user?.id, role:req.user?.role });
+      return res.status(404).json({ success:false, message:'Timetable not found for this school.' });
+    }
+
+    const sourceWasPublished = !!tt.isPublished;
+    if (sourceWasPublished) {
+      tt = await Timetable.create({
+        schoolId: tt.schoolId,
+        weekStartDate: tt.weekStartDate || startOfWeek(),
+        term: req.body.term || tt.term || 'Term 1',
+        year: req.body.year ? Number(req.body.year) : (tt.year || new Date().getFullYear()),
+        scope: req.body.scope || tt.scope || 'term',
+        slots: Array.isArray(tt.slots) ? tt.slots : [],
+        classes: Array.isArray(tt.classes) ? tt.classes : [],
+        warnings: Array.isArray(tt.warnings) ? tt.warnings : [],
+        isPublished: false,
+        status: 'draft',
+        version: Number(tt.version || 1) + 1,
+        supersedesId: tt.id
+      }, { realtimeHandled:true });
+    }
+
+    const slots = Array.isArray(req.body.slots) ? req.body.slots : (Array.isArray(tt.slots) ? tt.slots : []);
+    const classes = Array.isArray(req.body.classes) ? req.body.classes : (Array.isArray(tt.classes) ? tt.classes : []);
+    const conflicts = validateTimetablePayload(slots);
+    if (conflicts.length) return res.status(400).json({ success:false, message:'Resolve timetable conflicts before saving.', data:{ conflicts } });
+
+    await tt.update({
+      slots,
+      classes,
+      warnings: Array.isArray(req.body.warnings) ? req.body.warnings : (Array.isArray(tt.warnings) ? tt.warnings : []),
+      term: req.body.term || tt.term || 'Term 1',
+      year: req.body.year ? Number(req.body.year) : (tt.year || new Date().getFullYear()),
+      scope: req.body.scope || tt.scope || 'term',
+      status: 'draft',
+      isPublished: false
+    }, { realtimeHandled:true });
+
+    await realtime.emitToRole(schoolId, 'admin', 'timetable:draft_updated', {
+      timetableId: tt.id,
+      liveTimetableId: tt.supersedesId || null,
+      term: tt.term,
+      year: tt.year,
+      scope: tt.scope,
+      requiresPublish: true
+    }, { entityType:'Timetable', entityId:tt.id, version:tt.version || 1 }).catch(() => {});
+
+    return res.json({
+      success:true,
+      data:{ ...tt.toJSON(), visibility:'draft', requiresPublish:true, liveTimetableId:tt.supersedesId || null, createdFromPublished:sourceWasPublished },
+      message: sourceWasPublished ? 'Edits saved as a draft. Publish changes for teachers, students and parents to see them.' : 'Timetable draft saved. Publish changes for users to see them.'
+    });
+  } catch (error) {
+    console.error('[timetable] manualUpdate error:', { message:error.message, stack:error.stack, userId:req.user?.id, schoolCode:req.user?.schoolCode, timetableId:req.params?.id });
+    return res.status(500).json({ success:false, message:error.message || 'Timetable draft could not be saved.' });
   }
-  const slots=Array.isArray(req.body.slots)?req.body.slots:tt.slots;
-  const classes=Array.isArray(req.body.classes)&&req.body.classes.length?req.body.classes:tt.classes;
-  const conflicts=validateTimetablePayload(slots);
-  if(conflicts.length)return res.status(400).json({success:false,message:'Resolve timetable conflicts before saving.',data:{conflicts}});
-  await tt.update({slots,classes,warnings:req.body.warnings||tt.warnings||[],term:req.body.term||tt.term,year:req.body.year?Number(req.body.year):tt.year,scope:req.body.scope||tt.scope,status:'draft',isPublished:false},{realtimeHandled:true});
-  await realtime.emitToRole(req.user.schoolCode,'admin','timetable:draft_updated',{
-    timetableId:tt.id,liveTimetableId:tt.supersedesId||null,term:tt.term,year:tt.year,scope:tt.scope,requiresPublish:true
-  },{entityType:'Timetable',entityId:tt.id,version:tt.version||1}).catch(()=>{});
-  res.json({
-    success:true,
-    data:{...tt.toJSON(), visibility:'draft', requiresPublish:true, liveTimetableId:tt.supersedesId||null, createdFromPublished:sourceWasPublished},
-    message: sourceWasPublished ? 'Edits saved as a draft. Publish changes for teachers, students and parents to see them.' : 'Timetable draft saved. Publish changes for users to see them.'
-  });
-}catch(error){res.status(500).json({success:false,message:error.message});} };
-exports.publish = async (req,res)=>{ const transaction=await sequelize.transaction(); try{
-  const tt=await Timetable.findOne({where:{id:req.params.id,schoolId:req.user.schoolCode},transaction,lock:transaction.LOCK.UPDATE});
-  if(!tt){await transaction.rollback();return res.status(404).json({success:false,message:'Timetable not found'});}
-  const scope=req.body.scope||tt.scope||'term',term=req.body.term||tt.term||'Term 1',year=req.body.year?Number(req.body.year):(tt.year||new Date().getFullYear());
-  const lessonCount = countLessonsFromSlots(tt.slots || []);
-  if (!lessonCount) { await transaction.rollback(); return res.status(400).json({success:false,message:'Add at least one lesson before publishing the timetable.'}); }
-  const conflicts=validateTimetablePayload(tt.slots||[]);
-  if(conflicts.length){await transaction.rollback();return res.status(400).json({success:false,message:'Resolve timetable conflicts before publishing.',data:{conflicts}});}
-  await Timetable.update({isPublished:false,status:'archived'},{where:{schoolId:req.user.schoolCode,scope,term,year,isPublished:true,id:{[Op.ne]:tt.id}},transaction,realtimeHandled:true});
-  await tt.update({isPublished:true,status:'published',scope,term,year,publishedAt:new Date(),publishedBy:req.user.id},{transaction,realtimeHandled:true});
-  await transaction.commit();
-  await realtime.emitToSchool(req.user.schoolCode,'timetable:published',{timetableId:tt.id,term,year,scope,version:tt.version||1,publishedAt:tt.publishedAt,viewersUpdated:true},{entityType:'Timetable',entityId:tt.id,version:tt.version||1}).catch(()=>{});
-  res.json({success:true,data:{...tt.toJSON(), visibility:'published', requiresPublish:false, viewersUpdated:true},message:'Timetable published. Teachers, students and parents can now see the latest changes.'});
-}catch(error){if(!transaction.finished)await transaction.rollback();res.status(500).json({success:false,message:error.message});} };
+};
+
+exports.publish = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const schoolId = String(req.user?.schoolCode || '').trim();
+    const timetableId = Number(req.params.id);
+    if (!schoolId) { await transaction.rollback(); return res.status(403).json({ success:false, message:'School scope is missing for this user.' }); }
+    if (!timetableId) { await transaction.rollback(); return res.status(400).json({ success:false, message:'Invalid timetable id.' }); }
+
+    const tt = await Timetable.findOne({
+      where:{ id:timetableId, schoolId },
+      transaction,
+      lock: transaction.LOCK?.UPDATE || true
+    });
+    if (!tt) {
+      await transaction.rollback();
+      console.warn('[timetable] publish not found', { timetableId, schoolId, userId:req.user?.id, role:req.user?.role });
+      return res.status(404).json({ success:false, message:'Timetable not found for this school.' });
+    }
+
+    const scope = req.body.scope || tt.scope || 'term';
+    const term = req.body.term || tt.term || 'Term 1';
+    const year = req.body.year ? Number(req.body.year) : (tt.year || new Date().getFullYear());
+    const slots = Array.isArray(tt.slots) ? tt.slots : [];
+    const lessonCount = countLessonsFromSlots(slots);
+    if (!lessonCount) {
+      await transaction.rollback();
+      return res.status(400).json({ success:false, message:'Add at least one lesson before publishing the timetable.' });
+    }
+
+    const conflicts = validateTimetablePayload(slots);
+    if (conflicts.length) {
+      await transaction.rollback();
+      return res.status(400).json({ success:false, message:'Resolve timetable conflicts before publishing.', data:{ conflicts } });
+    }
+
+    await Timetable.update(
+      { isPublished:false, status:'archived' },
+      { where:{ schoolId, scope, term, year, isPublished:true, id:{ [Op.ne]:tt.id } }, transaction, realtimeHandled:true }
+    );
+    await tt.update(
+      { isPublished:true, status:'published', scope, term, year, publishedAt:new Date(), publishedBy:req.user.id },
+      { transaction, realtimeHandled:true }
+    );
+    await transaction.commit();
+
+    await realtime.emitToSchool(schoolId, 'timetable:published', {
+      timetableId: tt.id,
+      term,
+      year,
+      scope,
+      version: tt.version || 1,
+      publishedAt: tt.publishedAt,
+      viewersUpdated: true
+    }, { entityType:'Timetable', entityId:tt.id, version:tt.version || 1 }).catch(() => {});
+
+    return res.json({ success:true, data:{ ...tt.toJSON(), visibility:'published', requiresPublish:false, viewersUpdated:true }, message:'Timetable published. Teachers, students and parents can now see the latest changes.' });
+  } catch (error) {
+    console.error('[timetable] publish error:', { message:error.message, stack:error.stack, userId:req.user?.id, schoolCode:req.user?.schoolCode, timetableId:req.params?.id });
+    if (!transaction.finished) await transaction.rollback();
+    return res.status(500).json({ success:false, message:error.message || 'Timetable could not be published.' });
+  }
+};
 exports.getForClass = async (req, res) => { try {
   const tt = await findActiveTimetable(req.user.schoolCode, req.query);
   if (!tt) return res.json({ success: true, data: [], meta: { published: false } });
@@ -418,7 +508,7 @@ exports.getForTeacher = async (req,res)=>{ try{
   const teacherId=Number(teacher.id);
   const data=(tt.slots||[]).map(d=>({day:d.day,periods:(d.periods||[]).map(p=>({...p,classes:(p.classes||[]).filter(c=>Number(c.teacherId)===teacherId)})).filter(p=>p.break||p.classes.length)})).filter(d=>d.periods.length);
   res.json({success:true,data,meta:{term:tt.term,year:tt.year,scope:tt.scope,published:true,teacherId,version:tt.version}});
-}catch(error){res.status(500).json({success:false,message:error.message});} };
+}catch(error){console.error('[timetable] getForTeacher error:', error);res.status(500).json({success:false,message:error.message});} };
 exports.getByWeek = async (req, res) => { try {
   let tt = await findActiveTimetable(req.user.schoolCode, { ...req.query, includeDrafts: true, weekStartDate: req.query.weekStartDate || req.query.weekStart || startOfWeek() });
   if (!tt) tt = await findActiveTimetable(req.user.schoolCode, { ...req.query, includeDrafts: true });
