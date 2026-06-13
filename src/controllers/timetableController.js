@@ -16,7 +16,7 @@ function v87ValidateTimetableSlot(slot, existingSlots = []) {
   return { ok:true, type };
 }
 
-const { Timetable, Class, Teacher, User, Student, Parent, StudentParent, TeacherSubjectAssignment, sequelize } = require('../models');
+const { Timetable, Class, Teacher, User, Student, Parent, TeacherSubjectAssignment, sequelize } = require('../models');
 const realtime = require('../services/realtimeService');
 const moment = require('moment');
 const { Op } = require('sequelize');
@@ -307,15 +307,6 @@ function findClassBlock(tt, cls) {
   if (!tt || !cls) return null;
   const blocks = Array.isArray(tt.classes) ? tt.classes : [];
   return blocks.find(c => String(c.classId ?? c.id ?? '') === String(cls.id)) || blocks.find(c => sameText(c.className || c.name, cls.name)) || blocks.find(c => sameText(c.grade, cls.grade));
-}
-function classBlockHasTimetable(block) {
-  return !!(block && Array.isArray(block.timetable) && block.timetable.some(day => Array.isArray(day.periods) && day.periods.some(period => Array.isArray(period.classes) && period.classes.length)));
-}
-function classTimetableFromPublished(tt, cls) {
-  const block = findClassBlock(tt, cls);
-  if (classBlockHasTimetable(block)) return filterClassTimetable(block);
-  const rebuilt = classBlockFromGlobalSlots(tt, cls);
-  return rebuilt ? filterClassTimetable(rebuilt) : [];
 }
 function filterClassTimetable(block, periodsOverride) {
   if (!block) return [];
@@ -716,8 +707,8 @@ exports.getForClass = async (req, res) => { try {
   const tt = await findActiveTimetable(req.user.schoolCode, req.query);
   if (!tt) return res.json({ success: true, data: [], meta: { published: false } });
   const cls = await Class.findOne({ where: { id: req.params.classId, schoolCode: req.user.schoolCode, [Op.or]: [{ isActive: true }, { isActive: null }] } });
-  const data = classTimetableFromPublished(tt, cls);
   const found = findClassBlock(tt, cls) || classBlockFromGlobalSlots(tt, cls);
+  const data = found ? filterClassTimetable(found) : [];
   res.json({ success: true, data, meta: { term: tt.term, year: tt.year, scope: tt.scope, published: !!tt.isPublished, classInfo: found || cls || null, lessonCount: countLessonsFromSlots(data) } });
 } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
 exports.getForTeacher = async (req,res)=>{ try{
@@ -766,23 +757,17 @@ exports.getForStudentMe = async (req, res) => { try {
   const schoolId = student.User?.schoolCode || req.user.schoolCode;
   const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] } }); const cls = resolveClassForStudent(student, classes);
   const tt = await findActiveTimetable(schoolId, req.query);
-  const slots = classTimetableFromPublished(tt, cls);
+  const block = findClassBlock(tt, cls) || classBlockFromGlobalSlots(tt, cls); const slots = block ? filterClassTimetable(block) : [];
   res.json({ success: true, data: { student, classInfo: cls, timetable: slots, updates: studyUpdates(slots), term: tt?.term, year: tt?.year, scope: tt?.scope, published: !!tt?.isPublished } });
 } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
 exports.getForParentChild = async (req, res) => { try {
   const parent = await Parent.findOne({ where: { userId: req.user.id } }); if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
   const student = await Student.unscoped().findOne({ where: { id: req.params.studentId }, include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'] }] });
-  if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
-  // v150.1: parent ownership, not the parent's default schoolCode, is the security boundary here.
-  // This lets one parent view each linked child timetable even when children are in different schools.
+  if (!student || String(student.User?.schoolCode || '') !== String(req.user.schoolCode || '')) return res.status(404).json({ success: false, message: 'Student not found in this school' });
   if (parent.hasStudent) { const ok = await parent.hasStudent(student); if (!ok) return res.status(403).json({ success: false, message: 'Child not linked to this parent' }); }
-  else {
-    const linked = await StudentParent.findOne({ where:{ parentId:parent.id, studentId:student.id } }).catch(() => null);
-    if (!linked) return res.status(403).json({ success:false, message:'Child not linked to this parent' });
-  }
   const schoolId = student.User?.schoolCode || req.user.schoolCode;
   const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] } }); const cls = resolveClassForStudent(student, classes);
   const tt = await findActiveTimetable(schoolId, req.query);
-  const slots = classTimetableFromPublished(tt, cls);
+  const block = findClassBlock(tt, cls) || classBlockFromGlobalSlots(tt, cls); const slots = block ? filterClassTimetable(block) : [];
   res.json({ success: true, data: { child: student, classInfo: cls, timetable: slots, updates: studyUpdates(slots), term: tt?.term, year: tt?.year, scope: tt?.scope, published: !!tt?.isPublished, premiumStatusPreview: true } });
 } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
