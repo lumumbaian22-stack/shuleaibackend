@@ -8,8 +8,14 @@ async function teacherClassIds(userId) {
   const teacher = await Teacher.findOne({ where: { userId } });
   if (!teacher) return [];
   const direct = [teacher.classId].filter(Boolean).map(Number);
-  const classes = await Class.findAll({ where: { [Op.or]: [{ teacherId: teacher.id }, { id: { [Op.in]: direct.length ? direct : [-1] } }] }, attributes: ['id'] }).catch(() => []);
-  return [...new Set([...direct, ...classes.map(c => Number(c.id))])];
+  const assignmentRows = await TeacherSubjectAssignment.findAll({ where:{ teacherId:teacher.id, isClassTeacher:true }, attributes:['classId'] }).catch(() => []);
+  const assignmentIds = assignmentRows.map(row => Number(row.classId)).filter(Boolean);
+  const classes = await Class.findAll({ where: { [Op.or]: [
+    { teacherId: teacher.id },
+    { id: { [Op.in]: [...direct, ...assignmentIds].length ? [...direct, ...assignmentIds] : [-1] } },
+    teacher.classTeacher ? { name: teacher.classTeacher } : { id: -1 }
+  ] }, attributes: ['id'] }).catch(() => []);
+  return [...new Set([...direct, ...assignmentIds, ...classes.map(c => Number(c.id))].filter(Boolean))];
 }
 
 async function canJoinClass(socket, schoolCode, classId) {

@@ -95,19 +95,20 @@ exports.getMyStudents = async (req, res) => {
     }
 
     const assignmentState = await v66JTeacherAssignments(teacher, req.user.schoolCode);
-    const classTeacherClasses = assignmentState.classTeacherClasses || [];
+    const classTeacherClasses = req.classTeacherClasses?.length ? req.classTeacherClasses : (assignmentState.classTeacherClasses || []);
     const classItem = classTeacherClasses[0] || null;
     const subjectAssignments = assignmentState.subjectAssignments || [];
     const assignedClasses = await v66AssignedClassesForTeacher(teacher, req.user.schoolCode);
-    const classNames = assignedClasses.map(cls => cls.name);
+    const classScope = classItem ? classTeacherClasses : assignedClasses;
+    const classNames = classScope.map(cls => cls.name);
 
-    if (!assignedClasses.length) {
+    if (!classScope.length) {
       return res.json({ success: true, data: { students: [], isClassTeacher: false, subjects: [], classNames: [] } });
     }
 
-    // Current membership is controlled by classId. Grade text is used only for
-    // legacy learners whose classId has never been set.
-    const students = await v66CurrentStudentsForClasses(assignedClasses, req.user.schoolCode);
+    // My Students must be class-first: class teachers see only their assigned class,
+    // even if they also teach subjects in other classes.
+    const students = await v66CurrentStudentsForClasses(classScope, req.user.schoolCode);
 
     const studentIds = students.map(s => s.id);
 
@@ -1138,11 +1139,21 @@ function v66SubjectListForClass(cls) {
   return out;
 }
 async function v66CanEnterMarks(teacher, cls, subject) {
-  const isClassTeacher = Number(cls.teacherId) === Number(teacher.id) || String(teacher.classTeacher || '').toLowerCase() === String(cls.name || '').toLowerCase();
+  const classTeacherRows = await TeacherSubjectAssignment.findAll({
+    where: { teacherId: teacher.id, classId: cls.id, isClassTeacher: true }
+  }).catch(() => []);
+  const jsonClassTeacher = (Array.isArray(cls.subjectTeachers) ? cls.subjectTeachers : [])
+    .some(st => Number(st.teacherId) === Number(teacher.id) && st.isClassTeacher);
+  const isClassTeacher = Number(cls.teacherId) === Number(teacher.id) ||
+    Number(cls.id) === Number(teacher.classId || 0) ||
+    String(teacher.classTeacher || '').toLowerCase() === String(cls.name || '').toLowerCase() ||
+    classTeacherRows.length > 0 || jsonClassTeacher;
   const assignedSubjects = (cls.subjectTeachers || [])
     .filter(st => Number(st.teacherId) === Number(teacher.id))
     .map(st => String(st.subject || '').trim())
     .filter(Boolean);
+  const tableSubjectRows = await TeacherSubjectAssignment.findAll({ where: { teacherId: teacher.id, classId: cls.id } }).catch(() => []);
+  tableSubjectRows.forEach(row => { if (row.subject && !assignedSubjects.some(s => v66JSame(s, row.subject))) assignedSubjects.push(String(row.subject).trim()); });
   const isSubjectTeacher = assignedSubjects.some(s => s.toLowerCase() === String(subject || '').toLowerCase());
   return { allowed: isClassTeacher || isSubjectTeacher, isClassTeacher, isSubjectTeacher, assignedSubjects };
 }
@@ -1272,11 +1283,19 @@ async function v66JTeacherAssignments(teacher, schoolCode) {
     }
   }
 
-  const classTeacherClasses = classes.filter(cls =>
-    Number(cls.teacherId) === Number(teacher.id) ||
-    Number(cls.id) === Number(teacher.classId || 0) ||
-    v66JSame(cls.name, teacher.classTeacher)
-  );
+  // Class-teacher assignment can come from several historical sources:
+  // Class.teacherId, Teacher.classId/classTeacher, TeacherSubjectAssignments.isClassTeacher,
+  // or Class.subjectTeachers entries flagged as isClassTeacher. Keep all of them aligned so
+  // My Students, inline marks, attendance, and publish use the exact same class scope.
+  const classTeacherIds = new Set();
+  classes.forEach(cls => {
+    if (Number(cls.teacherId) === Number(teacher.id)) classTeacherIds.add(Number(cls.id));
+    if (Number(cls.id) === Number(teacher.classId || 0)) classTeacherIds.add(Number(cls.id));
+    if (v66JSame(cls.name, teacher.classTeacher)) classTeacherIds.add(Number(cls.id));
+  });
+  tableAssignments.filter(a => a.isClassTeacher).forEach(a => classTeacherIds.add(Number(a.classId)));
+  jsonAssignments.filter(a => a.isClassTeacher).forEach(a => classTeacherIds.add(Number(a.classId)));
+  const classTeacherClasses = classes.filter(cls => classTeacherIds.has(Number(cls.id)));
 
   const subjectAssignments = v66JUnique([...tableAssignments, ...jsonAssignments], a => `${a.classId}:${v66JNorm(a.subject)}`)
     .map(a => {
@@ -1676,7 +1695,7 @@ exports.getClassTeacherReportPreviewDetails = async (req, res) => {
 
 exports.publishMarks = async (req,res) => {
   try {
-    const { classId, term='Term 1', year=new Date().getFullYear(), assessmentType, assessmentName } = req.body;
+    const { classId, term='Term 1', year=new Date().getFullYear(), assessmentType, assessmentName, publishAnyway=false, issueSummary=null } = req.body;
     const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
     const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
     const access = await v66CanEnterMarks(teacher, cls, null);
@@ -1700,10 +1719,10 @@ exports.publishMarks = async (req,res) => {
         curriculum:meta.system, reportType:'academic', generatedBy:req.user.id, publishedBy:req.user.id,
         publishedAt:now, snapshot, sourceRecordIds, checksum,
         assessmentType:assessmentType || null, assessmentName:assessmentName || null,
-        metadata:{ classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v143_immutable_curriculum_report_card' }
+        metadata:{ classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v1503_safe_report_review_lock', publishAnyway:!!publishAnyway, issueSummary:issueSummary || null }
       });
       if (saved.created || saved.unchanged) snapshots++;
     }
-    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. ${snapshots} curriculum-aware report card(s) saved.`, data:{ count, snapshots, classId:cls.id, term, year:Number(year), engine:'v102_curriculum_report_card' } });
+    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. ${snapshots} curriculum-aware report card(s) saved.${publishAnyway ? ' Published with unresolved-warning confirmation.' : ''}`, data:{ count, snapshots, classId:cls.id, term, year:Number(year), publishAnyway:!!publishAnyway, issueSummary:issueSummary || null, engine:'v1503_safe_report_review_lock' } });
   } catch(error) { console.error('V102 publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
