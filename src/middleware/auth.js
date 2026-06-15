@@ -117,8 +117,12 @@ const protect = async (req, res, next) => {
   }
 };
 
+const normalizeRole = (value) => String(value || '').toLowerCase().replace(/-/g, '_');
 const authorize = (...roles) => (req, res, next) => {
-  if (!roles.includes(req.user.role)) {
+  const allowed = roles.map(normalizeRole);
+  const candidates = [req.user?.role, req.effectiveRole, req.primaryRole, req.user?.primaryRole].map(normalizeRole).filter(Boolean);
+  const extra = Array.isArray(req.user?.preferences?.additionalRoles) ? req.user.preferences.additionalRoles.map(normalizeRole) : [];
+  if (!candidates.concat(extra).some(role => allowed.includes(role))) {
     return res.status(403).json({ success: false, message: 'Forbidden' });
   }
   next();

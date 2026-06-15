@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
 const { Op } = require('sequelize');
-const { ReportSnapshot, ReportShare, Student, Parent, StudentParent, Teacher, Class, User } = require('../models');
+const { ReportSnapshot, ReportShare, Student, Parent, StudentParent, Teacher, Class, User, TeacherSubjectAssignment } = require('../models');
 const snapshotService = require('../services/reportSnapshotService');
 
 function code(req) { return req.user?.schoolCode; }
@@ -19,7 +19,12 @@ async function canRead(req, report) {
   if (req.user.role === 'teacher') {
     const teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
     const cls = report.classId ? await Class.findOne({ where:{ id:report.classId, schoolCode:code(req) } }) : null;
-    return Boolean(teacher && cls && (Number(teacher.classId) === Number(cls.id) || Number(cls.teacherId) === Number(teacher.id)));
+    if (teacher && cls && (Number(teacher.classId) === Number(cls.id) || Number(cls.teacherId) === Number(teacher.id) || Number(cls.classTeacherId) === Number(teacher.id))) return true;
+    if (teacher && cls) {
+      const assignment = await TeacherSubjectAssignment.findOne({ where:{ teacherId:teacher.id, classId:cls.id, isClassTeacher:true } }).catch(() => null);
+      if (assignment) return true;
+    }
+    return false;
   }
   return false;
 }
@@ -141,6 +146,24 @@ async function streamReportPdf(res, report) {
   doc.end();
 }
 
+
+async function resolveRequestedStudentId(req, raw) {
+  if (req.user.role === 'student') return Number((await studentForUser(req.user.id))?.id) || -1;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n > 0) {
+    const direct = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ id:n, schoolCode:code(req) } }).catch(()=>null);
+    if (direct) return direct.id;
+    const byUser = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ userId:n, schoolCode:code(req) } }).catch(()=>null);
+    if (byUser) return byUser.id;
+  }
+  const text = String(raw || '').trim();
+  if (text) {
+    const byElimu = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ schoolCode:code(req), [Op.or]:[{ elimuid:text }, { admissionNumber:text }] } }).catch(()=>null);
+    if (byElimu) return byElimu.id;
+  }
+  return n || -1;
+}
+
 async function findReadableReport(req, where) {
   const report = await ReportSnapshot.findOne({ where:{ ...where, schoolCode:code(req) }, order:[['year','DESC'],['publishedAt','DESC'],['version','DESC']] });
   return (await canRead(req,report)) ? report : null;
@@ -156,12 +179,19 @@ exports.list = async (req,res) => {
     if (req.user.role === 'parent') {
       const parent = await Parent.findOne({ where:{ userId:req.user.id } });
       const links = parent ? await StudentParent.findAll({ where:{ parentId:parent.id } }) : [];
-      where.studentId = { [Op.in]:links.map(x=>x.studentId) };
+      const linkedIds = links.map(x=>Number(x.studentId)).filter(Boolean);
+      const requested = req.query.studentId ? await resolveRequestedStudentId(req, req.query.studentId) : null;
+      where.studentId = requested && linkedIds.includes(Number(requested)) ? requested : { [Op.in]:linkedIds };
     }
     if (req.user.role === 'teacher') {
       const teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
-      const classes = teacher ? await Class.findAll({ where:{ schoolCode:code(req), [Op.or]:[{ teacherId:teacher.id }, { id:teacher.classId || -1 }] }, attributes:['id'] }) : [];
-      where.classId = { [Op.in]:classes.map(c=>c.id) };
+      let ids = [];
+      if (teacher) {
+        const classes = await Class.findAll({ where:{ schoolCode:code(req), [Op.or]:[{ teacherId:teacher.id }, { classTeacherId:teacher.id }, { id:teacher.classId || -1 }] }, attributes:['id'] }).catch(()=>[]);
+        const assigned = await TeacherSubjectAssignment.findAll({ where:{ teacherId:teacher.id, isClassTeacher:true }, attributes:['classId'] }).catch(()=>[]);
+        ids = [...new Set([...classes.map(c=>c.id), ...assigned.map(a=>a.classId)].filter(Boolean).map(Number))];
+      }
+      where.classId = { [Op.in]:ids };
     }
     const rows = await snapshotService.listHistory(where, { limit:500, attributes:{ exclude:['sourceRecordIds'] } });
     res.json({ success:true, data:rows });
@@ -186,7 +216,8 @@ exports.downloadPdf = async (req,res) => {
 
 exports.downloadLatestPdf = async (req,res) => {
   try {
-    const report = await findReadableReport(req, { studentId:Number(req.params.studentId), status:'published', isCurrent:true });
+    const resolvedStudentId = await resolveRequestedStudentId(req, req.params.studentId);
+    const report = await findReadableReport(req, { studentId:resolvedStudentId, status:'published', isCurrent:true });
     if (!report) return res.status(404).json({ success:false, message:'This report card has not yet been published by the school.' });
     await streamReportPdf(res,report);
   } catch (error) { if (!res.headersSent) res.status(500).json({ success:false, message:error.message }); else res.end(); }

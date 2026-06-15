@@ -1,4 +1,4 @@
-# Shule AI v150.5 — Final Actual Logic Lock
+# Shule AI v150.6 — Final Actual Logic Lock
 
 Built from the safe v150.4/v149.8 line.
 

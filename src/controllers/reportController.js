@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
 const {
   AcademicRecord, ReportSnapshot, Student, User, AuditLog,
-  School, Class, Parent, StudentParent, Teacher, Attendance
+  School, Class, Parent, StudentParent, Teacher, Attendance, TeacherSubjectAssignment
 } = require('../models');
 const curriculumEngine = require('../services/curriculumStructureEngine');
 const selectionsService = require('../services/studentSubjectSelectionService');
@@ -18,7 +18,7 @@ function gradeFor(score, school, cls) {
 
 function defaultReportLogo() { return '/assets/logo.png'; }
 function logoForSchool(school) { return school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || school?.reportCardSettings?.logo || defaultReportLogo(); }
-function reportAssessmentSettings(school) { const raw = school?.settings?.curriculumEngine?.assessmentSettings || school?.settings?.reportCardSettings?.assessmentSettings || school?.reportCardSettings?.assessmentSettings || []; return Array.isArray(raw) && raw.length ? raw : [{key:'cat1',label:'CAT 1',assessmentType:'CAT 1',showOnReport:true,countInFinal:true,weight:10,displayOrder:1},{key:'cat2',label:'CAT 2',assessmentType:'CAT 2',showOnReport:true,countInFinal:true,weight:10,displayOrder:2},{key:'midterm',label:'Midterm',assessmentType:'Midterm',showOnReport:true,countInFinal:true,weight:20,displayOrder:3},{key:'endterm',label:'End Term',assessmentType:'End Term',showOnReport:true,countInFinal:true,weight:40,displayOrder:4},{key:'sba',label:'SBA / Project',assessmentType:'SBA',showOnReport:true,countInFinal:true,weight:20,displayOrder:5}]; }
+function reportAssessmentSettings(school) { const raw = school?.settings?.curriculumEngine?.assessmentSettings || school?.settings?.reportCardSettings?.assessmentSettings || school?.reportCardSettings?.assessmentSettings || []; const base = Array.isArray(raw) && raw.length ? raw : [{key:'opener',label:'Opener Exam',assessmentType:'Opener',type:'Opener',showOnReport:true,countInFinal:false,weight:0,displayOrder:1},{key:'cat1',label:'CAT 1',assessmentType:'CAT 1',type:'CAT',showOnReport:true,countInFinal:true,weight:10,displayOrder:2},{key:'cat2',label:'CAT 2',assessmentType:'CAT 2',type:'CAT',showOnReport:true,countInFinal:true,weight:10,displayOrder:3},{key:'midterm',label:'Midterm',assessmentType:'Midterm',type:'Midterm',showOnReport:true,countInFinal:true,weight:20,displayOrder:4},{key:'endterm',label:'End Term',assessmentType:'End Term',type:'EndTerm',showOnReport:true,countInFinal:true,weight:50,displayOrder:5},{key:'sba',label:'SBA / Project',assessmentType:'SBA',type:'SBA',showOnReport:true,countInFinal:true,weight:10,displayOrder:6}]; return base.filter(x=>x && x.isActive !== false).map((x,i)=>({ ...x, label:x.label||x.displayName||x.name||x.assessmentType||`Assessment ${i+1}`, assessmentType:x.assessmentType||x.type||x.label||'Custom', weight:Number(x.weight ?? x.weightPercent ?? 0), displayOrder:Number(x.displayOrder||i+1) })); }
 function normAssess(x){return String(x||'').toLowerCase().replace(/[^a-z0-9]+/g,'');}
 function recordMatchesAssessment(record, setting){ const keys=[record.assessmentType,record.assessmentName,record.testType,record.examType,record.type].map(normAssess); return keys.includes(normAssess(setting.assessmentType))||keys.includes(normAssess(setting.label))||keys.includes(normAssess(setting.key)); }
 
@@ -43,7 +43,10 @@ async function teacherOwnsClass(req, classId) {
   const teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
   if (!teacher || !classId) return false;
   if (Number(teacher.classId) === Number(classId)) return true;
-  return Boolean(await Class.findOne({ where:{ id:Number(classId), schoolCode:schoolCode(req), teacherId:teacher.id } }));
+  const cls = await Class.findOne({ where:{ id:Number(classId), schoolCode:schoolCode(req), [Op.or]:[{ teacherId:teacher.id }, { classTeacherId:teacher.id }] } }).catch(()=>null);
+  if (cls) return true;
+  const assignment = await TeacherSubjectAssignment.findOne({ where:{ teacherId:teacher.id, classId:Number(classId), isClassTeacher:true } }).catch(()=>null);
+  return !!assignment;
 }
 
 async function canRead(req, report) {
@@ -132,7 +135,7 @@ exports.generateReport = async (req,res) => {
       term, year:Number(year), curriculum:built.snapshot.curriculum, reportType:'academic',
       assessmentType, assessmentName, snapshot:built.snapshot, sourceRecordIds:built.records.map(record=>record.id),
       generatedBy:req.user.id, publishedBy:req.user.id, publishedAt:new Date(),
-      metadata:{ engine:'v149_final_selected_assessment_report_card', assessmentSettings:built.snapshot.assessmentSettings }
+      metadata:{ engine:'v1506_dynamic_assessment_report_card', assessmentSettings:built.snapshot.assessmentSettings, countedAssessments:built.snapshot.countedAssessments }
     });
     await AuditLog.create({ schoolCode:schoolCode(req), actorUserId:req.user.id, actorRole:req.user.role, module:'reports', action:'report_published', entityType:'ReportSnapshot', entityId:String(result.row.id), after:{ version:result.row.version, studentId:Number(studentId), term, year:Number(year) } }).catch(()=>null);
     res.status(result.created?201:200).json({ success:true, message:result.unchanged?'The identical published report already exists.':'Report card published as an immutable historical version.', data:result.row });

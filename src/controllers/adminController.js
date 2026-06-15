@@ -987,12 +987,26 @@ exports.updateAssessmentSettings = async (req, res) => {
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
     const incoming = Array.isArray(req.body.assessmentSettings) ? req.body.assessmentSettings : [];
     const defaults = curriculumEngine.defaultAssessmentSettings();
-    const byKey = new Map(defaults.map(x => [x.key, x]));
+    const safeKey = (value, idx) => String(value || `custom_${idx+1}`).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `custom_${idx+1}`;
     const sanitized = incoming.map((row, idx) => {
-      const key = String(row.key || row.assessmentType || '').toLowerCase().replace(/\s+/g, '');
-      const base = byKey.get(key) || row;
-      return { key: base.key || key || `custom_${idx+1}`, label: row.label || base.label || row.assessmentType || `Assessment ${idx+1}`, showOnReport: row.showOnReport !== false, countInFinal: row.countInFinal !== false, weight: Number(row.weight || 0), displayOrder: Number(row.displayOrder || idx + 1), assessmentType: row.assessmentType || base.assessmentType || row.label || 'Custom' };
-    }).filter(x => x.label);
+      const label = String(row.label || row.displayName || row.name || row.assessmentName || row.assessmentType || `Assessment ${idx+1}`).trim();
+      const type = String(row.type || row.assessmentType || label || 'Custom').trim();
+      return {
+        key: safeKey(row.key || `${type}_${label}`, idx),
+        name: label, label, displayName: label,
+        assessmentType: type, type,
+        curriculum: row.curriculum || 'any',
+        classLevel: row.classLevel || row.level || 'all',
+        showOnReport: row.showOnReport !== false,
+        countInFinal: row.countInFinal !== false,
+        weight: Number(row.weight ?? row.weightPercent ?? 0),
+        weightPercent: Number(row.weightPercent ?? row.weight ?? 0),
+        displayOrder: Number(row.displayOrder || idx + 1),
+        maxScore: Number(row.maxScore || 100),
+        gradingScale: row.gradingScale || null,
+        isActive: row.isActive !== false
+      };
+    }).filter(x => x.label && x.isActive !== false);
     const settings = v102BuildCurriculumSettings(school, { assessmentSettings: sanitized.length ? sanitized : defaults });
     school.settings = settings;
     await school.save();

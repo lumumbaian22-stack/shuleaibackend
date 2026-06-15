@@ -12,6 +12,7 @@ router.delete('/departments/:departmentId', chat.deleteDepartment);
 
 router.get('/teachers', chat.listTeacherDirectory);
 
+router.get('/teacher/class-parents', chat.listTeacherClassParents);
 router.get('/teacher/groups', chat.listTeacherGroups);
 router.post('/teacher/groups', chat.createTeacherGroup);
 router.get('/teacher/available-members', chat.listAvailableMembers);

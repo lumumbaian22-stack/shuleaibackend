@@ -1452,7 +1452,9 @@ exports.listClassReportSnapshots = async (req, res) => {
   try {
     const { classId, term, year } = req.query;
     const teacher = await v3Teacher(req.user.id); if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
-    const cls = await Class.findOne({ where:{ id:classId, schoolCode:req.user.schoolCode, isActive:true } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
+    const numericClassId = Number(classId);
+    if (!Number.isInteger(numericClassId) || numericClassId <= 0) return res.status(400).json({ success:false, message:'classId is required before loading saved class reports.' });
+    const cls = await Class.findOne({ where:{ id:numericClassId, schoolCode:req.user.schoolCode, [Op.or]:[{ isActive:true }, { isActive:null }] } }); if (!cls) return res.status(404).json({ success:false, message:'Class not found' });
     const access = await v66CanEnterMarks(teacher, cls, null);
     if (!access.isClassTeacher) return res.status(403).json({ success:false, message:'Only the class teacher can view saved reports for this class' });
     const students = await Student.unscoped().findAll({ where:v66StudentClassWhere(cls), attributes:['id'] });
@@ -1719,10 +1721,10 @@ exports.publishMarks = async (req,res) => {
         curriculum:meta.system, reportType:'academic', generatedBy:req.user.id, publishedBy:req.user.id,
         publishedAt:now, snapshot, sourceRecordIds, checksum,
         assessmentType:assessmentType || null, assessmentName:assessmentName || null,
-        metadata:{ classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v1503_safe_report_review_lock', publishAnyway:!!publishAnyway, issueSummary:issueSummary || null }
+        metadata:{ classId:cls.id, className:cls.name, assessmentType:assessmentType || null, assessmentName:assessmentName || null, engine:'v1506_dynamic_assessment_report_lock', publishAnyway:!!publishAnyway, issueSummary:issueSummary || null }
       });
       if (saved.created || saved.unchanged) snapshots++;
     }
-    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. ${snapshots} curriculum-aware report card(s) saved.${publishAnyway ? ' Published with unresolved-warning confirmation.' : ''}`, data:{ count, snapshots, classId:cls.id, term, year:Number(year), publishAnyway:!!publishAnyway, issueSummary:issueSummary || null, engine:'v1503_safe_report_review_lock' } });
+    res.json({ success:true, message:`${count} mark(s) published for ${cls.name}. ${snapshots} curriculum-aware report card(s) saved.${publishAnyway ? ' Published with unresolved-warning confirmation.' : ''}`, data:{ count, snapshots, classId:cls.id, term, year:Number(year), publishAnyway:!!publishAnyway, issueSummary:issueSummary || null, engine:'v1506_dynamic_assessment_report_lock' } });
   } catch(error) { console.error('V102 publish marks error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
