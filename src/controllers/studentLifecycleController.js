@@ -487,8 +487,11 @@ exports.transferOptions=async(req,res)=>{
   try{
     if(!['admin','super_admin','teacher'].includes(req.user.role))return res.status(403).json({success:false,message:'Forbidden'});
     const schoolCode=code(req);
-    const classes=await Class.findAll({where:{schoolCode,isActive:true},attributes:['id','name','grade','stream','teacherId','curriculum','levelCode'],order:[['name','ASC']]});
+    const activeClassWhere={schoolCode,[Op.or]:[{isActive:true},{isActive:null}]};
+    const classes=await Class.findAll({where:activeClassWhere,attributes:['id','name','grade','stream','teacherId','curriculum','levelCode','isActive'],order:[['grade','ASC'],['name','ASC'],['stream','ASC']]});
+    const classIds=classes.map(c=>Number(c.id)).filter(Boolean);
     let students=[];
+    const studentWhere={classId:{[Op.in]:classIds.length?classIds:[0]},[Op.or]:[{status:'active'},{status:null}]};
     if(req.user.role==='teacher'){
       const teacher=await Teacher.findOne({where:{userId:req.user.id}});
       const ownClasses=[];
@@ -498,10 +501,61 @@ exports.transferOptions=async(req,res)=>{
           if(ids.includes(Number(teacher.id)))ownClasses.push(cls);
         }
       }
-      if(ownClasses.length)students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{classId:{[Op.in]:ownClasses.map(c=>c.id)},status:'active'},include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name']},{model:Class,required:false,attributes:['id','name','grade','stream']}],attributes:['id','elimuid','classId','grade'],order:[[User,'name','ASC']]});
+      const ownIds=ownClasses.map(c=>Number(c.id)).filter(Boolean);
+      if(ownIds.length)students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{...studentWhere,classId:{[Op.in]:ownIds}},include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name','email','phone']},{model:Class,required:false,attributes:['id','name','grade','stream']}],attributes:['id','elimuid','classId','grade','status'],order:[[User,'name','ASC']]});
     }else{
-      students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{status:'active',classId:{[Op.in]:classes.map(c=>c.id)}},include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name']},{model:Class,required:false,attributes:['id','name','grade','stream']}],attributes:['id','elimuid','classId','grade'],order:[[User,'name','ASC']]});
+      students=await (Student.unscoped?Student.unscoped():Student).findAll({where:studentWhere,include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name','email','phone']},{model:Class,required:false,attributes:['id','name','grade','stream']}],attributes:['id','elimuid','classId','grade','status'],order:[[User,'name','ASC']]});
     }
     res.json({success:true,data:{classes,students}});
   }catch(error){fail(res,error);}
+};
+
+async function validateTransferOutPayload(req,{transaction,lock=false}={}){
+  const schoolCode=code(req);
+  const studentId=Number(req.body.studentId);
+  const effectiveDate=String(req.body.effectiveDate||'').slice(0,10);
+  const academicYear=Number(req.body.academicYear);
+  const term=enrollmentService.normalizeTerm(req.body.term);
+  const reason=String(req.body.reason||'').trim();
+  const targetSchoolName=String(req.body.targetSchoolName||req.body.toSchoolName||'').trim();
+  const targetClassName=String(req.body.targetClassName||req.body.toClassName||'').trim();
+  if(!['admin','super_admin'].includes(String(req.user.role||'').toLowerCase()))throw Object.assign(new Error('Only administrators can transfer a learner to another school.'),{status:403});
+  if(!studentId)throw Object.assign(new Error('Select the student being transferred.'),{status:400});
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate))throw Object.assign(new Error('Select a valid effective date.'),{status:400});
+  if(!Number.isInteger(academicYear)||academicYear<2000||academicYear>2200)throw Object.assign(new Error('Select a valid academic year.'),{status:400});
+  if(!term)throw Object.assign(new Error('Select Term 1, Term 2, or Term 3.'),{status:400});
+  if(!reason)throw Object.assign(new Error('Transfer reason is required.'),{status:400});
+  if(!targetSchoolName)throw Object.assign(new Error('Enter the receiving school name for an external transfer.'),{status:400});
+  const student=await enrollmentService.findStudentInSchool({schoolCode,studentId,transaction,lock});
+  if(!student)throw Object.assign(new Error('Student not found in this school.'),{status:404});
+  if(student.status!=='active')throw Object.assign(new Error('Only an active learner can be transferred out.'),{status:409});
+  const current=await enrollmentService.ensureCurrentEnrollment({student,schoolCode,academicYear,term,actorId:req.user.id,transaction});
+  const fromClass=current.classId?await Class.findOne({where:{id:current.classId,schoolCode},transaction}):null;
+  if(!fromClass)throw Object.assign(new Error('The learner has no current class to transfer from.'),{status:409});
+  return {schoolCode,student,current,fromClass,effectiveDate,academicYear,term,reason,targetSchoolName,targetClassName,note:String(req.body.note||'').trim()||null};
+}
+
+exports.previewTransferOut=async(req,res)=>{
+  const transaction=await sequelize.transaction();
+  try{
+    const data=await validateTransferOutPayload(req,{transaction});
+    const impact=await enrollmentService.buildImpactPreview({schoolCode:data.schoolCode,student:data.student,currentEnrollment:data.current,effectiveDate:data.effectiveDate,academicYear:data.academicYear,term:data.term,transaction});
+    await transaction.commit();
+    res.json({success:true,data:{student:{id:data.student.id,name:data.student.User?.name,elimuid:data.student.elimuid},fromClass:enrollmentService.publicClass(data.fromClass),movementType:'transfer_out',targetSchoolName:data.targetSchoolName,targetClassName:data.targetClassName,effectiveDate:data.effectiveDate,academicYear:data.academicYear,term:data.term,reason:data.reason,impactPreview:impact,warnings:[impact.requiresAcknowledgement?'This transfer out touches existing attendance, marks, or a published report. Acknowledgement is required.':null].filter(Boolean)}});
+  }catch(error){if(!transaction.finished)await transaction.rollback();fail(res,error);}
+};
+
+exports.createTransferOut=async(req,res)=>{
+  const transaction=await sequelize.transaction();
+  try{
+    const data=await validateTransferOutPayload(req,{transaction,lock:true});
+    const impact=await enrollmentService.buildImpactPreview({schoolCode:data.schoolCode,student:data.student,currentEnrollment:data.current,effectiveDate:data.effectiveDate,academicYear:data.academicYear,term:data.term,transaction});
+    if(impact.requiresAcknowledgement&&req.body.acknowledgeHistoricalImpact!==true){await transaction.rollback();return res.status(409).json({success:false,code:'HISTORICAL_IMPACT_ACK_REQUIRED',message:'This transfer out affects existing records. Review the preview and acknowledge the historical impact.',data:{impactPreview:impact}});}
+    await data.current.update({status:'closed',effectiveTo:enrollmentService.dayBefore(data.effectiveDate),endTerm:data.term,endedReason:'transfer_out',movementType:'transfer_out',movementReason:data.reason,closedBy:req.user.id,version:Number(data.current.version||1)+1,metadata:{...(data.current.metadata||{}),targetSchoolName:data.targetSchoolName,targetClassName:data.targetClassName,note:data.note}},{transaction,hooks:false});
+    await data.student.update({status:'transferred',classId:null,activeEnrollmentId:null,grade:data.fromClass?.name||data.student.grade},{transaction,hooks:false});
+    await AuditLog.create({schoolCode:data.schoolCode,actorUserId:req.user.id,actorRole:req.user.role,module:'student_lifecycle',action:'student_transfer_out',entityType:'Student',entityId:String(data.student.id),before:{classId:data.fromClass.id,status:'active'},after:{classId:null,status:'transferred',targetSchoolName:data.targetSchoolName,targetClassName:data.targetClassName},reason:data.reason,metadata:{effectiveDate:data.effectiveDate,term:data.term,academicYear:data.academicYear,note:data.note,impactPreview:impact}},{transaction});
+    await transaction.commit();
+    await realtime.emitToSchool(data.schoolCode,'student:transferred_out',{studentId:data.student.id,fromClassId:data.fromClass.id,targetSchoolName:data.targetSchoolName,effectiveDate:data.effectiveDate},{entityType:'Student',entityId:data.student.id,version:1}).catch(()=>null);
+    res.json({success:true,message:`${data.student.User?.name||'Student'} transferred out from ${data.fromClass.name} to ${data.targetSchoolName}. Historical records remain preserved.`,data:{studentId:data.student.id,fromClass:enrollmentService.publicClass(data.fromClass),targetSchoolName:data.targetSchoolName,targetClassName:data.targetClassName,effectiveDate:data.effectiveDate,status:'transferred'}});
+  }catch(error){if(!transaction.finished)await transaction.rollback();fail(res,error);}
 };

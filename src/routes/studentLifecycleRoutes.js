@@ -19,6 +19,8 @@ router.get('/transfer-options',authorize('admin','super_admin','teacher'),ctrl.t
 router.post('/transfers/preview',authorize('admin','super_admin','teacher'),ctrl.previewTransfer);
 router.get('/transfers',authorize('admin','super_admin','teacher'),ctrl.listTransfers);
 router.post('/transfers',authorize('admin','super_admin'),ctrl.createTransfer);
+router.post('/school-transfer-out/preview',authorize('admin','super_admin'),ctrl.previewTransferOut);
+router.post('/school-transfer-outs',authorize('admin','super_admin'),ctrl.createTransferOut);
 router.post('/transfer-requests',authorize('teacher'),ctrl.requestTransfer);
 router.get('/transfers/:id',authorize('admin','super_admin','teacher'),ctrl.getTransfer);
 router.post('/transfers/:id/approve',authorize('admin','super_admin'),ctrl.approveTransfer);
