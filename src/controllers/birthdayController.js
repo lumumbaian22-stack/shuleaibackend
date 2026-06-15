@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { BirthdayEvent, Student, User, Class, Teacher, School } = require('../models');
+const { BirthdayEvent, Student, User, Class, Teacher, School, TeacherSubjectAssignment } = require('../models');
 const birthdayService = require('../services/birthdayService');
 
 const DEFAULT_SETTINGS = {
@@ -48,11 +48,12 @@ async function teacherClassIds(req) {
   if (req.user.role !== 'teacher') return null;
   const teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
   if (!teacher) return [];
-  const classes = await Class.findAll({
-    where:{ schoolCode:schoolCode(req), [Op.or]:[{ teacherId:teacher.id }, ...(teacher.classId ? [{ id:teacher.classId }] : [])] },
+  const directClasses = await Class.findAll({
+    where:{ schoolCode:schoolCode(req), [Op.or]:[{ teacherId:teacher.id }, ...(teacher.classId ? [{ id:teacher.classId }] : []), ...(teacher.classTeacher ? [{ name:teacher.classTeacher }] : [])] },
     attributes:['id']
-  });
-  return classes.map(c => c.id);
+  }).catch(()=>[]);
+  const assignmentRows = await TeacherSubjectAssignment.findAll({ where:{ teacherId:teacher.id, isClassTeacher:true }, attributes:['classId'] }).catch(()=>[]);
+  return [...new Set([...directClasses.map(c=>c.id), ...assignmentRows.map(a=>a.classId)].filter(Boolean).map(Number))];
 }
 
 exports.settings = async (req,res) => {
