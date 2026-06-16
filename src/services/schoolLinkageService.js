@@ -9,6 +9,46 @@ function uniqNums(values = []) { return [...new Set(values.map(Number).filter(Bo
 function userStudentInclude(schoolCode, attrs) {
   return { model: User, required: true, where: { schoolCode, role: 'student', isActive: true }, attributes: attrs || ['id', 'name', 'email', 'phone', 'profileImage', 'profilePicture', 'schoolCode'] };
 }
+
+function gradeVariants(value) {
+  const raw = String(value || '').trim();
+  const n = norm(raw);
+  const compact = n.replace(/\s+/g, '');
+  const spaced = n.replace(/^(pp|grade|form)(\d+)/i, '$1 $2').replace(/(\d+)([a-z])$/i, '$1 $2');
+  const out = new Set([raw, n, compact, spaced, spaced.replace(/\s+/g, '')].map(v => String(v || '').trim().toLowerCase()).filter(Boolean));
+  const m = n.match(/^(?:grade\s*)?(\d{1,2})([a-z])$/i);
+  if (m) { out.add(`grade ${m[1]} ${m[2]}`); out.add(`grade ${m[1]}${m[2]}`); }
+  const m2 = n.match(/^grade\s*(\d{1,2})([a-z])$/i);
+  if (m2) { out.add(`${m2[1]}${m2[2]}`); out.add(`${m2[1]} ${m2[2]}`); }
+  return [...out];
+}
+function classTokens(cls = {}) {
+  return [...new Set([
+    cls.name,
+    cls.grade,
+    [cls.grade, cls.stream].filter(Boolean).join(' '),
+    [cls.name, cls.stream].filter(Boolean).join(' '),
+    String(cls.name || '').replace(/\s+/g, ''),
+    String(cls.grade || '').replace(/\s+/g, '')
+  ].map(v => String(v || '').trim().toLowerCase()).filter(Boolean))];
+}
+async function resolveClassByStudentGrade(schoolCode, grade, options = {}) {
+  if (!schoolCode || !grade) return null;
+  const variants = gradeVariants(grade);
+  const classes = await Class.findAll({ where: { schoolCode, ...activeOrNull() }, order: [['isActive','DESC'], ['id','ASC']], transaction: options.transaction }).catch(() => []);
+  if (!classes.length) return null;
+  // Highest confidence: exact class name match, e.g. PP2 NORTH, Grade 6 EAST.
+  let matches = classes.filter(cls => variants.includes(norm(cls.name)) || variants.includes(String(cls.name || '').trim().toLowerCase().replace(/\s+/g, '')));
+  if (matches.length === 1) return matches[0];
+  // Next: exact grade + stream match.
+  matches = classes.filter(cls => cls.stream && variants.includes(norm(`${cls.grade || ''} ${cls.stream || ''}`)));
+  if (matches.length === 1) return matches[0];
+  // Last safe fallback: grade-only only if one active class exists for that grade in the school.
+  matches = classes.filter(cls => variants.includes(norm(cls.grade)) || variants.includes(String(cls.grade || '').trim().toLowerCase().replace(/\s+/g, '')));
+  if (matches.length === 1) return matches[0];
+  return null;
+}
+
 function legacyClassNames(cls = {}) {
   return [...new Set([
     cls.name,
@@ -107,9 +147,7 @@ async function resolveStudentClass(studentOrId, schoolCode) {
     const cls = await Class.findOne({ where: { id: Number(enrollment.classId), schoolCode, ...activeOrNull() } }).catch(() => null);
     if (cls) return cls;
   }
-  const g = norm(student.grade || student.className || student.currentClass);
-  if (!g) return null;
-  return Class.findOne({ where: { schoolCode, ...activeOrNull(), [Op.or]: [{ name: student.grade }, { grade: student.grade }, { stream: student.grade }] } }).catch(() => null);
+  return resolveClassByStudentGrade(schoolCode, student.grade || student.className || student.currentClass);
 }
 async function resolveParentLinkedStudents(parentUserId, schoolCode) {
   const parent = await Parent.findOne({ where: { userId: parentUserId } }).catch(() => null);
@@ -154,4 +192,4 @@ async function resolveTeacherClassParents(teacherUserId, schoolCode) {
   });
   return { classes, students, rows };
 }
-module.exports = { activeOrNull, legacyClassNames, studentClassWhereForClasses, resolveTeacherProfile, resolveTeacherAssignedClasses, resolveClassStudents, resolveStudentClass, resolveParentLinkedStudents, resolveTeacherClassParents };
+module.exports = { activeOrNull, legacyClassNames, studentClassWhereForClasses, resolveClassByStudentGrade, resolveTeacherProfile, resolveTeacherAssignedClasses, resolveClassStudents, resolveStudentClass, resolveParentLinkedStudents, resolveTeacherClassParents };

@@ -18,6 +18,26 @@ function normalizeTerm(value){ const t=String(value||'').trim().replace(/^term\s
 function nextPeriod(term,year){ if(term==='Term 1')return {term:'Term 2',year};if(term==='Term 2')return {term:'Term 3',year};return {term:'Term 1',year:Number(year)+1}; }
 function money(value){ const n=Math.round(Number(value||0));return Number.isFinite(n)?n:0; }
 function publicClass(cls){ return cls?{id:cls.id,name:cls.name,grade:cls.grade,stream:cls.stream,curriculum:cls.curriculum,levelCode:cls.levelCode}:null; }
+function normalizeClassText(value){ return String(value||'').trim().toLowerCase().replace(/\s+/g,' '); }
+function gradeVariants(value){
+  const raw=normalizeClassText(value); if(!raw)return [];
+  const out=new Set([raw, raw.replace(/\s+/g,'')]);
+  const spaced=raw.replace(/^(pp|grade|form)(\d+)/i,'$1 $2').replace(/(\d+)([a-z])$/i,'$1 $2');
+  out.add(spaced); out.add(spaced.replace(/\s+/g,''));
+  const m=raw.match(/^(?:grade\s*)?(\d{1,2})([a-z])$/i); if(m){out.add(`grade ${m[1]} ${m[2]}`); out.add(`grade ${m[1]}${m[2]}`);}
+  return [...out];
+}
+async function resolveSafeClassByGrade(schoolCode, grade, transaction){
+  const variants=gradeVariants(grade); if(!variants.length)return null;
+  const classes=await Class.findAll({where:{schoolCode,isActive:true},order:[['id','ASC']],transaction}).catch(()=>[]);
+  let matches=classes.filter(c=>variants.includes(normalizeClassText(c.name))||variants.includes(String(c.name||'').toLowerCase().replace(/\s+/g,'')));
+  if(matches.length===1)return matches[0];
+  matches=classes.filter(c=>c.stream&&variants.includes(normalizeClassText(`${c.grade||''} ${c.stream||''}`)));
+  if(matches.length===1)return matches[0];
+  matches=classes.filter(c=>variants.includes(normalizeClassText(c.grade))||variants.includes(String(c.grade||'').toLowerCase().replace(/\s+/g,'')));
+  if(matches.length===1)return matches[0];
+  return null;
+}
 async function classTeacherIdsForClass({cls,schoolCode,transaction}){
   if(!cls)return [];
   const ids=[];
@@ -70,11 +90,12 @@ async function ensureCurrentEnrollment({student,schoolCode,academicYear,term,act
   }
   let row=rows[0]||null;
   if(!row){
-    const currentClass=student.classId?await Class.findOne({where:{id:student.classId,schoolCode},transaction}):null;
+    let currentClass=student.classId?await Class.findOne({where:{id:student.classId,schoolCode},transaction}):null;
+    if(!currentClass && student.grade) currentClass=await resolveSafeClassByGrade(schoolCode, student.grade, transaction);
     const currentClassTeacherId=await primaryClassTeacherId({cls:currentClass,schoolCode,transaction});
-    row=await StudentEnrollment.create({schoolCode,studentId:student.id,classId:student.classId||null,stream:currentClass?.stream||null,academicYear:Number(academicYear),status:'active',effectiveFrom:student.enrollmentDate?new Date(student.enrollmentDate).toISOString().slice(0,10):`${academicYear}-01-01`,startTerm:term||null,classTeacherIdAtStart:currentClassTeacherId,createdBy:actorId,movementType:'admission_migration',movementReason:'Created from current student class pointer',metadata:{migratedFromStudent:true}},{transaction});
+    row=await StudentEnrollment.create({schoolCode,studentId:student.id,classId:currentClass?.id||student.classId||null,stream:currentClass?.stream||null,academicYear:Number(academicYear),status:'active',effectiveFrom:student.enrollmentDate?new Date(student.enrollmentDate).toISOString().slice(0,10):`${academicYear}-01-01`,startTerm:term||null,classTeacherIdAtStart:currentClassTeacherId,createdBy:actorId,movementType:'admission_migration',movementReason:'Created from current student class pointer or safe grade match',metadata:{migratedFromStudent:true,resolvedFromGrade:!student.classId&&!!currentClass}},{transaction});
   }
-  if(Number(student.activeEnrollmentId)!==Number(row.id))await student.update({activeEnrollmentId:row.id},{transaction,hooks:false});
+  if(Number(student.activeEnrollmentId)!==Number(row.id) || (!student.classId && row.classId))await student.update({activeEnrollmentId:row.id,classId:row.classId||student.classId,grade:row.classId?(await Class.findByPk(row.classId,{transaction}))?.name||student.grade:student.grade},{transaction,hooks:false});
   return row;
 }
 

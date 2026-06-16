@@ -3,6 +3,7 @@ const { sequelize, Student, AcademicRecord, Attendance, Message, User, Class, Te
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 const schoolFeatureService = require('../services/schoolFeatureService');
+const { resolveStudentClass, resolveClassStudents } = require('../services/schoolLinkageService');
 
 // Helper: get grade from score using the school's curriculum (simplified)
 function getGradeFromScore(score, curriculum, level) {
@@ -506,13 +507,9 @@ exports.sendGroupMessage = async (req, res) => {
     const { content, replyToId } = req.body;
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
-    const classWhere = student.classId
-      ? { classId:student.classId }
-      : { classId:null, grade:student.grade };
-    const classmates = await Student.findAll({
-      where: { ...classWhere, status:'active', id: { [Op.ne]: student.id } },
-      include:[{ model:User, where:{ schoolCode:req.user.schoolCode, role:'student', isActive:true }, attributes:['id'] }]
-    });
+    const currentClass = await resolveStudentClass(student, req.user.schoolCode);
+    if (!currentClass) return res.status(400).json({ success:false, message:'Your class is not assigned yet.' });
+    const classmates = (await resolveClassStudents([currentClass], req.user.schoolCode, { userAttributes:['id'] })).filter(s => Number(s.id) !== Number(student.id));
     const recipients = classmates.map(s => s.userId);
     const messages = recipients.map(receiverId => ({
       senderId: req.user.id,
@@ -540,13 +537,9 @@ exports.getGroupMessages = async (req, res) => {
   try {
     const student = await Student.findOne({ where: { userId: req.user.id } });
     if (!student) return res.status(404).json({ success: false });
-    const classWhere = student.classId
-      ? { classId:student.classId }
-      : { classId:null, grade:student.grade };
-    const classmates = await Student.findAll({
-      where:{ ...classWhere, status:'active', id:{ [Op.ne]:student.id } },
-      include:[{ model:User, where:{ schoolCode:req.user.schoolCode, role:'student', isActive:true } }]
-    });
+    const currentClass = await resolveStudentClass(student, req.user.schoolCode);
+    if (!currentClass) return res.json({ success:true, data:[] });
+    const classmates = (await resolveClassStudents([currentClass], req.user.schoolCode)).filter(s => Number(s.id) !== Number(student.id));
     const classmateUserIds = classmates.map(s => s.User.id);
     const messages = await Message.findAll({
       where: {

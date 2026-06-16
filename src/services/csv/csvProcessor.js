@@ -2,7 +2,7 @@ const fs = require('fs');
 const csv = require('csv-parser');
 const { Op } = require('sequelize');
 const { generateTemporaryPassword } = require('../../utils/passwords');
-const { sequelize, Student, User, Parent, StudentParent, Class, Teacher, AcademicRecord, Attendance } = require('../../models');
+const { sequelize, Student, User, Parent, StudentParent, Class, Teacher, StudentEnrollment, AcademicRecord, Attendance } = require('../../models');
 
 function value(row, ...keys) {
   for (const key of keys) {
@@ -30,6 +30,30 @@ function parseDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 }
+
+async function createActiveEnrollmentForStudent({ student, targetClass, schoolCode, actorId, transaction }) {
+  if (!student || !targetClass) return null;
+  const year = Number(targetClass.academicYear) || new Date().getFullYear();
+  const effectiveFrom = student.enrollmentDate ? new Date(student.enrollmentDate).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
+  const enrollment = await StudentEnrollment.create({
+    schoolCode,
+    studentId: student.id,
+    classId: targetClass.id,
+    stream: targetClass.stream || null,
+    academicYear: year,
+    status: 'active',
+    effectiveFrom,
+    startTerm: 'Term 1',
+    createdBy: actorId || null,
+    classTeacherIdAtStart: targetClass.teacherId || null,
+    movementType: 'admission',
+    movementReason: 'Created during CSV admission/upload',
+    metadata: { source: 'csv_upload_v1509' }
+  }, { transaction });
+  await student.update({ classId: targetClass.id, grade: targetClass.name, activeEnrollmentId: enrollment.id }, { transaction, hooks:false });
+  return enrollment;
+}
+
 
 class CSVProcessor {
   constructor(schoolCode, userId, role = 'teacher') {
@@ -162,6 +186,7 @@ class CSVProcessor {
           isPrefect:['true','yes','1'].includes(normal(value(row,'isPrefect','is_prefect'))),
           status:'active'
         },{transaction});
+        await createActiveEnrollmentForStudent({ student, targetClass, schoolCode:this.schoolCode, actorId:this.userId, transaction });
         await this.linkParent(student,name,value(row,'parentName','parent_name'),parentEmail,parentPhone,value(row,'parentRelationship','relationship'),transaction);
         await transaction.commit();
         created++; classSummary[targetClass.name]=(classSummary[targetClass.name]||0)+1;

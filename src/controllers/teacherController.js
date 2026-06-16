@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');
 const { Op } = require('sequelize');
-const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School, Task, TeacherSubjectAssignment, ReportSnapshot, Admin, Fee } = require('../models');
+const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School, Task, TeacherSubjectAssignment, ReportSnapshot, Admin, Fee, StudentEnrollment } = require('../models');
 const reportSnapshotService = require('../services/reportSnapshotService');
 const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
@@ -21,6 +21,52 @@ function safeTempCsvPath(originalName) {
   const dir = process.env.UPLOAD_TMP_DIR || path.join(process.cwd(), 'uploads', 'tmp');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, `${Date.now()}-${safe}`);
+}
+
+
+function normalizeClassTextV1509(value){ return String(value||'').trim().toLowerCase().replace(/\s+/g,' '); }
+function gradeVariantsV1509(value){
+  const raw=normalizeClassTextV1509(value); if(!raw)return [];
+  const out=new Set([raw, raw.replace(/\s+/g,'')]);
+  const spaced=raw.replace(/^(pp|grade|form)(\d+)/i,'$1 $2').replace(/(\d+)([a-z])$/i,'$1 $2');
+  out.add(spaced); out.add(spaced.replace(/\s+/g,''));
+  const m=raw.match(/^(?:grade\s*)?(\d{1,2})([a-z])$/i); if(m){out.add(`grade ${m[1]} ${m[2]}`); out.add(`grade ${m[1]}${m[2]}`);}
+  return [...out];
+}
+async function resolveSafeClassForNewStudent({ schoolCode, grade, classId }) {
+  const where={ schoolCode, isActive:true };
+  const classes=await Class.findAll({ where, order:[['id','ASC']] }).catch(()=>[]);
+  if(classId){ const cls=classes.find(c=>Number(c.id)===Number(classId)); if(cls)return cls; }
+  const variants=gradeVariantsV1509(grade); if(!variants.length)return null;
+  let matches=classes.filter(c=>variants.includes(normalizeClassTextV1509(c.name))||variants.includes(String(c.name||'').toLowerCase().replace(/\s+/g,'')));
+  if(matches.length===1)return matches[0];
+  matches=classes.filter(c=>c.stream&&variants.includes(normalizeClassTextV1509(`${c.grade||''} ${c.stream||''}`)));
+  if(matches.length===1)return matches[0];
+  matches=classes.filter(c=>variants.includes(normalizeClassTextV1509(c.grade))||variants.includes(String(c.grade||'').toLowerCase().replace(/\s+/g,'')));
+  if(matches.length===1)return matches[0];
+  return null;
+}
+async function createEnrollmentForNewStudent({ student, classItem, schoolCode, actorId, transaction=null }) {
+  if(!student || !classItem) return null;
+  const year=Number(classItem.academicYear)||new Date().getFullYear();
+  const effectiveFrom=student.enrollmentDate ? new Date(student.enrollmentDate).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
+  const enrollment=await StudentEnrollment.create({
+    schoolCode,
+    studentId: student.id,
+    classId: classItem.id,
+    stream: classItem.stream || null,
+    academicYear: year,
+    status: 'active',
+    effectiveFrom,
+    startTerm: 'Term 1',
+    createdBy: actorId || null,
+    classTeacherIdAtStart: classItem.teacherId || null,
+    movementType: 'admission',
+    movementReason: 'Created during teacher/manual admission',
+    metadata: { source:'teacher_manual_or_csv_v1509' }
+  }, { transaction });
+  await student.update({ classId:classItem.id, grade:classItem.name, activeEnrollmentId:enrollment.id }, { transaction, hooks:false });
+  return enrollment;
 }
 
 async function linkParentToStudentSafely(parentId, studentId) {
@@ -206,7 +252,7 @@ exports.getMyStudents = async (req, res) => {
 // @access  Private/Teacher
 exports.addStudent = async (req, res) => {
   try {
-    const { name, grade, parentEmail, dateOfBirth, gender } = req.body;
+    const { name, grade, parentEmail, dateOfBirth, gender, classId } = req.body;
     
     if (!name || !grade) {
       return res.status(400).json({ success: false, message: 'Student name and grade are required' });
@@ -224,12 +270,15 @@ exports.addStudent = async (req, res) => {
       firstLogin: true
     });
 
+    const classItem = await resolveSafeClassForNewStudent({ schoolCode:req.user.schoolCode, grade, classId });
     const student = await Student.create({
       userId: user.id,
-      grade: grade,
+      grade: classItem?.name || grade,
+      classId: classItem?.id || null,
       dateOfBirth: dateOfBirth,
       gender: gender
     });
+    if (classItem) await createEnrollmentForNewStudent({ student, classItem, schoolCode:req.user.schoolCode, actorId:req.user.id });
 
     if (parentEmail) {
       try {
@@ -1045,6 +1094,7 @@ exports.uploadStudentsCSV = async (req,res) => {
         const name = row.name || row.fullName || row.studentName; if (!name) { errors.push({ row, error:'Missing name' }); continue; }
         const user = await User.create({ name, email: row.email || null, phone: row.phone || null, password: generateTemporaryPassword(), role:'student', schoolCode:req.user.schoolCode, isActive:true, firstLogin:true });
         const student = await Student.create({ userId:user.id, classId:classItem.id, grade:classItem.name, dateOfBirth: row.dob || row.dateOfBirth || null, gender: row.gender || null, assessmentNumber: row.assessmentNumber || row.assessment_number || null, nemisNumber: row.nemisNumber || row.nemis_number || null, location: row.location || null, parentName: row.parentName || row.parent_name || null, parentEmail: row.parentEmail || row.parent_email || null, parentPhone: row.parentPhone || row.parent_phone || null, parentRelationship: row.parentRelationship || row.relationship || 'guardian', isPrefect: String(row.isPrefect || '').toLowerCase() === 'true' });
+        await createEnrollmentForNewStudent({ student, classItem, schoolCode:req.user.schoolCode, actorId:req.user.id });
         elimuids.push({ name, elimuid:student.elimuid, assessmentNumber:student.assessmentNumber }); successCount++;
       } catch(err) { errors.push({ row, error:err.message }); } }
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);

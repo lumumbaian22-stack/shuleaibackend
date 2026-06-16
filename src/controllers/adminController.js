@@ -1,4 +1,5 @@
 const { Op } = require('sequelize');
+const { resolveClassStudents, resolveStudentClass } = require('../services/schoolLinkageService');
 const { User, Teacher, Student, Parent, School, Alert, Class, TeacherSubjectAssignment } = require('../models');
 const { createAlert } = require('../services/notificationService');
 
@@ -259,14 +260,21 @@ exports.getClassStudents = async (req, res) => {
     const { id } = req.params;
     const classItem = await Class.findOne({ where: { id, schoolCode: req.user.schoolCode, isActive: true } });
     if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
-    const students = await Student.findAll({
-      where: { status:{ [Op.ne]:'inactive' }, [Op.or]: [{ classId: id }, { [Op.and]:[{ classId:null }, { grade:classItem.name }] }] },
-      include: [
-        { model: User, attributes: ['id', 'name', 'email'], where:{ schoolCode:req.user.schoolCode }, required:true },
-        { model: Parent, as: 'parents', include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }] }
-      ],
-      order: [['createdAt', 'DESC']]
-    });
+    let students = await resolveClassStudents([classItem], req.user.schoolCode, { order:[['createdAt','DESC']] });
+    const studentIds = students.map(st => st.id);
+    if (studentIds.length) {
+      const hydrated = await Student.findAll({
+        where:{ id:{ [Op.in]:studentIds } },
+        include:[
+          { model: User, attributes:['id','name','email','phone','profileImage','profilePicture','schoolCode'], where:{ schoolCode:req.user.schoolCode }, required:true },
+          { model: Parent, as:'parents', include:[{ model: User, attributes:['id','name','email','phone','profileImage','profilePicture'] }] },
+          { model: Class, required:false, attributes:['id','name','grade','stream'] }
+        ],
+        order:[['createdAt','DESC']]
+      });
+      const position = new Map(studentIds.map((sid, i) => [Number(sid), i]));
+      students = hydrated.sort((a,b)=>(position.get(Number(a.id))??0)-(position.get(Number(b.id))??0));
+    }
     res.json({ success: true, data: students });
   } catch (error) {
     console.error('Get class students error:', error);
@@ -946,7 +954,7 @@ exports.getStudentSubjectSelection = async (req, res) => {
   try {
     const student = await Student.findByPk(req.params.studentId, { include:[{ model: User, attributes:['id','name','schoolCode'] }] });
     if (!student || student.User?.schoolCode !== req.user.schoolCode) return res.status(404).json({ success:false, message:'Student not found in this school' });
-    const classItem = student.classId ? await v102ClassWithScope(student.classId, req.user.schoolCode) : await Class.findOne({ where:{ schoolCode:req.user.schoolCode, isActive:true, [Op.or]:[{ name:student.grade }, { grade:student.grade }] } });
+    const classItem = student.classId ? await v102ClassWithScope(student.classId, req.user.schoolCode) : await resolveStudentClass(student, req.user.schoolCode);
     const school = await v102GetSchool(req.user.schoolCode);
     const eligibleSubjects = classItem ? curriculumEngine.getEligibleSubjectsForClass(school, classItem) : [];
     const selections = await listStudentSubjectSelections({ schoolCode:req.user.schoolCode, studentId:student.id, classId:classItem?.id || null });
