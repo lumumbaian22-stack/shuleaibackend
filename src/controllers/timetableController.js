@@ -20,6 +20,7 @@ const { Timetable, Class, Teacher, User, Student, Parent, TeacherSubjectAssignme
 const realtime = require('../services/realtimeService');
 const moment = require('moment');
 const { Op } = require('sequelize');
+const schoolLinkageService = require('../services/schoolLinkageService');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
@@ -791,7 +792,7 @@ exports.getForStudentMe = async (req, res) => { try {
   const student = await Student.unscoped().findOne({ where: { userId: req.user.id }, include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'] }] });
   if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
   const schoolId = student.User?.schoolCode || req.user.schoolCode;
-  const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] } }); const cls = resolveClassForStudent(student, classes);
+  const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] } }); const cls = await schoolLinkageService.resolveStudentClass(student, schoolId) || resolveClassForStudent(student, classes);
   const tt = await findActiveTimetable(schoolId, req.query);
   const block = findUsableClassBlock(tt, cls); const slots = enrichTimetableSlots(block ? filterClassTimetable(block) : []); const status = timetableStatusPayload(slots);
   res.json({ success: true, data: { student, classInfo: cls, timetable: slots, updates: studyUpdates(slots), todayLessons:status.todayLessons, currentLesson:status.currentLesson, nextLesson:status.nextLesson, term: tt?.term, year: tt?.year, scope: tt?.scope, published: !!tt?.isPublished } });
@@ -802,7 +803,7 @@ exports.getForParentChild = async (req, res) => { try {
   if (!student || String(student.User?.schoolCode || '') !== String(req.user.schoolCode || '')) return res.status(404).json({ success: false, message: 'Student not found in this school' });
   if (parent.hasStudent) { const ok = await parent.hasStudent(student); if (!ok) return res.status(403).json({ success: false, message: 'Child not linked to this parent' }); }
   const schoolId = student.User?.schoolCode || req.user.schoolCode;
-  const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] } }); const cls = resolveClassForStudent(student, classes);
+  const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] } }); const cls = await schoolLinkageService.resolveStudentClass(student, schoolId) || resolveClassForStudent(student, classes);
   const tt = await findActiveTimetable(schoolId, req.query);
   const block = findUsableClassBlock(tt, cls); const slots = enrichTimetableSlots(block ? filterClassTimetable(block) : []); const status = timetableStatusPayload(slots);
   res.json({ success: true, data: { child: student, classInfo: cls, timetable: slots, updates: studyUpdates(slots), todayLessons:status.todayLessons, currentLesson:status.currentLesson, nextLesson:status.nextLesson, term: tt?.term, year: tt?.year, scope: tt?.scope, published: !!tt?.isPublished, premiumStatusPreview: true } });

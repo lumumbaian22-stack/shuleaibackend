@@ -4,6 +4,7 @@ const path = require('path');
 const PDFDocument = require('pdfkit');
 const { Op } = require('sequelize');
 const { ReportSnapshot, ReportShare, Student, Parent, StudentParent, Teacher, Class, User, TeacherSubjectAssignment } = require('../models');
+const schoolLinkageService = require('../services/schoolLinkageService');
 const snapshotService = require('../services/reportSnapshotService');
 
 function code(req) { return req.user?.schoolCode; }
@@ -19,7 +20,7 @@ async function canRead(req, report) {
   if (req.user.role === 'teacher') {
     const teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
     const cls = report.classId ? await Class.findOne({ where:{ id:report.classId, schoolCode:code(req) } }) : null;
-    if (teacher && cls && (Number(teacher.classId) === Number(cls.id) || Number(cls.teacherId) === Number(teacher.id) || Number(cls.classTeacherId) === Number(teacher.id))) return true;
+    if (teacher && cls && (Number(teacher.classId) === Number(cls.id) || Number(cls.teacherId) === Number(teacher.id))) return true;
     if (teacher && cls) {
       const assignment = await TeacherSubjectAssignment.findOne({ where:{ teacherId:teacher.id, classId:cls.id, isClassTeacher:true } }).catch(() => null);
       if (assignment) return true;
@@ -148,17 +149,21 @@ async function streamReportPdf(res, report) {
 
 
 async function resolveRequestedStudentId(req, raw) {
-  if (req.user.role === 'student') return Number((await studentForUser(req.user.id))?.id) || -1;
+  const scopedInclude = [{ model: User, required: true, where: { schoolCode: code(req), role: 'student' }, attributes: ['id','name','schoolCode'] }];
+  if (req.user.role === 'student') {
+    const mine = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ userId:req.user.id }, include:scopedInclude }).catch(()=>null);
+    return Number(mine?.id) || -1;
+  }
   const n = Number(raw);
   if (Number.isInteger(n) && n > 0) {
-    const direct = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ id:n, schoolCode:code(req) } }).catch(()=>null);
+    const direct = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ id:n }, include:scopedInclude }).catch(()=>null);
     if (direct) return direct.id;
-    const byUser = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ userId:n, schoolCode:code(req) } }).catch(()=>null);
+    const byUser = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ userId:n }, include:scopedInclude }).catch(()=>null);
     if (byUser) return byUser.id;
   }
   const text = String(raw || '').trim();
   if (text) {
-    const byElimu = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ schoolCode:code(req), [Op.or]:[{ elimuid:text }, { admissionNumber:text }] } }).catch(()=>null);
+    const byElimu = await (Student.unscoped ? Student.unscoped() : Student).findOne({ where:{ [Op.or]:[{ elimuid:text }, { admissionNumber:text }] }, include:scopedInclude }).catch(()=>null);
     if (byElimu) return byElimu.id;
   }
   return n || -1;
@@ -187,7 +192,7 @@ exports.list = async (req,res) => {
       const teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
       let ids = [];
       if (teacher) {
-        const classes = await Class.findAll({ where:{ schoolCode:code(req), [Op.or]:[{ teacherId:teacher.id }, { classTeacherId:teacher.id }, { id:teacher.classId || -1 }] }, attributes:['id'] }).catch(()=>[]);
+        const classes = teacher ? await schoolLinkageService.resolveTeacherAssignedClasses(req.user.id, code(req), { classTeacherOnly:true }).catch(()=>[]) : [];
         const assigned = await TeacherSubjectAssignment.findAll({ where:{ teacherId:teacher.id, isClassTeacher:true }, attributes:['classId'] }).catch(()=>[]);
         ids = [...new Set([...classes.map(c=>c.id), ...assigned.map(a=>a.classId)].filter(Boolean).map(Number))];
       }

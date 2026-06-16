@@ -6,6 +6,7 @@ const {
 const curriculumEngine = require('../services/curriculumStructureEngine');
 const selectionsService = require('../services/studentSubjectSelectionService');
 const snapshotService = require('../services/reportSnapshotService');
+const schoolLinkageService = require('../services/schoolLinkageService');
 const { getGradeFromScore } = require('../utils/curriculumHelper');
 
 function schoolCode(req) { return req.user?.schoolCode; }
@@ -18,9 +19,9 @@ function gradeFor(score, school, cls) {
 
 function defaultReportLogo() { return '/assets/logo.png'; }
 function logoForSchool(school) { return school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || school?.reportCardSettings?.logo || defaultReportLogo(); }
-function reportAssessmentSettings(school) { const raw = school?.settings?.curriculumEngine?.assessmentSettings || school?.settings?.reportCardSettings?.assessmentSettings || school?.reportCardSettings?.assessmentSettings || []; const base = Array.isArray(raw) && raw.length ? raw : [{key:'opener',label:'Opener Exam',assessmentType:'Opener',type:'Opener',showOnReport:true,countInFinal:false,weight:0,displayOrder:1},{key:'cat1',label:'CAT 1',assessmentType:'CAT 1',type:'CAT',showOnReport:true,countInFinal:true,weight:10,displayOrder:2},{key:'cat2',label:'CAT 2',assessmentType:'CAT 2',type:'CAT',showOnReport:true,countInFinal:true,weight:10,displayOrder:3},{key:'midterm',label:'Midterm',assessmentType:'Midterm',type:'Midterm',showOnReport:true,countInFinal:true,weight:20,displayOrder:4},{key:'endterm',label:'End Term',assessmentType:'End Term',type:'EndTerm',showOnReport:true,countInFinal:true,weight:50,displayOrder:5},{key:'sba',label:'SBA / Project',assessmentType:'SBA',type:'SBA',showOnReport:true,countInFinal:true,weight:10,displayOrder:6}]; return base.filter(x=>x && x.isActive !== false).map((x,i)=>({ ...x, label:x.label||x.displayName||x.name||x.assessmentType||`Assessment ${i+1}`, assessmentType:x.assessmentType||x.type||x.label||'Custom', weight:Number(x.weight ?? x.weightPercent ?? 0), displayOrder:Number(x.displayOrder||i+1) })); }
+function reportAssessmentSettings(school) { const raw = school?.settings?.curriculumEngine?.assessmentSettings || school?.settings?.reportCardSettings?.assessmentSettings || school?.reportCardSettings?.assessmentSettings || []; const base = Array.isArray(raw) && raw.length ? raw : [{key:'opener',label:'Opener Exam',assessmentType:'Opener',type:'Opener',showOnReport:true,countInFinal:false,weight:0,displayOrder:1},{key:'cat1',label:'CAT 1',assessmentType:'CAT 1',type:'CAT',showOnReport:true,countInFinal:true,weight:10,displayOrder:2},{key:'cat2',label:'CAT 2',assessmentType:'CAT 2',type:'CAT',showOnReport:true,countInFinal:true,weight:10,displayOrder:3},{key:'midterm',label:'Midterm',assessmentType:'Midterm',type:'Midterm',showOnReport:true,countInFinal:true,weight:20,displayOrder:4},{key:'endterm',label:'End Term',assessmentType:'End Term',type:'EndTerm',showOnReport:true,countInFinal:true,weight:50,displayOrder:5},{key:'sba',label:'SBA / Project',assessmentType:'SBA',type:'SBA',showOnReport:true,countInFinal:true,weight:10,displayOrder:6}]; return base.filter(x=>x && x.isActive !== false).map((x,i)=>{ const key=String(x.key||x.assessmentKey||x.name||x.label||x.assessmentType||`assessment_${i+1}`).trim().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,''); return { ...x, key, assessmentKey:key, label:x.label||x.displayName||x.name||x.assessmentType||`Assessment ${i+1}`, assessmentType:x.assessmentType||x.type||x.label||'Custom', weight:Number(x.weight ?? x.weightPercent ?? 0), displayOrder:Number(x.displayOrder||i+1) }; }); }
 function normAssess(x){return String(x||'').toLowerCase().replace(/[^a-z0-9]+/g,'');}
-function recordMatchesAssessment(record, setting){ const keys=[record.assessmentType,record.assessmentName,record.testType,record.examType,record.type].map(normAssess); return keys.includes(normAssess(setting.assessmentType))||keys.includes(normAssess(setting.label))||keys.includes(normAssess(setting.key)); }
+function recordMatchesAssessment(record, setting){ if (record.assessmentKey && setting.assessmentKey && normAssess(record.assessmentKey) === normAssess(setting.assessmentKey)) return true; if (record.assessmentKey && setting.key && normAssess(record.assessmentKey) === normAssess(setting.key)) return true; const keys=[record.assessmentType,record.assessmentName,record.assessmentCategory,record.testType,record.examType,record.type].map(normAssess); return keys.includes(normAssess(setting.assessmentType))||keys.includes(normAssess(setting.label))||keys.includes(normAssess(setting.key)); }
 
 const REPORT_RECORD_ASSESSMENT_ENUMS = new Set(['test','exam','assignment','project','quiz']);
 function enumReportAssessmentType(value){const raw=String(value||'').trim().toLowerCase().replace(/[\s-]+/g,'_');return REPORT_RECORD_ASSESSMENT_ENUMS.has(raw)?raw:null;}
@@ -43,10 +44,8 @@ async function teacherOwnsClass(req, classId) {
   const teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
   if (!teacher || !classId) return false;
   if (Number(teacher.classId) === Number(classId)) return true;
-  const cls = await Class.findOne({ where:{ id:Number(classId), schoolCode:schoolCode(req), [Op.or]:[{ teacherId:teacher.id }, { classTeacherId:teacher.id }] } }).catch(()=>null);
-  if (cls) return true;
-  const assignment = await TeacherSubjectAssignment.findOne({ where:{ teacherId:teacher.id, classId:Number(classId), isClassTeacher:true } }).catch(()=>null);
-  return !!assignment;
+  const classes = await schoolLinkageService.resolveTeacherAssignedClasses(req.user.id, schoolCode(req), { classTeacherOnly:true }).catch(()=>[]);
+  return classes.some(cls => Number(cls.id) === Number(classId));
 }
 
 async function canRead(req, report) {
@@ -68,9 +67,9 @@ async function buildSnapshot({ studentId, schoolCode:code, term, year, assessmen
   });
   if (!student) { const error = new Error('Student not found'); error.status = 404; throw error; }
   const school = await School.findOne({ where:{ schoolId:code } });
-  const cls = student.classId
+  const cls = await schoolLinkageService.resolveStudentClass(student, code) || (student.classId
     ? await Class.findOne({ where:{ id:student.classId, schoolCode:code } })
-    : await Class.findOne({ where:{ schoolCode:code, [Op.or]:[{ name:student.grade }, { grade:student.grade }] } });
+    : await Class.findOne({ where:{ schoolCode:code, [Op.or]:[{ name:student.grade }, { grade:student.grade }] } }));
   const where = { studentId:student.id, schoolCode:code, term, year:Number(year) };
   if (assessmentType) { const safeType = enumReportAssessmentType(assessmentType); if (safeType) where.assessmentType = safeType; }
   if (assessmentName) where.assessmentName = assessmentName;
@@ -148,7 +147,7 @@ exports.listReports = async (req,res) => {
     if(req.query.studentId)where.studentId=Number(req.query.studentId);if(req.query.term)where.term=req.query.term;if(req.query.year)where.year=Number(req.query.year);
     if(req.user.role==='student')where.studentId=(await studentForUser(req.user.id))?.id||-1;
     if(req.user.role==='parent'){const parent=await Parent.findOne({where:{userId:req.user.id}});const links=parent?await StudentParent.findAll({where:{parentId:parent.id}}):[];where.studentId={ [Op.in]:links.map(link=>link.studentId) };}
-    if(req.user.role==='teacher'){const teacher=await Teacher.findOne({where:{userId:req.user.id}});const classes=teacher?await Class.findAll({where:{schoolCode:schoolCode(req),[Op.or]:[{teacherId:teacher.id},{id:teacher.classId||-1}]},attributes:['id']}):[];where.classId={ [Op.in]:classes.map(cls=>cls.id) };}
+    if(req.user.role==='teacher'){const classes=await schoolLinkageService.resolveTeacherAssignedClasses(req.user.id,schoolCode(req),{classTeacherOnly:true}).catch(()=>[]);where.classId={ [Op.in]:classes.map(cls=>cls.id) };}
     const rows=await ReportSnapshot.findAll({where,order:[['year','DESC'],['term','DESC'],['version','DESC']],limit:500,attributes:{exclude:['sourceRecordIds']}});
     res.json({success:true,data:rows});
   } catch(error){res.status(500).json({success:false,message:error.message});}

@@ -375,6 +375,9 @@ exports.uploadMarksCSV = async (req, res) => {
               subject: row.subject,
               assessmentType: row.assessmentType || 'test',
               assessmentName: row.assessmentName || `${row.subject} ${row.assessmentType || 'test'}`,
+              assessmentKey: v1508AssessmentKey(row.assessmentType || 'test', row.assessmentName || `${row.subject} ${row.assessmentType || 'test'}`),
+              assessmentCategory: v1508AssessmentCategory(row.assessmentType || 'test'),
+              maxScore: Number(row.maxScore || 100),
               score: parseInt(row.score),
               teacherId: teacher.id,
               date: row.date || new Date(),
@@ -1158,6 +1161,15 @@ async function v66CanEnterMarks(teacher, cls, subject) {
   return { allowed: isClassTeacher || isSubjectTeacher, isClassTeacher, isSubjectTeacher, assignedSubjects };
 }
 
+
+function v1508AssessmentKey(type, name) {
+  return String(name || type || 'assessment').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'assessment';
+}
+function v1508AssessmentCategory(type) {
+  const t = String(type || 'test').trim();
+  return t || 'test';
+}
+
 exports.enterMarks = async (req, res) => {
   try {
     const { studentId, classId, subject, score, assessmentType='test', assessmentName, date, term='Term 1', year=new Date().getFullYear(), remarks='' } = req.body;
@@ -1185,11 +1197,21 @@ exports.enterMarks = async (req, res) => {
     const meta = await v66SchoolMeta(req.user.schoolCode);
     const grade = getGradeFromScore(numericScore, meta.system, meta.level, req.body.gradingScale || meta.gradingScale);
     const normalizedAssessmentName = assessmentName || `${subject} ${assessmentType}`;
-    const where = { studentId, schoolCode:req.user.schoolCode, subject, assessmentType, assessmentName: normalizedAssessmentName, term, year:Number(year) };
+    const assessmentKey = req.body.assessmentKey || v1508AssessmentKey(assessmentType, normalizedAssessmentName);
+    const assessmentCategory = req.body.assessmentCategory || v1508AssessmentCategory(assessmentType);
+    const where = { studentId, schoolCode:req.user.schoolCode, subject, assessmentKey, term, year:Number(year) };
     const [record, created] = await AcademicRecord.findOrCreate({
       where,
       defaults: {
         ...where,
+        assessmentType,
+        assessmentName: normalizedAssessmentName,
+        assessmentCategory,
+        maxScore: Number(req.body.maxScore || 100),
+        assessmentWeight: req.body.assessmentWeight == null ? null : Number(req.body.assessmentWeight),
+        showOnReport: req.body.showOnReport !== false,
+        countInFinal: req.body.countInFinal !== false,
+        displayOrder: Number(req.body.displayOrder || 0),
         score: numericScore,
         grade,
         remarks,
@@ -1204,7 +1226,7 @@ exports.enterMarks = async (req, res) => {
     });
     if (!created) {
       if (record.isPublished || record.status === 'published' || record.status === 'locked') return res.status(409).json({ success:false, message:'Published marks cannot be edited. Ask admin/class teacher for correction workflow.' });
-      await record.update({ score:numericScore, grade, remarks, teacherId:teacher.id, date:date || record.date, classId:cls.id, curriculum:meta.system, gradingScale:req.body.gradingScale || meta.gradingScale || null, status: requestedStatus });
+      await record.update({ score:numericScore, grade, remarks, teacherId:teacher.id, date:date || record.date, classId:cls.id, curriculum:meta.system, assessmentType, assessmentName:normalizedAssessmentName, assessmentCategory, maxScore:Number(req.body.maxScore || record.maxScore || 100), assessmentWeight:req.body.assessmentWeight == null ? record.assessmentWeight : Number(req.body.assessmentWeight), showOnReport:req.body.showOnReport !== false, countInFinal:req.body.countInFinal !== false, displayOrder:Number(req.body.displayOrder || record.displayOrder || 0), gradingScale:req.body.gradingScale || meta.gradingScale || null, status: requestedStatus });
     }
     res.status(created ? 201 : 200).json({ success:true, data:record, meta:{ curriculum:meta.system, schoolLevel:meta.level, grade, isClassTeacher:access.isClassTeacher, isSubjectTeacher:access.isSubjectTeacher } });
   } catch (error) {
@@ -1222,6 +1244,8 @@ exports.saveBulkMarks = async (req,res) => {
     const access = await v66CanEnterMarks(teacher, cls, subject); if (!access.allowed) return res.status(403).json({ success:false, message:'You can only enter marks for your assigned subject/class' });
     const meta = await v66SchoolMeta(req.user.schoolCode);
     const normalizedAssessmentName = assessmentName || `${subject} ${assessmentType}`;
+    const assessmentKey = req.body.assessmentKey || v1508AssessmentKey(assessmentType, normalizedAssessmentName);
+    const assessmentCategory = req.body.assessmentCategory || v1508AssessmentCategory(assessmentType);
     const requestedStudentIds = [...new Set((marks || []).map(mark => Number(mark.studentId)).filter(Number.isInteger))];
     const scoped = Student.unscoped ? Student.unscoped() : Student;
     const currentStudents = requestedStudentIds.length ? await scoped.findAll({
@@ -1240,9 +1264,9 @@ exports.saveBulkMarks = async (req,res) => {
         if (!currentStudentIds.has(Number(m.studentId))) throw new Error('Student is no longer active in this class. Refresh the class list.');
         const score=Number(m.score); if (!Number.isFinite(score)||score<0||score>100) throw new Error('Score must be 0-100');
         const grade = getGradeFromScore(score, meta.system, meta.level, req.body.gradingScale || meta.gradingScale);
-        const where = { studentId:m.studentId, schoolCode:req.user.schoolCode, subject, assessmentType, assessmentName:normalizedAssessmentName, term, year:Number(year) };
-        const [record,created]=await AcademicRecord.findOrCreate({ where, defaults:{ ...where, score, grade, remarks:m.remarks || '', teacherId:teacher.id, date:date||new Date(), classId:cls.id, curriculum:meta.system, gradingScale:req.body.gradingScale || meta.gradingScale || null, status:requestedStatus, isPublished:false } });
-        if (!created) { if (record.isPublished || record.status === 'published' || record.status === 'locked') throw new Error('Published marks cannot be edited'); await record.update({ score, grade, remarks:m.remarks || record.remarks || '', teacherId:teacher.id, date:date||record.date, classId:cls.id, curriculum:meta.system, gradingScale:req.body.gradingScale || meta.gradingScale || null, status: requestedStatus }); }
+        const where = { studentId:m.studentId, schoolCode:req.user.schoolCode, subject, assessmentKey, term, year:Number(year) };
+        const [record,created]=await AcademicRecord.findOrCreate({ where, defaults:{ ...where, assessmentType, assessmentName:normalizedAssessmentName, assessmentCategory, maxScore:Number(req.body.maxScore || 100), assessmentWeight:req.body.assessmentWeight == null ? null : Number(req.body.assessmentWeight), showOnReport:req.body.showOnReport !== false, countInFinal:req.body.countInFinal !== false, displayOrder:Number(req.body.displayOrder || 0), score, grade, remarks:m.remarks || '', teacherId:teacher.id, date:date||new Date(), classId:cls.id, curriculum:meta.system, gradingScale:req.body.gradingScale || meta.gradingScale || null, status:requestedStatus, isPublished:false } });
+        if (!created) { if (record.isPublished || record.status === 'published' || record.status === 'locked') throw new Error('Published marks cannot be edited'); await record.update({ score, grade, remarks:m.remarks || record.remarks || '', teacherId:teacher.id, date:date||record.date, classId:cls.id, curriculum:meta.system, assessmentType, assessmentName:normalizedAssessmentName, assessmentCategory, maxScore:Number(req.body.maxScore || record.maxScore || 100), assessmentWeight:req.body.assessmentWeight == null ? record.assessmentWeight : Number(req.body.assessmentWeight), showOnReport:req.body.showOnReport !== false, countInFinal:req.body.countInFinal !== false, displayOrder:Number(req.body.displayOrder || record.displayOrder || 0), gradingScale:req.body.gradingScale || meta.gradingScale || null, status: requestedStatus }); }
         saved++; results.push({ studentId:m.studentId, success:true, recordId:record.id, grade });
       } catch(err){ failed++; results.push({ studentId:m.studentId, success:false, error:err.message }); }
     }

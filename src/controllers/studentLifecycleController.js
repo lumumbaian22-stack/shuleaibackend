@@ -5,6 +5,7 @@ const { sequelize, Student, User, Class, Teacher, Parent, StudentParent, Student
 const realtime = require('../services/realtimeService');
 const subjectSelections = require('../services/studentSubjectSelectionService');
 const enrollmentService = require('../services/studentEnrollmentService');
+const schoolLinkageService = require('../services/schoolLinkageService');
 const { createAlert } = require('../services/notificationService');
 
 const OUTCOMES = new Set(['promote','repeat','move_stream','graduate','transfer_out','withdraw','hold_review']);
@@ -488,24 +489,9 @@ exports.transferOptions=async(req,res)=>{
     if(!['admin','super_admin','teacher'].includes(req.user.role))return res.status(403).json({success:false,message:'Forbidden'});
     const schoolCode=code(req);
     const activeClassWhere={schoolCode,[Op.or]:[{isActive:true},{isActive:null}]};
-    const classes=await Class.findAll({where:activeClassWhere,attributes:['id','name','grade','stream','teacherId','curriculum','levelCode','isActive'],order:[['grade','ASC'],['name','ASC'],['stream','ASC']]});
-    const classIds=classes.map(c=>Number(c.id)).filter(Boolean);
-    let students=[];
-    const studentWhere={classId:{[Op.in]:classIds.length?classIds:[0]},[Op.or]:[{status:'active'},{status:null}]};
-    if(req.user.role==='teacher'){
-      const teacher=await Teacher.findOne({where:{userId:req.user.id}});
-      const ownClasses=[];
-      if(teacher){
-        for(const cls of classes){
-          const ids=await enrollmentService.classTeacherIdsForClass({cls,schoolCode});
-          if(ids.includes(Number(teacher.id)))ownClasses.push(cls);
-        }
-      }
-      const ownIds=ownClasses.map(c=>Number(c.id)).filter(Boolean);
-      if(ownIds.length)students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{...studentWhere,classId:{[Op.in]:ownIds}},include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name','email','phone']},{model:Class,required:false,attributes:['id','name','grade','stream']}],attributes:['id','elimuid','classId','grade','status'],order:[[User,'name','ASC']]});
-    }else{
-      students=await (Student.unscoped?Student.unscoped():Student).findAll({where:studentWhere,include:[{model:User,where:{schoolCode,role:'student'},attributes:['id','name','email','phone']},{model:Class,required:false,attributes:['id','name','grade','stream']}],attributes:['id','elimuid','classId','grade','status'],order:[[User,'name','ASC']]});
-    }
+    let classes=await Class.findAll({where:activeClassWhere,attributes:['id','name','grade','stream','teacherId','curriculum','levelCode','isActive'],order:[['grade','ASC'],['name','ASC'],['stream','ASC']]});
+    if(req.user.role==='teacher') classes=await schoolLinkageService.resolveTeacherAssignedClasses(req.user.id, schoolCode, { classTeacherOnly:true }).catch(()=>[]);
+    const students=await schoolLinkageService.resolveClassStudents(classes, schoolCode, { userAttributes:['id','name','email','phone','profileImage','profilePicture'] });
     res.json({success:true,data:{classes,students}});
   }catch(error){fail(res,error);}
 };

@@ -143,17 +143,27 @@ User.belongsTo(School, {
 const StudentParent = sequelize.define('StudentParent', {
   studentId: {
     type: DataTypes.INTEGER,
+    allowNull: false,
     references: { model: 'Students', key: 'id' },
     onDelete: 'CASCADE'
   },
   parentId: {
     type: DataTypes.INTEGER,
+    allowNull: false,
     references: { model: 'Parents', key: 'id' },
     onDelete: 'CASCADE'
-  }
+  },
+  relationship: { type: DataTypes.STRING, allowNull: true, defaultValue: 'guardian' },
+  linkedByElimuId: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
+  linkedAt: { type: DataTypes.DATE, allowNull: true },
+  status: { type: DataTypes.STRING, allowNull: true, defaultValue: 'active' },
+  source: { type: DataTypes.STRING, allowNull: true, defaultValue: 'manual' },
+  verifiedAt: { type: DataTypes.DATE, allowNull: true },
+  verifiedBy: { type: DataTypes.INTEGER, allowNull: true },
+  metadata: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} }
 }, {
   tableName: 'StudentParents',
-  timestamps: false,
+  timestamps: true,
   indexes: [{ unique: true, fields: ['studentId', 'parentId'] }]
 });
 

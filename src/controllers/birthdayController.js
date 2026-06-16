@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { BirthdayEvent, Student, User, Class, Teacher, School, TeacherSubjectAssignment } = require('../models');
 const birthdayService = require('../services/birthdayService');
+const schoolLinkageService = require('../services/schoolLinkageService');
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -46,14 +47,8 @@ async function getSchoolSettings(code) {
 }
 async function teacherClassIds(req) {
   if (req.user.role !== 'teacher') return null;
-  const teacher = await Teacher.findOne({ where:{ userId:req.user.id } });
-  if (!teacher) return [];
-  const directClasses = await Class.findAll({
-    where:{ schoolCode:schoolCode(req), [Op.or]:[{ teacherId:teacher.id }, ...(teacher.classId ? [{ id:teacher.classId }] : []), ...(teacher.classTeacher ? [{ name:teacher.classTeacher }] : [])] },
-    attributes:['id']
-  }).catch(()=>[]);
-  const assignmentRows = await TeacherSubjectAssignment.findAll({ where:{ teacherId:teacher.id, isClassTeacher:true }, attributes:['classId'] }).catch(()=>[]);
-  return [...new Set([...directClasses.map(c=>c.id), ...assignmentRows.map(a=>a.classId)].filter(Boolean).map(Number))];
+  const classes = await schoolLinkageService.resolveTeacherAssignedClasses(req.user.id, schoolCode(req), { classTeacherOnly:true });
+  return classes.map(c => Number(c.id)).filter(Boolean);
 }
 
 exports.settings = async (req,res) => {
@@ -117,19 +112,22 @@ exports.upcoming = async (req,res) => {
     const now = new Date();
     const today = dateOnlyInZone(now, timeZone);
     const classIds = await teacherClassIds(req);
-    const studentWhere = {
-      status:'active',
-      dateOfBirth:{ [Op.ne]:null },
-      ...(classIds ? { classId:{ [Op.in]:classIds.length ? classIds : [-1] } } : {})
-    };
-    const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
-      where:studentWhere,
-      include:[
-        { model:User, where:{ schoolCode:schoolCode(req), role:'student', isActive:true }, attributes:['id','name','profileImage'] },
-        { model:Class, required:false, attributes:['id','name','stream'] }
-      ],
-      order:[[User,'name','ASC']]
-    });
+    let students;
+    if (classIds) {
+      const classes = classIds.length ? await Class.findAll({ where:{ id:{ [Op.in]:classIds }, schoolCode:schoolCode(req), [Op.or]:[{ isActive:true }, { isActive:null }] } }).catch(()=>[]) : [];
+      students = await schoolLinkageService.resolveClassStudents(classes, schoolCode(req), { userAttributes:['id','name','profileImage','profilePicture'] });
+      students = students.filter(st => st.dateOfBirth);
+    } else {
+      const studentWhere = { status:'active', dateOfBirth:{ [Op.ne]:null } };
+      students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
+        where:studentWhere,
+        include:[
+          { model:User, where:{ schoolCode:schoolCode(req), role:'student', isActive:true }, attributes:['id','name','profileImage','profilePicture'] },
+          { model:Class, required:false, attributes:['id','name','grade','stream'] }
+        ],
+        order:[[User,'name','ASC']]
+      });
+    }
     const end = new Date(now.getTime() + days * 86400000);
     const eventRows = await BirthdayEvent.findAll({
       where:{ schoolCode:schoolCode(req), eventDate:{ [Op.between]:[today,dateOnlyInZone(end,timeZone)] } },

@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
 const realtime = require('../services/realtimeService');
+const schoolLinkageService = require('../services/schoolLinkageService');
 const {
   User, Teacher, Student, Parent, StudentParent, Class,
   Department, DepartmentMember, TeacherSubjectAssignment,
@@ -504,44 +505,25 @@ exports.listTeacherDirectory = async (req, res) => {
 
 
 async function resolveTeacherClassIdsForMessages(userId, schoolCode) {
-  const teacher = await Teacher.findOne({ where:{ userId } }).catch(()=>null);
-  if (!teacher) return [];
-  const ids = new Set();
-  if (teacher.classId) ids.add(Number(teacher.classId));
-  const assigned = await TeacherSubjectAssignment.findAll({ where:{ teacherId:teacher.id, isClassTeacher:true }, attributes:['classId'] }).catch(()=>[]);
-  assigned.forEach(a => { if (a.classId) ids.add(Number(a.classId)); });
-  const classes = await Class.findAll({ where:{ schoolCode, [Op.or]:[{ teacherId:teacher.id }, { classTeacherId:teacher.id }, { id:{ [Op.in]: Array.from(ids).length ? Array.from(ids) : [-1] } }] }, attributes:['id'] }).catch(()=>[]);
-  classes.forEach(c => ids.add(Number(c.id)));
-  return Array.from(ids).filter(Boolean);
+  const classes = await schoolLinkageService.resolveTeacherAssignedClasses(userId, schoolCode, { classTeacherOnly: true });
+  return classes.map(c => Number(c.id)).filter(Boolean);
 }
 
 exports.listTeacherClassParents = async (req, res) => {
   try {
     if (req.user.role !== 'teacher') return res.status(403).json({ success:false, message:'Only teachers can load linked class parents.' });
     const schoolCode = schoolCodeOf(req);
-    const classIds = await resolveTeacherClassIdsForMessages(req.user.id, schoolCode);
-    if (!classIds.length) return res.json({ success:true, data:[], message:'No assigned class found for this teacher.' });
-    const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
-      where:{ schoolCode, classId:{ [Op.in]:classIds }, [Op.or]:[{ status:{ [Op.ne]:'inactive' } }, { status:null }] },
-      include:[{ model:User, attributes:['id','name','email','phone','profileImage','profilePicture'], required:false }],
-      order:[['grade','ASC'],['createdAt','ASC']], limit:500
+    const result = await schoolLinkageService.resolveTeacherClassParents(req.user.id, schoolCode);
+    res.json({
+      success:true,
+      data: result.rows,
+      classIds: (result.classes || []).map(c => Number(c.id)).filter(Boolean),
+      classes: (result.classes || []).map(c => ({ id:c.id, name:c.name, grade:c.grade, stream:c.stream }))
     });
-    const links = students.length ? await StudentParent.findAll({ where:{ studentId:{ [Op.in]:students.map(s=>s.id) } }, include:[{ model:Parent, include:[{ model:User, attributes:['id','name','email','phone','profileImage','profilePicture'], required:false }] }] }).catch(()=>[]) : [];
-    const byStudent = new Map();
-    links.forEach(link => {
-      const p = link.Parent;
-      const u = p?.User;
-      if (!u) return;
-      const arr = byStudent.get(Number(link.studentId)) || [];
-      arr.push({ parentId:p.id, userId:u.id, name:u.name || p.name || 'Parent', email:u.email || p.email || '', phone:u.phone || p.phone || '', relation:link.relation || p.relation || p.relationship || 'Guardian', profilePhoto:u.profileImage || u.profilePicture || p.profileImage || null });
-      byStudent.set(Number(link.studentId), arr);
-    });
-    const data = students.map(st => ({
-      studentId:st.id, userId:st.User?.id, studentName:st.User?.name || st.name || 'Student', elimuId:st.elimuid || st.admissionNumber || '', classId:st.classId, className:st.grade || st.className || '', profilePhoto:st.User?.profileImage || st.User?.profilePicture || st.profileImage || null,
-      parents: byStudent.get(Number(st.id)) || []
-    }));
-    res.json({ success:true, data, classIds });
-  } catch (error) { console.error('listTeacherClassParents error:', error); res.status(500).json({ success:false, message:error.message }); }
+  } catch (error) {
+    console.error('listTeacherClassParents error:', error);
+    res.status(500).json({ success:false, message:error.message });
+  }
 };
 
 exports.listTeacherGroups = async (req, res) => {

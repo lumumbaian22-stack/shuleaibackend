@@ -22,10 +22,18 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false
     },
     assessmentType: {
-      type: DataTypes.ENUM('test', 'exam', 'assignment', 'project', 'quiz'),
-      allowNull: false
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'test'
     },
+    assessmentKey: { type: DataTypes.STRING, allowNull: true },
+    assessmentCategory: { type: DataTypes.STRING, allowNull: true },
     assessmentName: DataTypes.STRING,
+    maxScore: { type: DataTypes.FLOAT, allowNull: true },
+    assessmentWeight: { type: DataTypes.FLOAT, allowNull: true },
+    showOnReport: { type: DataTypes.BOOLEAN, defaultValue: true },
+    countInFinal: { type: DataTypes.BOOLEAN, defaultValue: true },
+    displayOrder: { type: DataTypes.INTEGER, defaultValue: 0 },
     score: {
       type: DataTypes.INTEGER,
       validate: { min: 0, max: 100 }
