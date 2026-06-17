@@ -2,9 +2,13 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const analyticsController = require('../controllers/analyticsController');
+const analyticsV151Controller = require('../controllers/analyticsV151Controller');
 
 // All analytics routes require authentication
 router.use(protect);
+
+// v151 role-safe dashboard analytics: exact UI data, real backend, strict tenant scope
+router.get('/dashboard', analyticsV151Controller.getDashboardAnalytics);
 
 // Student analytics (accessible by student, parent, teacher, admin)
 router.get('/student/:studentId', analyticsController.getStudentAnalytics);
