@@ -1,0 +1,15 @@
+Shule AI v151.2 Real Analytics Scope + Export Lock
+
+Static verification performed:
+- analyticsV152Controller.js syntax: PASS
+- analyticsRoutes.js syntax: PASS
+- analytics-dashboard.js syntax: PASS
+- realtime-handlers.js syntax: PASS
+- service-worker.js syntax: PASS
+- controller dependency load (PDFKit, ExcelJS, Sequelize models): PASS
+- user-facing JSON analytics export removed: PASS
+- export formats present: PDF, XLSX, CSV, Print HTML
+- backend tenant scope validation present for admin/finance/teacher/parent/student
+- no database migration added
+
+Production database/runtime testing must be completed after deployment with authenticated role accounts.
