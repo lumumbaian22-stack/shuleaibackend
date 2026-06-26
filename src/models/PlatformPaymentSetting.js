@@ -20,8 +20,7 @@ module.exports = (sequelize, DataTypes) => {
     bankAccountNumber: { type: DataTypes.STRING, allowNull: true },
     bankBranch: { type: DataTypes.STRING, allowNull: true },
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
-    metadata: { type: DataTypes.JSONB, defaultValue: {} },
-    auditTrail: { type: DataTypes.JSONB, defaultValue: [] }
+    metadata: { type: DataTypes.JSONB, defaultValue: {} }
   }, { timestamps: true });
   return PlatformPaymentSetting;
 };

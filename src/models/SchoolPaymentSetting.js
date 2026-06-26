@@ -22,8 +22,7 @@ module.exports = (sequelize, DataTypes) => {
     enabledProviders: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
     defaultProvider: { type: DataTypes.STRING, allowNull: true },
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
-    metadata: { type: DataTypes.JSONB, defaultValue: {} },
-    auditTrail: { type: DataTypes.JSONB, defaultValue: [] }
+    metadata: { type: DataTypes.JSONB, defaultValue: {} }
   }, { timestamps: true, indexes: [{ fields: ['schoolCode'] }] });
   return SchoolPaymentSetting;
 };
