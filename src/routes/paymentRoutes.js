@@ -17,6 +17,7 @@ router.get('/parent/methods', protect, authorize('parent'), locked.getParentPaym
 router.post('/initiate', protect, locked.initiatePayment);
 router.get('/:reference/status', protect, locked.getPaymentStatus);
 router.post('/reconcile/:reference', protect, locked.reconcilePayment);
+router.get('/webhook/:provider', locked.webhook);
 router.post('/webhook/:provider', locked.webhook);
 
 router.post('/daraja/callback', ctrl.darajaCallback);

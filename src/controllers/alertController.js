@@ -88,12 +88,13 @@ async function filterAlertsForRequester(req, alerts, requestedStudentId) {
 exports.getMyAlerts = async (req, res) => {
   try {
     const requestedStudentId = req.query.studentId || req.query.childId || null;
-    const safeAlerts = await getAlertsForUser(req.user, {
+    const candidateAlerts = await getAlertsForUser(req.user, {
       studentId: requestedStudentId,
       limit: Number(req.query.limit || 120),
       calendarOnly: req.query.calendarOnly === 'true',
       upcomingOnly: req.query.upcomingOnly === 'true'
     });
+    const safeAlerts = await filterAlertsForRequester(req, candidateAlerts, requestedStudentId);
     res.json({ success: true, data: safeAlerts, scope: { role: req.user.role, studentId: requestedStudentId || null } });
   } catch (error) {
     console.error('Get alerts error:', error);

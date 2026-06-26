@@ -42,11 +42,12 @@ function mask(value) {
 
 function publicProvider(provider = {}) {
   const copy = { ...provider };
-  ['secretKey','apiKey','privateKey','consumerSecret','passkey','clientSecret','webhookSecret','encryptionKey'].forEach(k => {
-    if (copy[k]) copy[k] = mask(copy[k]);
+  const safePublicFields = new Set(['provider','enabled','methods','publicKey','publishableKey','shortcode','environment','mode','callbackUrl','returnUrl','successUrl','cancelUrl','checkoutUrl','ipnId','updatedAt','updatedBy']);
+  Object.keys(copy).forEach(k => {
+    if (copy[k] && !safePublicFields.has(k) && /secret|key|pass|token|credential/i.test(k)) copy[k] = mask(copy[k]);
   });
   if (copy.credentials) {
-    copy.credentials = Object.fromEntries(Object.entries(copy.credentials).map(([k,v]) => [/secret|key|pass|token/i.test(k) ? [k, mask(v)] : [k, v]]));
+    copy.credentials = Object.fromEntries(Object.entries(copy.credentials).map(([k,v]) => [/secret|key|pass|token|credential/i.test(k) ? [k, mask(v)] : [k, v]]));
   }
   return copy;
 }

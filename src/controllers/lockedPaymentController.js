@@ -62,7 +62,8 @@ exports.initiatePayment = async (req, res) => {
 
 exports.webhook = async (req, res) => {
   try {
-    const result = await engine.handleWebhook({ provider: req.params.provider, payload: req.body, headers: req.headers });
+    const payload = { ...(req.query || {}), ...(req.body || {}) };
+    const result = await engine.handleWebhook({ provider: req.params.provider, payload, headers: req.headers });
     res.json({ success: true, accepted: true, data: result });
   } catch (error) {
     console.error('Locked payment webhook error:', error);
@@ -84,6 +85,6 @@ exports.reconcilePayment = async (req, res) => {
 exports.getParentPaymentMethods = async (req, res) => {
   try {
     const data = await engine.getSettings({ scope: 'school', schoolCode: req.user.schoolCode });
-    res.json({ success: true, data: { defaultProvider: data.defaultProvider, enabledProviders: data.enabledProviders, methods: data.publicMethods, providers: data.providers } });
+    res.json({ success: true, data: { defaultProvider: data.defaultProvider, enabledProviders: data.enabledProviders, methods: data.publicMethods } });
   } catch (error) { res.status(400).json({ success: false, message: error.message }); }
 };

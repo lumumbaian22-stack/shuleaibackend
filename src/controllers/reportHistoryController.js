@@ -51,6 +51,21 @@ function drawImageSafe(doc, source, x, y, options) {
   try { doc.image(resolved, x, y, options); return true; } catch (_) { return false; }
 }
 
+function normAssessmentCell(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+function assessmentCellForColumn(row, column, index) {
+  const list = Array.isArray(row.components) ? row.components : (Array.isArray(row.assessments) ? row.assessments : []);
+  const wanted = [column.key, column.assessmentKey, column.assessmentType, column.label].map(normAssessmentCell).filter(Boolean);
+  const found = list.find(item => {
+    if (!item || typeof item !== 'object') return false;
+    const keys = [item.key, item.assessmentKey, item.assessmentType, item.label, item.assessmentName, item.type].map(normAssessmentCell);
+    return keys.some(key => wanted.includes(key));
+  }) || list[index];
+  if (!found) return '';
+  if (typeof found !== 'object') return found ?? '';
+  const value = found.score ?? found.mark ?? found.rawScore ?? found.value;
+  return value === null || value === undefined || value === '' ? '' : value;
+}
+
 
 async function streamReportPdf(res, report) {
   const snap = report.snapshot || {};
@@ -118,7 +133,7 @@ async function streamReportPdf(res, report) {
     doc.fillColor('#0f172a').font('Helvetica').fontSize(7.3);
     doc.text(String(i+1),xs[0]+2,y+7,{width:widths[0]-4,align:'center'});
     doc.font('Helvetica-Bold').text(String(row.subject||row.name||'Learning Area').slice(0,30),xs[1]+2,y+5,{width:widths[1]-4,height:16,ellipsis:true});
-    selected.forEach((col,idx)=>{ const item=comps[idx]; const val=item?.score ?? item?.mark ?? item ?? ''; doc.font('Helvetica').text(String(val),xs[2+idx]+2,y+7,{width:widths[2+idx]-4,align:'center'}); });
+    selected.forEach((col,idx)=>{ const val=assessmentCellForColumn(row,col,idx); doc.font('Helvetica').text(String(val),xs[2+idx]+2,y+7,{width:widths[2+idx]-4,align:'center'}); });
     const finalIndex=2+selected.length;
     doc.font('Helvetica-Bold').text(row.average==null?(row.finalScore??row.score??'—'):`${row.average}`,xs[finalIndex]+2,y+7,{width:widths[finalIndex]-4,align:'center'});
     doc.text(row.grade||row.meanGrade||'—',xs[finalIndex+1]+2,y+7,{width:widths[finalIndex+1]-4,align:'center'});

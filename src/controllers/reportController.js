@@ -23,6 +23,70 @@ function reportAssessmentSettings(school) { const raw = school?.settings?.curric
 function normAssess(x){return String(x||'').toLowerCase().replace(/[^a-z0-9]+/g,'');}
 function recordMatchesAssessment(record, setting){ if (record.assessmentKey && setting.assessmentKey && normAssess(record.assessmentKey) === normAssess(setting.assessmentKey)) return true; if (record.assessmentKey && setting.key && normAssess(record.assessmentKey) === normAssess(setting.key)) return true; const keys=[record.assessmentType,record.assessmentName,record.assessmentCategory,record.testType,record.examType,record.type].map(normAssess); return keys.includes(normAssess(setting.assessmentType))||keys.includes(normAssess(setting.label))||keys.includes(normAssess(setting.key)); }
 
+function scoreFromAssessmentRecord(record) {
+  if (!record) return null;
+  const raw = record.score ?? record.marks ?? record.mark ?? record.value ?? record.percentage;
+  return numberOrNull(raw);
+}
+function normalizedAssessmentScore(score, maxScore = 100) {
+  const value = numberOrNull(score);
+  if (value === null) return null;
+  const max = Number(maxScore || 100);
+  if (Number.isFinite(max) && max > 0 && max !== 100) return Math.round((value / max) * 1000) / 10;
+  return value;
+}
+function assessmentComponent(records, setting) {
+  const record = (records || []).find(row => recordMatchesAssessment(row, setting));
+  const score = scoreFromAssessmentRecord(record);
+  return {
+    key: setting.key || setting.assessmentKey,
+    assessmentKey: setting.assessmentKey || setting.key,
+    label: setting.label || setting.assessmentType || 'Assessment',
+    assessmentType: setting.assessmentType || setting.type || setting.label || 'Custom',
+    score,
+    rawScore: score,
+    maxScore: Number(setting.maxScore || 100),
+    weight: Number(setting.weight || setting.weightPercent || 0),
+    countInFinal: setting.countInFinal !== false,
+    showOnReport: setting.showOnReport !== false,
+    status: score === null ? 'Not assessed' : 'Completed',
+    recordId: record?.id || null,
+    date: record?.date || record?.createdAt || null
+  };
+}
+function weightedSubjectAverage(components = []) {
+  const counted = components.filter(item => item.countInFinal !== false && item.score !== null && item.score !== undefined);
+  if (!counted.length) return null;
+  const weighted = counted.filter(item => Number(item.weight) > 0);
+  if (weighted.length) {
+    const weightTotal = weighted.reduce((sum, item) => sum + Number(item.weight || 0), 0);
+    if (weightTotal > 0) return Math.round(weighted.reduce((sum, item) => sum + normalizedAssessmentScore(item.score, item.maxScore) * Number(item.weight || 0), 0) / weightTotal);
+  }
+  return Math.round(counted.reduce((sum, item) => sum + normalizedAssessmentScore(item.score, item.maxScore), 0) / counted.length);
+}
+function normalizeReportSubjectRows(rows = [], assessmentSettings = [], school, cls) {
+  return rows.map(row => {
+    const statusText = String(row.status || '').toLowerCase();
+    const excluded = ['not taken', 'exempted', 'not offered'].includes(statusText);
+    const sourceRecords = Array.isArray(row.assessments) ? row.assessments : [];
+    const components = assessmentSettings.map(setting => assessmentComponent(sourceRecords, setting));
+    const average = excluded ? null : weightedSubjectAverage(components);
+    const status = excluded ? row.status : (average === null ? 'Pending' : 'Completed');
+    const counted = !excluded && average !== null && row.counted !== false;
+    return {
+      ...row,
+      score: average,
+      average,
+      grade: average === null ? null : gradeFor(average, school, cls),
+      status,
+      counted,
+      components,
+      assessments: components,
+      calculationRule: counted ? 'Counted assessments only' : (excluded ? status : 'Not assessed')
+    };
+  });
+}
+
 const REPORT_RECORD_ASSESSMENT_ENUMS = new Set(['test','exam','assignment','project','quiz']);
 function enumReportAssessmentType(value){const raw=String(value||'').trim().toLowerCase().replace(/[\s-]+/g,'_');return REPORT_RECORD_ASSESSMENT_ENUMS.has(raw)?raw:null;}
 function recordMatchesRequestedAssessment(record, requested){
@@ -82,25 +146,12 @@ async function buildSnapshot({ studentId, schoolCode:code, term, year, assessmen
   }
   const selections = cls ? await selectionsService.listStudentSubjectSelections({ schoolCode:code, studentId:student.id, classId:cls.id }).catch(() => []) : [];
   const reportRows = school && cls ? curriculumEngine.buildSubjectRowsForReport({ school, classItem:cls, student, records, studentSubjectSelections:selections }) : [];
-  const summary = reportRows.length ? curriculumEngine.summarizeReportRows(reportRows) : null;
   const grouped = new Map();
-  records.forEach(record => { const raw=record.toJSON(); if(!grouped.has(raw.subject))grouped.set(raw.subject,[]);grouped.get(raw.subject).push(raw); });
-  const fallbackSubjects = [...grouped].map(([subject,rows]) => {
-    const valid=rows.map(row=>numberOrNull(row.score)).filter(score=>score!==null);
-    const average=valid.length?Math.round(valid.reduce((a,b)=>a+b,0)/valid.length):null;
-    return { subject, average, grade:gradeFor(average,school,cls), status:average===null?'Pending':'Completed', counted:average!==null, assessments:rows };
-  });
-  const subjects = reportRows.length ? reportRows.map(row => ({
-    subject:row.subject,
-    average:row.score,
-    grade:row.score == null ? null : gradeFor(row.score,school,cls),
-    status:row.status,
-    counted:row.counted,
-    assessments:row.assessments || []
-  })) : fallbackSubjects;
-  const overallAverage = reportRows.length
-    ? summary.average
-    : (subjects.filter(row=>row.counted&&row.average!==null).length ? Math.round(subjects.filter(row=>row.counted&&row.average!==null).reduce((sum,row)=>sum+Number(row.average),0)/subjects.filter(row=>row.counted&&row.average!==null).length) : null);
+  records.forEach(record => { const raw=record.toJSON ? record.toJSON() : record; if(!grouped.has(raw.subject))grouped.set(raw.subject,[]);grouped.get(raw.subject).push(raw); });
+  const fallbackSubjects = [...grouped].map(([subject,rows]) => ({ subject, status:'Pending', counted:true, assessments:rows }));
+  const subjects = normalizeReportSubjectRows(reportRows.length ? reportRows : fallbackSubjects, assessmentSettings, school, cls);
+  const summary = curriculumEngine.summarizeReportRows(subjects);
+  const overallAverage = summary.average;
   const attendanceRows = await Attendance.findAll({ where:{ schoolCode:code, studentId:student.id }, attributes:['status'] }).catch(()=>[]);
   const attendance = { present:0, absent:0, late:0, total:attendanceRows.length, rate:0 };
   attendanceRows.forEach(row => { if(Object.prototype.hasOwnProperty.call(attendance,row.status))attendance[row.status]++; });

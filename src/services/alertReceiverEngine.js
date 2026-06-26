@@ -110,14 +110,19 @@ async function userMatchesAlert(user, alert, options = {}) {
   if (raw.targetUserId && Number(raw.targetUserId) !== Number(user.id)) return false;
   if (targetUserIds.length && !targetUserIds.includes(String(user.id))) return false;
 
+  const allowedRoles = new Set(['student', 'parent', 'teacher', 'admin', 'finance_officer', 'super_admin']);
   const targetRoles = dataArray(data, 'targetRoles', 'receiverRoles', 'roles', 'audienceRoles');
-  const singleRole = raw.targetRole || data.targetRole || data.role || null;
-  const roleSet = new Set([...targetRoles, ...(singleRole ? [singleRole] : [])].map(normalizeRole).filter(Boolean));
+  const singleRole = raw.targetRole || data.targetRole || data.role || raw.role || null;
+  const allSchoolRoles = ['student', 'parent', 'teacher', 'admin', 'finance_officer'];
+  const expandedTargetRoles = targetRoles.some(r => ['all', 'whole_school', 'school'].includes(String(r).toLowerCase())) ? allSchoolRoles : targetRoles;
+  const roleSet = new Set([...expandedTargetRoles, ...(singleRole ? [singleRole] : [])].map(normalizeRole).filter(r => allowedRoles.has(r)));
   if (roleSet.size && !roleSet.has(role)) return false;
 
   const requestedStudentId = options.studentId ? Number(options.studentId) : null;
   const studentId = Number(raw.studentId || data.studentId || data.student_id || 0) || null;
+  const targetStudentIds = dataArray(data, 'targetStudentIds', 'studentIds').map(Number).filter(n => Number.isInteger(n) && n > 0);
   if (requestedStudentId && studentId && Number(studentId) !== requestedStudentId) return false;
+  if (requestedStudentId && targetStudentIds.length && !targetStudentIds.includes(requestedStudentId)) return false;
 
   if (studentId) {
     if (role === 'student') {
@@ -126,6 +131,24 @@ async function userMatchesAlert(user, alert, options = {}) {
     }
     if (role === 'parent' && !(await parentCanViewStudent(user.id, studentId, schoolCode))) return false;
     if (role === 'teacher' && !(await teacherCanViewStudent(user.id, studentId, schoolCode))) return false;
+  }
+
+  if (targetStudentIds.length) {
+    const idsToCheck = requestedStudentId ? [requestedStudentId] : targetStudentIds;
+    if (role === 'student') {
+      const student = await Student.findOne({ where: { id: { [Op.in]: idsToCheck }, userId: user.id } }).catch(() => null);
+      if (!student) return false;
+    }
+    if (role === 'parent') {
+      let allowed = false;
+      for (const sid of idsToCheck) { if (await parentCanViewStudent(user.id, sid, schoolCode)) { allowed = true; break; } }
+      if (!allowed) return false;
+    }
+    if (role === 'teacher') {
+      let allowed = false;
+      for (const sid of idsToCheck) { if (await teacherCanViewStudent(user.id, sid, schoolCode)) { allowed = true; break; } }
+      if (!allowed) return false;
+    }
   }
 
   const classIds = dataArray(data, 'targetClassIds', 'classIds');
@@ -153,6 +176,18 @@ async function userMatchesAlert(user, alert, options = {}) {
       ).catch(() => []);
       if (!classTeacherMatch && !owned && !assigned.length) return false;
     }
+  }
+
+  const createdBy = Number(data.createdBy || data.createdByUserId || 0) || null;
+  const hasDirectTarget = !!raw.userId || !!raw.targetUserId || targetUserIds.length > 0;
+  const hasRoleTarget = roleSet.size > 0;
+  const hasStudentTarget = !!studentId || targetStudentIds.length > 0;
+  const hasClassTarget = effectiveClassIds.size > 0;
+  if (!hasDirectTarget && !hasRoleTarget && !hasStudentTarget && !hasClassTarget) {
+    if (createdBy) return Number(createdBy) === Number(user.id) || role === 'super_admin';
+    if (scope === 'platform') return role === 'super_admin';
+    if (scope === 'school') return role === 'admin' || role === 'super_admin';
+    return false;
   }
 
   return true;

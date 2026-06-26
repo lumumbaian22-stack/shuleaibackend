@@ -409,8 +409,9 @@ function buildSubjectRowsForReport({ school, classItem, student, records = [], s
     const selected = selectionByName.get(String(subject.name).toLowerCase());
     const statusFromSelection = selected?.status || (subject.isCore ? 'taking' : 'not_taken');
     const recs = bySubject.get(String(subject.name).toLowerCase()) || [];
-    const hasScore = recs.some(r => r.score !== null && r.score !== undefined && Number.isFinite(Number(r.score)));
-    const average = hasScore ? Math.round(recs.reduce((sum, r) => sum + Number(r.score || 0), 0) / Math.max(recs.length, 1)) : null;
+    const validScores = recs.map(r => Number(r.score)).filter(Number.isFinite);
+    const hasScore = validScores.length > 0;
+    const average = hasScore ? Math.round(validScores.reduce((sum, score) => sum + score, 0) / validScores.length) : null;
     let status = 'Pending';
     if (statusFromSelection === 'not_taken') status = 'Not Taken';
     else if (statusFromSelection === 'exempted') status = 'Exempted';

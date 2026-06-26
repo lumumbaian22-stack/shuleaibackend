@@ -2,6 +2,7 @@ const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 const { sequelize, School, Student, Parent, Teacher, User } = require('../models');
 const linkage = require('../services/schoolLinkageService');
+const { getAlertsForUser } = require('../services/alertReceiverEngine');
 
 const { QueryTypes } = require('sequelize');
 
@@ -17,6 +18,16 @@ function safeName(value, fallback = 'analytics') { return text(value, fallback).
 function gradeForScore(score) { const n = num(score); if (n >= 80) return 'A'; if (n >= 70) return 'B'; if (n >= 60) return 'C'; if (n >= 50) return 'D'; return n > 0 ? 'E' : '—'; }
 function kpi(label, value, icon, tone = 'teal', hint = '') { return { label, value, icon, tone, hint }; }
 function insight(title, message, tone = 'info', time = 'Updated now', icon = 'info') { return { title, message, tone, time, icon }; }
+function analyticsFinanceAlertOnly(alert) {
+  const row = alert?.toJSON ? alert.toJSON() : (alert || {});
+  const data = row.data || {};
+  const haystack = [row.type, row.categoryLabel, row.sourceType, row.sourceLabel, row.title, row.message, data.category, data.sourceType].join(' ').toLowerCase();
+  return /fee|payment|finance|invoice|receipt|bursar|bursary|credit|defaulter|expense|reconcil|mpesa|m-pesa|balance|subscription/.test(haystack) || row.targetRole === 'finance_officer' || data.targetRole === 'finance_officer' || (Array.isArray(data.targetRoles) && data.targetRoles.includes('finance_officer'));
+}
+function alertInsightRow(alert) {
+  const row = alert?.toJSON ? alert.toJSON() : (alert || {});
+  return insight(row.title || 'School alert', row.message || '', row.severity || 'info', new Date(row.createdAt || Date.now()).toLocaleString(), row.type || 'info');
+}
 function uniqueNumbers(values = []) { return [...new Set(values.map(Number).filter(Boolean))]; }
 function average(values = []) { const valid = values.map(Number).filter(Number.isFinite); return valid.length ? round(valid.reduce((a, b) => a + b, 0) / valid.length, 1) : 0; }
 function statusComplete(status) { return ['completed', 'successful', 'approved', 'paid', 'success', 'verified'].includes(text(status).toLowerCase()); }
@@ -269,7 +280,7 @@ async function buildSchoolAnalytics(req) {
   const scope = await resolveSchoolScope(req, options, filters);
   const [records, attendance, feesRows, reports, tasks, payments, alerts, expenses] = await Promise.all([
     academicRecords(scope, filters), attendanceRecords(scope, filters), feeRecords(scope, filters), reportRows(scope, filters), taskRows(scope), paymentRows(scope, filters),
-    safeQuery(`SELECT title,message,severity,type,"createdAt" FROM "Alerts" WHERE "userId" IN (SELECT id FROM "Users" WHERE "schoolCode"=:schoolCode) OR COALESCE(data->>'schoolCode','')=:schoolCode ORDER BY "createdAt" DESC LIMIT 8`, { schoolCode }),
+    getAlertsForUser(req.user, { limit: 8 }).catch(() => []),
     safeQuery(`SELECT category,amount,status,"expenseDate" FROM "FinanceExpenses" WHERE "schoolCode"=:schoolCode AND "expenseDate">=:dateFrom AND "expenseDate"<=:dateTo ORDER BY "expenseDate" ASC`, { schoolCode, dateFrom: filters.dateFrom, dateTo: filters.dateTo })
   ]);
   const studentById = new Map(options.students.map(s => [Number(s.id), s]));
@@ -346,7 +357,7 @@ async function buildSchoolAnalytics(req) {
       topClasses: classPerformance.slice(0, 5), atRiskClasses: [...classPerformance].filter(x => x.average > 0).sort((a, b) => a.average - b.average).slice(0, 5),
       topStudents: studentPerformance.slice(0, 8), riskStudents: atRiskStudents.slice(0, 10), topTeachers: teacherPerformance.slice(0, 8), topSubjects: subjectPerformance.slice(0, 8),
       assessmentPerformance: assessmentPerformance.slice(0, 10), streamPerformance, operational, classFeePerformance, expenseCategories:[...expenseCategories.entries()].map(([name,value])=>({name,value})), reconciliation:[{name:'Verified / completed payments',value:payments.filter(p=>statusComplete(p.status)).length},{name:'Pending payments',value:payments.filter(p=>text(p.status).toLowerCase()==='pending').length},{name:'Failed / reversed payments',value:payments.filter(p=>['failed','reversed','cancelled'].includes(text(p.status).toLowerCase())).length}], bursarySummary:[{name:'Credits / bursaries applied',value:fee.credits},{name:'Students with credit',value:new Set(feesRows.filter(f=>num(f.creditAmount)>0).map(f=>Number(f.studentId))).size}],
-      alerts: alerts.map(a => insight(a.title || 'School alert', a.message || '', a.severity || 'info', new Date(a.createdAt).toLocaleString(), a.type || 'info')),
+      alerts: (req.user.role === 'finance_officer' ? alerts.filter(analyticsFinanceAlertOnly) : alerts).map(alertInsightRow),
       defaulters: feesRows.filter(f => num(f.totalAmount) - Math.max(num(f.parentPaidAmount), num(f.paidAmount)) - num(f.creditAmount) > 0).map(f => { const student = studentById.get(Number(f.studentId)); return { student: student?.name || `Student ${f.studentId}`, className: student?.className || student?.grade || 'Unassigned', outstanding: Math.max(0, num(f.totalAmount) - Math.max(num(f.parentPaidAmount), num(f.paidAmount)) - num(f.creditAmount)), dueDate: f.dueDate }; }).sort((a, b) => b.outstanding - a.outstanding).slice(0, 20)
     },
     finance: fee, taskSummary: task, updatedAt: new Date().toISOString(), realData: true, tenantScoped: schoolCode
@@ -403,7 +414,7 @@ async function buildChildStudentAnalytics(req) {
     academicRecords(scope, filters, true), attendanceRecords(scope, filters), taskRows(scope), reportRows(scope, filters),
     safeQuery(`SELECT sb."awardedAt", b.name, b.description, b.icon FROM "StudentBadges" sb JOIN "Badges" b ON b.id=sb."badgeId" WHERE sb."studentId"=:studentId ORDER BY sb."awardedAt" DESC`, { studentId: student.id }),
     safeQuery(`SELECT title,note,points,"streakDelta","createdAt" FROM "AchievementEvents" WHERE "schoolCode"=:schoolCode AND ("studentId"=:studentId OR "userId"=:userId) ORDER BY "createdAt" DESC LIMIT 20`, { schoolCode, studentId: student.id, userId: student.userId }),
-    safeQuery(`SELECT title,message,severity,type,"createdAt" FROM "Alerts" WHERE "userId"=:userId OR "studentId"=:studentId OR COALESCE(data->>'studentId','')=:studentIdText ORDER BY "createdAt" DESC LIMIT 10`, { userId: student.userId, studentId: student.id, studentIdText: String(student.id) }),
+    getAlertsForUser(req.user, { studentId: student.id, limit: 10 }).catch(() => []),
     safeQuery(`SELECT slots,classes,term,year,"publishedAt" FROM "Timetables" WHERE "schoolId"=:schoolCode AND "isPublished"=true AND (:term::text IS NULL OR term=:term) AND (:year::int IS NULL OR year=:year) ORDER BY version DESC LIMIT 1`, { schoolCode, term: filters.term, year: filters.year })
   ]);
   const subjectPerf = groupAverage(records, r => r.subject);
@@ -426,7 +437,7 @@ async function buildChildStudentAnalytics(req) {
     options:{ children: role==='parent' ? (await linkage.resolveParentLinkedStudents(req.user.id, schoolCode).catch(()=>[])).map(s=>({id:s.id,name:s.User?.name||`Student ${s.id}`})) : [], subjects:subjectPerf.map(s=>({id:s.name,name:s.name})) },
     kpis:[kpi('Average Score',`${avg}%`,'star','purple'),kpi('Attendance',`${attendanceRate(attendance)}%`,'calendar-check','teal'),kpi('Homework Completion',`${task.rate}%`,'clipboard-check','blue'),kpi('Badges Earned',badges.length,'award','orange'),kpi('Progress Score',`${round((avg+attendanceRate(attendance)+task.rate)/3)} / 100`,'gauge','green'),kpi(role==='parent'?'Active Alerts':'Class Rank',role==='parent'?alerts.length:(rank>=0?`${rank+1} / ${classStudents.length}`:'—'),role==='parent'?'bell':'bar-chart-2','red')],
     charts:{ performanceTrend:{labels:subjectPerf.map(s=>s.name),values:subjectPerf.map(s=>s.average)}, attendanceTrend:monthlyTrend(attendance,'date',()=>1,'attendance'), strengthsSplit:{labels:['Strengths','Needs Support'],values:[subjectPerf.filter(s=>s.average>=70).length,subjectPerf.filter(s=>s.average>0&&s.average<60).length]}, homeworkSplit:{labels:['Completed','Pending','Overdue'],values:[task.completed,task.pending,task.overdue]} },
-    lists:{ subjectPerformance:subjectPerf,recentAssessments,badges,achievements,leaderboard,tasks:tasks.slice(0,10).map(t=>({title:t.title,subject:t.subject,status:t.status,dueDate:t.dueDate})),timetable:slots,recentAlerts:alerts.map(a=>insight(a.title||'Alert',a.message||'',a.severity||'info',new Date(a.createdAt).toLocaleString(),a.type||'bell')),recommendations:[...subjectPerf.filter(s=>s.average>0&&s.average<60).slice(0,3).map(s=>insight(`Focus on ${s.name}`,`Current average is ${s.average}%. Review recent assessments and practise this subject.`,'warning','', 'book-open')),...subjectPerf.filter(s=>s.average>=80).slice(0,2).map(s=>insight(`Strong performance in ${s.name}`,`Current average is ${s.average}%. Keep building on this strength.`,'success','', 'trending-up'))],reportSummary:lastReport?{status:lastReport.status,term:lastReport.term,year:lastReport.year,version:lastReport.version,publishedAt:lastReport.publishedAt,average:avg,grade:gradeForScore(avg)}:null,learningStreak:consecutiveAttendanceStreak(attendance) },
+    lists:{ subjectPerformance:subjectPerf,recentAssessments,badges,achievements,leaderboard,tasks:tasks.slice(0,10).map(t=>({title:t.title,subject:t.subject,status:t.status,dueDate:t.dueDate})),timetable:slots,recentAlerts:alerts.map(alertInsightRow),recommendations:[...subjectPerf.filter(s=>s.average>0&&s.average<60).slice(0,3).map(s=>insight(`Focus on ${s.name}`,`Current average is ${s.average}%. Review recent assessments and practise this subject.`,'warning','', 'book-open')),...subjectPerf.filter(s=>s.average>=80).slice(0,2).map(s=>insight(`Strong performance in ${s.name}`,`Current average is ${s.average}%. Keep building on this strength.`,'success','', 'trending-up'))],reportSummary:lastReport?{status:lastReport.status,term:lastReport.term,year:lastReport.year,version:lastReport.version,publishedAt:lastReport.publishedAt,average:avg,grade:gradeForScore(avg)}:null,learningStreak:consecutiveAttendanceStreak(attendance) },
     taskSummary:task,updatedAt:new Date().toISOString(),realData:true,tenantScoped:schoolCode
   };
   response.exportSections = exportSectionsFor(response);
@@ -484,7 +495,20 @@ function rowsForSection(data, key) {
 }
 function humanSection(key) { return key.replace(/^(chart:|list:)/,'').replace(/([A-Z])/g,' $1').replace(/^./,m=>m.toUpperCase()); }
 function csvEscape(value) { const s = value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; }
-function buildCsv(data, sections) { const lines=[]; sections.forEach(key=>{const rows=rowsForSection(data,key);lines.push(csvEscape(humanSection(key)));if(rows.length){const cols=[...new Set(rows.flatMap(r=>Object.keys(r)))];lines.push(cols.map(csvEscape).join(','));rows.forEach(r=>lines.push(cols.map(c=>csvEscape(r[c])).join(',')));}else lines.push('No data');lines.push('');});return lines.join('\n'); }
+function buildCsv(data, sections) {
+  const lines = [['Scope','Section','Row','Field','Value'].map(csvEscape).join(',')];
+  const scopeLabel = data.scope?.label || data.tenantScoped || data.variant || 'Analytics';
+  sections.forEach(key => {
+    const rows = rowsForSection(data, key);
+    const section = humanSection(key);
+    if (!rows.length) { lines.push([scopeLabel, section, 1, 'Status', 'No data available'].map(csvEscape).join(',')); return; }
+    rows.forEach((row, index) => {
+      const entries = Object.entries(row && typeof row === 'object' ? row : { Value: row });
+      entries.forEach(([field, value]) => lines.push([scopeLabel, section, index + 1, field, value].map(csvEscape).join(',')));
+    });
+  });
+  return lines.join('\n');
+}
 function htmlEscape(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function buildPrintHtml(data, sections){const blocks=sections.map(key=>{const rows=rowsForSection(data,key);const cols=rows.length?[...new Set(rows.flatMap(r=>Object.keys(r)))]:[];return `<section><h2>${htmlEscape(humanSection(key))}</h2>${rows.length?`<table><thead><tr>${cols.map(c=>`<th>${htmlEscape(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${htmlEscape(typeof r[c]==='object'?JSON.stringify(r[c]):r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`:'<p>No data available.</p>'}</section>`;}).join('');return `<!doctype html><html><head><meta charset="utf-8"><title>${htmlEscape(data.title)}</title><style>body{font-family:Arial,sans-serif;color:#0f172a;margin:32px}header{border-bottom:3px solid #11B5B1;padding-bottom:16px;margin-bottom:22px}h1{margin:0;color:#083A85}small{color:#64748b}section{page-break-inside:avoid;margin:22px 0}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #dbe4ee;padding:7px;text-align:left}th{background:#083A85;color:white}@media print{button{display:none}}</style></head><body><header><h1>${htmlEscape(data.title)}</h1><p>${htmlEscape(data.subtitle||'')}</p><small>Scope: ${htmlEscape(data.scope?.label||data.tenantScoped)} · Generated ${new Date().toLocaleString()}</small></header>${blocks}<button onclick="window.print()">Print</button></body></html>`;}
 async function buildWorkbook(data, sections){const workbook=new ExcelJS.Workbook();workbook.creator='Shule AI';workbook.created=new Date();for(const key of sections){const rows=rowsForSection(data,key);const sheet=workbook.addWorksheet(humanSection(key).slice(0,31));if(!rows.length){sheet.addRow(['No data available']);continue;}const cols=[...new Set(rows.flatMap(r=>Object.keys(r)))];sheet.columns=cols.map(c=>({header:c,key:c,width:Math.min(45,Math.max(14,c.length+4))}));rows.forEach(row=>sheet.addRow(row));sheet.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};sheet.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF083A85'}};sheet.views=[{state:'frozen',ySplit:1}];sheet.autoFilter={from:{row:1,column:1},to:{row:Math.max(1,sheet.rowCount),column:cols.length}};}return workbook.xlsx.writeBuffer();}

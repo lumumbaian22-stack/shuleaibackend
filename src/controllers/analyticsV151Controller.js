@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { sequelize, User, Student, Parent, Teacher, Class, StudentEnrollment, School } = require('../models');
 const linkage = require('../services/schoolLinkageService');
+const { getAlertsForUser } = require('../services/alertReceiverEngine');
 
 function num(v, fallback = 0) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
 function pct(part, total) { return total ? Math.round((num(part) / num(total)) * 1000) / 10 : 0; }
@@ -119,8 +120,8 @@ async function reportCount(schoolCode, filters = {}) {
   if (filters.term) { where.push('term=:term'); repl.term = filters.term; }
   return scalar(`SELECT COUNT(*)::int AS value FROM "ReportSnapshots" WHERE ${where.join(' AND ')}`, repl);
 }
-async function alertsForSchool(schoolCode, limit = 4) {
-  return q(`SELECT title,message,severity,type,"createdAt" FROM "Alerts" WHERE COALESCE(data->>'schoolCode','')=:schoolCode OR "userId" IN (SELECT id FROM "Users" WHERE "schoolCode"=:schoolCode) ORDER BY "createdAt" DESC LIMIT :limit`, { schoolCode, limit }).catch(() => []);
+async function alertsForUser(user, limit = 4) {
+  return getAlertsForUser(user, { limit }).catch(() => []);
 }
 async function childFeeBalance(studentId, schoolCode) {
   const rows = await q('SELECT COALESCE(SUM("totalAmount" - COALESCE("parentPaidAmount","paidAmount",0) - COALESCE("creditAmount",0)),0)::float AS value FROM "Fees" WHERE "schoolCode"=:schoolCode AND "studentId"=:studentId', { schoolCode, studentId }).catch(()=>[{ value:0 }]);
@@ -166,7 +167,7 @@ async function schoolAnalytics(req) {
   const publishedReports = await reportCount(schoolCode, filters);
   const classPerf = await q(`WITH record_classes AS (SELECT COALESCE(ar."classId", s."classId", se."classId") AS "classId", ar.score FROM "AcademicRecords" ar JOIN "Students" s ON s.id=ar."studentId" JOIN "Users" u ON u.id=s."userId" LEFT JOIN "StudentEnrollments" se ON se."studentId"=s.id AND se.status='active' WHERE u."schoolCode"=:schoolCode AND ar."schoolCode"=:schoolCode AND (:term::text IS NULL OR ar.term=:term) AND (:year::int IS NULL OR ar.year=:year)) SELECT c.id, c.name, ROUND(AVG(rc.score))::int AS average, COUNT(rc.score)::int AS count FROM "Classes" c LEFT JOIN record_classes rc ON rc."classId"=c.id WHERE c."schoolCode"=:schoolCode AND COALESCE(c."isActive", true)=true GROUP BY c.id ORDER BY average DESC NULLS LAST LIMIT 8`, { schoolCode, term: filters.term, year: filters.year }).catch(()=>[]);
   const subjectPerf = await q('SELECT subject, ROUND(AVG(score))::int AS average FROM "AcademicRecords" WHERE "schoolCode"=:schoolCode AND (:term::text IS NULL OR term=:term) AND (:year::int IS NULL OR year=:year) GROUP BY subject ORDER BY average DESC LIMIT 8', { schoolCode, term: filters.term, year: filters.year }).catch(()=>[]);
-  const alerts = await alertsForSchool(schoolCode, 4);
+  const alerts = await alertsForUser(req.user, 4);
   return { variant:'school', title:'School Analytics', subtitle:'Whole-school performance and operations overview', school:{ name: school?.name || 'School', schoolCode }, filters, kpis:[kpi('Total Students', totalStudents, 'users'), kpi('Teachers', totalTeachers, 'user'), kpi('Attendance Rate', `${attRate}%`, 'calendar-check','green'), kpi('Fees Collected', `KSh ${money(fees.paid).toLocaleString()}`, 'wallet','green'), kpi('Published Reports', publishedReports, 'file-text','blue'), kpi('Active Classes', totalClasses, 'users','orange')], charts:{ attendanceTrend: attendanceMonthly(attRows), classPerformance:{ labels:classPerf.map(c=>c.name), values:classPerf.map(c=>num(c.average)) }, feeSplit:{ labels:['Paid','Outstanding','Credits'], values:[fees.paid, fees.outstanding, fees.credits] }, subjectPerformance:{ labels:subjectPerf.map(s=>s.subject), values:subjectPerf.map(s=>num(s.average)) } }, lists:{ topClasses: classPerf.slice(0,3).map(c=>({ name:c.name, value:num(c.average), meta:`${c.count} marks` })), atRiskClasses: [...classPerf].reverse().slice(0,3).map(c=>({ name:c.name, value:num(c.average), meta:num(c.average)<60?'Needs support':'Monitor' })), insights: alerts.length ? alerts.map(a=>insight(a.title || 'School alert', a.message || 'Review update', a.severity || 'info', new Date(a.createdAt).toLocaleString(), a.type)) : [insight('Analytics connected', 'School data is scoped to your school only.', 'success'), insight('Fee collection', `Collection rate is ${fees.collectionRate}%.`, 'info')] }, finance: fees, updatedAt: nowIso() };
 }
 

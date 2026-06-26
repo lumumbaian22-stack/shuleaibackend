@@ -41,7 +41,62 @@ function ref(prefix) {
 
 function publicUrl(path) {
   const base = process.env.PUBLIC_API_BASE_URL || process.env.BACKEND_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '';
-  return base ? `${String(base).replace(/\/$/, '')}${path}` : path;
+  return base ? String(base).replace(/\/$/, '') + path : path;
+}
+
+function pesapalEndpoint(config = {}) {
+  const explicit = config.apiBaseUrl || config.baseUrl || config.endpoint || '';
+  if (explicit) {
+    try {
+      const u = new URL(String(explicit));
+      return { hostname: u.hostname, pathBase: (u.pathname || '').replace(/\/$/, '') || (u.hostname.includes('cybqa') ? '/pesapalv3/api' : '/v3/api') };
+    } catch (_) {}
+  }
+  const env = String(config.environment || config.mode || process.env.PESAPAL_ENV || '').toLowerCase();
+  const sandbox = env.includes('sandbox') || env.includes('test') || env.includes('demo');
+  return sandbox ? { hostname: 'cybqa.pesapal.com', pathBase: '/pesapalv3/api' } : { hostname: 'pay.pesapal.com', pathBase: '/v3/api' };
+}
+
+function pesapalNameParts(name = '') {
+  const parts = String(name || 'ShuleAI payer').trim().split(/\s+/).filter(Boolean);
+  return { firstName: parts[0] || 'ShuleAI', lastName: parts.slice(1).join(' ') || 'Payer' };
+}
+
+async function createPesapalCheckout({ payment, phone, email, name, config }) {
+  const consumerKey = config.consumerKey || config.consumer_key || process.env.PESAPAL_CONSUMER_KEY;
+  const consumerSecret = config.consumerSecret || config.consumer_secret || process.env.PESAPAL_CONSUMER_SECRET;
+  const notificationId = config.ipnId || config.notificationId || config.notification_id || process.env.PESAPAL_IPN_ID;
+  if ((!consumerKey || !consumerSecret || !notificationId) && config.checkoutUrl) {
+    return { status: 'prompt_sent', promptType: 'checkout_url', checkoutUrl: config.checkoutUrl, providerReference: payment.reference, gatewayResponse: { mode: 'static_checkout_url' }, message: 'Open Pesapal checkout.' };
+  }
+  if (!consumerKey || !consumerSecret) throw new Error('Pesapal consumer key and consumer secret are required');
+  if (!notificationId) throw new Error('Pesapal IPN ID is required');
+  const endpoint = pesapalEndpoint(config);
+  const tokenData = await requestJson({ hostname: endpoint.hostname, path: endpoint.pathBase + '/Auth/RequestToken', headers: { Accept: 'application/json' }, body: { consumer_key: consumerKey, consumer_secret: consumerSecret } });
+  const token = tokenData?.token || tokenData?.data?.token;
+  if (!token) throw new Error(tokenData?.error?.message || tokenData?.message || 'Pesapal did not return an access token');
+  const payer = pesapalNameParts(name);
+  const callbackUrl = config.callbackUrl || config.returnUrl || publicUrl('/payment-return.html');
+  const order = {
+    id: payment.reference,
+    currency: payment.currency || 'KES',
+    amount: cleanAmount(payment.amount),
+    description: payment.paymentType === SCHOOL_FEE ? 'School fees' : 'ShuleAI platform payment',
+    callback_url: callbackUrl,
+    notification_id: notificationId,
+    billing_address: {
+      email_address: email || config.fallbackEmail || 'payments@shuleai.local',
+      phone_number: phone || config.fallbackPhone || '',
+      country_code: config.countryCode || 'KE',
+      first_name: payer.firstName,
+      last_name: payer.lastName
+    }
+  };
+  const checkout = await requestJson({ hostname: endpoint.hostname, path: endpoint.pathBase + '/Transactions/SubmitOrderRequest', headers: { Accept: 'application/json', Authorization: 'Bearer ' + token }, body: order });
+  const checkoutUrl = checkout?.redirect_url || checkout?.redirectUrl || checkout?.data?.redirect_url;
+  const providerReference = checkout?.order_tracking_id || checkout?.OrderTrackingId || checkout?.data?.order_tracking_id || payment.reference;
+  if (!checkoutUrl) throw new Error(checkout?.error?.message || checkout?.message || 'Pesapal did not return a checkout URL');
+  return { status: 'prompt_sent', promptType: 'checkout_url', checkoutUrl, providerReference, gatewayResponse: checkout, message: 'Open Pesapal checkout to complete payment.' };
 }
 
 function requestJson({ method = 'POST', hostname, path, headers = {}, body = {} }) {
@@ -212,7 +267,7 @@ async function createProviderPrompt({ provider, payment, phone, email, name, con
   }
 
   if (provider === 'pesapal') {
-    return { status: 'prompt_sent', promptType: 'checkout_url', checkoutUrl: config.checkoutUrl || null, providerReference: reference, gatewayResponse: { note: 'Pesapal requires IPN registration/OAuth. Add checkoutUrl/credentials then wire live token exchange.' }, message: config.checkoutUrl ? 'Open Pesapal checkout.' : 'Pesapal provider saved; live checkout requires registered IPN/OAuth credentials.' };
+    return createPesapalCheckout({ payment, phone, email, name, config });
   }
 }
 
@@ -285,6 +340,7 @@ function extractWebhook(provider, payload = {}) {
   if (provider === 'paystack') return { reference: payload.data?.reference, providerReference: payload.data?.reference, amount: payload.data?.amount ? Math.round(Number(payload.data.amount) / 100) : null, currency: payload.data?.currency, eventId: payload.data?.id ? String(payload.data.id) : payload.event };
   if (provider === 'flutterwave') return { reference: payload.tx_ref || payload.data?.tx_ref, providerReference: payload.transaction_id || payload.data?.id || payload.data?.flw_ref, amount: payload.amount || payload.data?.amount, currency: payload.currency || payload.data?.currency, eventId: payload.id || payload.data?.id || payload.event };
   if (provider === 'stripe') return { reference: payload.data?.object?.client_reference_id || payload.data?.object?.metadata?.reference, providerReference: payload.data?.object?.id, amount: payload.data?.object?.amount_total ? Math.round(Number(payload.data.object.amount_total) / 100) : null, currency: String(payload.data?.object?.currency || '').toUpperCase(), eventId: payload.id };
+  if (provider === 'pesapal') return { reference: payload.OrderMerchantReference || payload.order_merchant_reference || payload.merchant_reference || payload.reference, providerReference: payload.OrderTrackingId || payload.order_tracking_id || payload.providerReference, amount: payload.amount || payload.Amount, currency: payload.currency || payload.Currency || 'KES', eventId: payload.OrderTrackingId || payload.order_tracking_id || payload.eventId };
   return { reference: payload.reference || payload.internalReference || payload.CheckoutRequestID, providerReference: payload.providerReference || payload.CheckoutRequestID, amount: payload.amount, currency: payload.currency || 'KES', eventId: payload.id || payload.eventId || payload.CheckoutRequestID };
 }
 
