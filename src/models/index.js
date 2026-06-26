@@ -17,6 +17,7 @@ const Attendance = require('./Attendance')(sequelize, DataTypes);
 const Fee = require('./Fee')(sequelize, DataTypes);
 const FeeStructure = require('./FeeStructure')(sequelize, DataTypes);
 const Payment = require('./Payment')(sequelize, DataTypes);
+const PaymentEvent = require('./PaymentEvent')(sequelize, DataTypes);
 const Message = require('./Message')(sequelize, DataTypes);
 const Alert = require('./Alert')(sequelize, DataTypes);
 const ApprovalRequest = require('./ApprovalRequest')(sequelize, DataTypes);
@@ -217,6 +218,8 @@ Fee.belongsTo(Student, { foreignKey: 'studentId' });
 Student.hasMany(Fee, { foreignKey: 'studentId' });
 
 // Payment
+Payment.hasMany(PaymentEvent, { foreignKey: 'paymentId' });
+PaymentEvent.belongsTo(Payment, { foreignKey: 'paymentId' });
 Payment.belongsTo(Fee, { foreignKey: 'feeId' });
 Fee.hasMany(Payment, { foreignKey: 'feeId' });
 Payment.belongsTo(FeeStructure, { foreignKey: 'feeStructureId', targetKey: 'id', constraints: false });
@@ -448,7 +451,7 @@ function attachRealtimeHooks(model, modelName) {
   model.addHook('afterDestroy', (instance, options) => emitModelChange(modelName, 'deleted', instance, options));
 }
 [
-  [Payment,'Payment'],[Fee,'Fee'],[FeeStructure,'FeeStructure'],[AcademicRecord,'AcademicRecord'],
+  [Payment,'Payment'],[PaymentEvent,'PaymentEvent'],[Fee,'Fee'],[FeeStructure,'FeeStructure'],[AcademicRecord,'AcademicRecord'],
   [ReportSnapshot,'ReportSnapshot'],[Attendance,'Attendance'],[HomeTask,'HomeTask'],
   [HomeTaskAssignment,'HomeTaskAssignment'],[ApprovalRequest,'ApprovalRequest'],
   [Student,'Student'],[Teacher,'Teacher'],[Parent,'Parent'],[Class,'Class'],[Message,'Message']
@@ -481,7 +484,7 @@ function installTenantHooks(models) {
     });
   });
 }
-installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ClassTransferRequest, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, AuditLog, MediaAsset, FinanceExpense });
+installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ClassTransferRequest, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, PaymentEvent, AuditLog, MediaAsset, FinanceExpense });
 
 module.exports = {
     sequelize,
@@ -496,6 +499,7 @@ module.exports = {
     Fee,
     FeeStructure,
     Payment,
+    PaymentEvent,
     Message,
     Alert,
     ApprovalRequest,

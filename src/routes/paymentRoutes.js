@@ -3,6 +3,20 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const financePermission=require('../middleware/financePermission');
 const ctrl = require('../controllers/paymentController');
+const locked = require('../controllers/lockedPaymentController');
+
+
+// V152 FINAL LOCKED UNIVERSAL PAYMENT ENGINE
+// One engine, two destinations: platform payments go to ShuleAI; school_fee payments go to the selected school provider.
+router.get('/providers', protect, locked.getAllowedProviders);
+router.get('/admin/providers', protect, authorize('admin', 'finance_officer'), financePermission('settings'), locked.getSchoolProviderSettings);
+router.put('/admin/providers', protect, authorize('admin', 'finance_officer'), financePermission('settings'), locked.saveSchoolProviderSettings);
+router.get('/superadmin/providers', protect, authorize('super_admin'), locked.getPlatformProviderSettings);
+router.get('/parent/methods', protect, authorize('parent'), locked.getParentPaymentMethods);
+router.post('/initiate', protect, locked.initiatePayment);
+router.get('/:reference/status', protect, locked.getPaymentStatus);
+router.post('/reconcile/:reference', protect, locked.reconcilePayment);
+router.post('/webhook/:provider', locked.webhook);
 
 router.post('/daraja/callback', ctrl.darajaCallback);
 router.post('/mpesa/callback', ctrl.darajaCallback);

@@ -87,6 +87,21 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.JSONB,
       defaultValue: {}
     },
+
+    paymentDestination: { type: DataTypes.STRING, allowNull: false, defaultValue: 'platform' },
+    providerReference: { type: DataTypes.STRING, allowNull: true },
+    checkoutUrl: { type: DataTypes.TEXT, allowNull: true },
+    promptType: { type: DataTypes.STRING, allowNull: true },
+    promptStatus: { type: DataTypes.STRING, allowNull: true },
+    confirmedAmount: { type: DataTypes.INTEGER, allowNull: true },
+    confirmedCurrency: { type: DataTypes.STRING, allowNull: true },
+    providerStatus: { type: DataTypes.STRING, allowNull: true },
+    reconciliationStatus: { type: DataTypes.STRING, allowNull: false, defaultValue: 'pending' },
+    reconciledAt: { type: DataTypes.DATE, allowNull: true },
+    failedAt: { type: DataTypes.DATE, allowNull: true },
+    expiresAt: { type: DataTypes.DATE, allowNull: true },
+    receiptNumber: { type: DataTypes.STRING, allowNull: true },
+
     
     subscriptionPaymentId: { type: DataTypes.INTEGER, allowNull: true },
     subscriptionId: { type: DataTypes.INTEGER, allowNull: true },

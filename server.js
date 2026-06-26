@@ -11,9 +11,16 @@ const { configureSocketRedisAdapter } = require('./src/config/socketRedisAdapter
 const birthdayService = require('./src/services/birthdayService');
 const studentLifecycleController = require('./src/controllers/studentLifecycleController');
 const subscriptionEnforcement = require('./src/services/subscriptionEnforcementService');
+const { loadBalancingConfig } = require('./src/config/loadBalancing');
 
 const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
+server.requestTimeout = loadBalancingConfig.requestTimeoutMs;
+server.headersTimeout = loadBalancingConfig.headersTimeoutMs;
+server.keepAliveTimeout = loadBalancingConfig.keepAliveTimeoutMs;
+if (loadBalancingConfig.maxRequestsPerSocket > 0) {
+  server.maxRequestsPerSocket = loadBalancingConfig.maxRequestsPerSocket;
+}
 
 const socketAllowedOrigins = Array.from(new Set([
   'https://shuleai.live',
@@ -153,7 +160,10 @@ async function start() {
       await sequelize.sync({ alter: true });
       console.log('✅ Database models synchronized');
     }
-    await configureSocketRedisAdapter(io);
+    const redisAdapterEnabled = await configureSocketRedisAdapter(io);
+    if (!redisAdapterEnabled && process.env.NODE_ENV === 'production') {
+      console.warn('⚠️ Socket.IO Redis adapter is not enabled. Multi-instance WebSocket broadcasts require REDIS_URL.');
+    }
     await realtimeService.processPending(250).catch(() => 0);
     const timer = setInterval(() => realtimeService.processPending(100).catch(() => 0), Number(process.env.REALTIME_OUTBOX_INTERVAL_MS || 3000));
     timer.unref?.();
@@ -164,10 +174,17 @@ async function start() {
       await studentLifecycleController.applyDueTransfersSystem().catch(error => console.error('[Class transfer scheduler]', error.message));
       await subscriptionEnforcement.processAllSchools().catch(error => console.error('[Subscription scheduler]', error.message));
     };
-    setTimeout(runScheduledLifecycleJobs, 5000).unref?.();
-    const lifecycleTimer = setInterval(runScheduledLifecycleJobs, Number(process.env.LIFECYCLE_JOB_INTERVAL_MS || 60 * 60 * 1000));
-    lifecycleTimer.unref?.();
-    server.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+    if (loadBalancingConfig.runScheduledJobs) {
+      setTimeout(runScheduledLifecycleJobs, 5000).unref?.();
+      const lifecycleTimer = setInterval(runScheduledLifecycleJobs, Number(process.env.LIFECYCLE_JOB_INTERVAL_MS || 60 * 60 * 1000));
+      lifecycleTimer.unref?.();
+      console.log('✅ Scheduled lifecycle jobs enabled on this instance');
+    } else {
+      console.log('ℹ️ Scheduled lifecycle jobs disabled on this web instance');
+    }
+
+    app.locals.shuleAiReady = true;
+    server.listen(PORT, () => console.log(`✅ Server running on port ${PORT} [instance ${loadBalancingConfig.instanceId}]`));
   } catch (err) {
     console.error('❌ Database or startup error:', err);
     process.exit(1);
@@ -176,5 +193,32 @@ async function start() {
 
 start();
 
+async function gracefulShutdown(signal) {
+  if (app.locals.shuleAiShuttingDown) return;
+  app.locals.shuleAiShuttingDown = true;
+  app.locals.shuleAiReady = false;
+  console.log(`🛑 ${signal} received. Draining HTTP/WebSocket connections...`);
+
+  const forceTimer = setTimeout(() => {
+    console.error('❌ Graceful shutdown timed out. Forcing exit.');
+    process.exit(1);
+  }, loadBalancingConfig.gracefulShutdownMs);
+  forceTimer.unref?.();
+
+  try {
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => io.close(resolve));
+    await sequelize.close().catch(() => null);
+    clearTimeout(forceTimer);
+    console.log('✅ Graceful shutdown complete');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Graceful shutdown error:', error);
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('unhandledRejection', (reason, promise) => console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason));
 process.on('uncaughtException', (err) => { console.error('❌ Uncaught Exception:', err); process.exit(1); });

@@ -59,8 +59,10 @@ const { ensureRuntimeSchema } = require('./utils/schemaSafety');
 const { accessSchemaMiddleware, ensureSchoolAccessSchema } = require('./utils/accessSchemaGuard');
 const { requireFeature } = require('./middleware/featureGate');
 const { protect } = require('./middleware/auth');
+const { applyLoadBalancingMiddleware, loadBalancingConfig } = require('./config/loadBalancing');
 
 const app = express();
+applyLoadBalancingMiddleware(app);
 
 // ============ MIDDLEWARE ============
 app.use((req, res, next) => { req._startAt = Date.now(); next(); });
@@ -159,11 +161,40 @@ app.use('/uploads', (req, res, next) => {
 app.get('/homework-files/:filename', publicHomeworkFileController.serveHomeworkAttachment);
 
 // ============ TEST ENDPOINT ============
+function healthPayload(req, extra = {}) {
+  return {
+    success: true,
+    version: require('../package.json').version,
+    build: 'v151.2-load-balancing-ready',
+    instanceId: req.app.locals.shuleAiInstanceId || loadBalancingConfig.instanceId,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    ...extra
+  };
+}
+
 app.get('/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v149.7-final-cors-cache-timetable-realtime-lock', timestamp: new Date().toISOString() });
+  res.json(healthPayload(req, { status: req.app.locals.shuleAiReady ? 'ready' : 'starting' }));
 });
 app.get('/api/health', (req, res) => {
-  res.json({ success: true, version: require('../package.json').version, build:'v149.7-final-cors-cache-timetable-realtime-lock', timestamp: new Date().toISOString() });
+  res.json(healthPayload(req, { status: req.app.locals.shuleAiReady ? 'ready' : 'starting' }));
+});
+app.get(['/health/live', '/api/health/live'], (req, res) => {
+  res.json(healthPayload(req, { status: 'live' }));
+});
+app.get(['/health/ready', '/api/health/ready'], async (req, res) => {
+  if (req.app.locals.shuleAiShuttingDown) {
+    return res.status(503).json(healthPayload(req, { success: false, status: 'shutting_down' }));
+  }
+  try {
+    const { sequelize } = require('./models');
+    await sequelize.query('SELECT 1');
+    req.app.locals.shuleAiReady = true;
+    return res.json(healthPayload(req, { status: 'ready', checks: { database: { ok: true } } }));
+  } catch (error) {
+    req.app.locals.shuleAiReady = false;
+    return res.status(503).json(healthPayload(req, { success: false, status: 'not_ready', checks: { database: { ok: false, error: error.message } } }));
+  }
 });
 
 app.get('/api/health/detailed', async (req, res) => {
