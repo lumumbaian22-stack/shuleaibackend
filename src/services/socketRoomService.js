@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { User, Teacher, Student, Parent, StudentParent, Class, ChatGroup, ChatGroupMember, ClassroomThread } = require('../models');
+const { User, Teacher, Student, Parent, StudentParent, Class, ChatGroup, ChatGroupMember, ClassroomThread, TeacherSubjectAssignment } = require('../models');
 
 function roomParts(room) { return String(room || '').split(':'); }
 function sameSchool(socket, schoolCode) { return Boolean(socket.schoolCode && schoolCode && String(socket.schoolCode) === String(schoolCode)); }

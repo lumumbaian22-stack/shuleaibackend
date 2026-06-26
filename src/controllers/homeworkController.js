@@ -477,8 +477,28 @@ exports.createAssignment = async (req, res) => {
     const resolvedClassId = classItem?.id || classId || null;
     const resolvedClassName = classItem?.name || className || grade || null;
 
-    let targetStudentIds = Array.isArray(studentIds) ? studentIds.filter(Boolean) : [];
-    if (classItem && targetStudentIds.length === 0) {
+    const requestedStudentIds = Array.isArray(studentIds)
+      ? [...new Set(studentIds.map(id => Number(id)).filter(id => Number.isFinite(id) && id > 0))]
+      : [];
+    const explicitStudentTargeting = requestedStudentIds.length > 0;
+    let targetStudentIds = requestedStudentIds;
+
+    if (explicitStudentTargeting) {
+      const StudentModel = Student.unscoped ? Student.unscoped() : Student;
+      const selectedStudents = await StudentModel.findAll({
+        where: { id: { [Op.in]: requestedStudentIds }, status: { [Op.ne]: 'inactive' } },
+        include: [{ model: User, attributes: ['id', 'schoolCode'], where: { schoolCode: req.user.schoolCode }, required: true }],
+        attributes: ['id', 'classId', 'grade', 'status']
+      });
+      const allowedStudents = classItem
+        ? selectedStudents.filter(student => Number(student.classId) === Number(classItem.id)
+          || (!student.classId && (classTextsMatch(student.grade, classItem.name) || classTextsMatch(student.grade, classItem.grade))))
+        : selectedStudents;
+      targetStudentIds = [...new Set(allowedStudents.map(student => Number(student.id)).filter(Boolean))];
+      if (!targetStudentIds.length) {
+        return res.status(400).json({ success: false, message: 'No selected students were found in this school/class for the homework assignment' });
+      }
+    } else if (classItem) {
       const students = await getStudentsForClass(classItem, req.user.schoolCode);
       targetStudentIds = students.map(s => s.id);
     }
@@ -523,7 +543,7 @@ exports.createAssignment = async (req, res) => {
     }));
     if (assignments.length) await HomeTaskAssignment.bulkCreate(assignments, { ignoreDuplicates: true });
 
-    const repairedStudents = await ensureHomeworkAssignmentsForTask(task, req.user.schoolCode);
+    const repairedStudents = explicitStudentTargeting ? [] : await ensureHomeworkAssignmentsForTask(task, req.user.schoolCode);
     const assignedCount = await HomeTaskAssignment.count({ where: { taskId: task.id } });
     let studyThread = null;
     if (parseBool(openStudyDiscussion) || parseBool(createStudyDiscussion)) {

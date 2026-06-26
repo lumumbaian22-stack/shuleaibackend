@@ -65,29 +65,51 @@ async function parentOwnsStudent(parent, student, user) {
 }
 
 
+function smallParentMedia(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return '';
+  return raw;
+}
+
 async function enrichLinkedChildren(children) {
   const classIds = [...new Set(children.map(c => c.classId).filter(Boolean))];
-  const classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds } } }) : [];
+  const classes = classIds.length ? await Class.findAll({ where: { id: { [Op.in]: classIds } }, attributes: ['id','name','grade','stream','schoolCode'] }) : [];
   const classMap = new Map(classes.map(c => [String(c.id), c]));
 
   const schoolCodes = [...new Set(children.map(c => c.User?.schoolCode).filter(Boolean))];
-  const schools = schoolCodes.length ? await School.findAll({ where: { schoolId: { [Op.in]: schoolCodes } } }) : [];
+  const schools = schoolCodes.length ? await School.findAll({ where: { schoolId: { [Op.in]: schoolCodes } }, attributes: ['schoolId','name','system','settings'] }) : [];
   const schoolMap = new Map(schools.map(s => [String(s.schoolId), s]));
 
   return children.map(child => {
     const raw = child.toJSON ? child.toJSON() : child;
+    const user = raw.User || {};
     const classItem = raw.classId ? classMap.get(String(raw.classId)) : null;
-    const schoolCode = raw.User?.schoolCode || raw.schoolCode || null;
+    const schoolCode = user.schoolCode || raw.schoolCode || null;
     const school = schoolCode ? schoolMap.get(String(schoolCode)) : null;
+    const branding = school?.settings?.branding || {};
+    const schoolLogo = smallParentMedia(branding.logoUrl || branding.logo || school?.settings?.logo || '');
+    const name = user.name || raw.name || 'Student';
     return {
-      ...raw,
-      name: raw.User?.name || raw.name || 'Student',
-      className: classItem?.name || raw.grade || 'Not Assigned',
+      id: raw.id,
+      studentId: raw.id,
+      userId: raw.userId,
+      name,
+      elimuid: raw.elimuid,
+      admissionNumber: raw.admissionNumber || null,
+      grade: raw.grade || classItem?.grade || '',
       classId: raw.classId || null,
+      className: classItem?.name || raw.grade || 'Not Assigned',
+      status: raw.status || 'active',
+      curriculum: raw.curriculum || school?.system || 'cbc',
       schoolCode,
-      schoolName: school?.name || raw.User?.School?.name || schoolCode || 'School',
-      schoolLogo: school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null,
-      curriculum: raw.curriculum || school?.system || 'cbc'
+      schoolName: school?.name || schoolCode || 'School',
+      schoolLogo,
+      User: {
+        id: user.id || raw.userId,
+        name,
+        email: user.email || '',
+        profileImage: smallParentMedia(user.profileImage || user.profilePicture || '')
+      }
     };
   });
 }
@@ -209,13 +231,43 @@ exports.getChildSummary = async (req, res) => {
     // Get school info – include curriculum and level so frontend can compute correct grades
     const school = await School.findOne({ 
       where: { schoolId: student.User?.schoolCode || req.user.schoolCode },
-      attributes: ['name', 'bankDetails', 'contact', 'schoolId', 'system', 'settings']
+      attributes: ['name', 'schoolId', 'system', 'settings']
     });
+
+    const schoolBranding = school?.settings?.branding || {};
+    const schoolPayload = school ? {
+      name: school.name,
+      schoolName: school.name,
+      schoolId: school.schoolId,
+      schoolCode: school.schoolId,
+      system: school.system,
+      curriculum: school.system,
+      schoolLevel: school.settings?.schoolLevel || 'secondary',
+      branding: {
+        schoolName: schoolBranding.schoolName || schoolBranding.displayName || school.name,
+        displayName: schoolBranding.displayName || schoolBranding.schoolName || school.name,
+        primaryColor: schoolBranding.primaryColor || '',
+        accentColor: schoolBranding.accentColor || '',
+        logoUrl: smallParentMedia(schoolBranding.logoUrl || schoolBranding.logo || '')
+      }
+    } : null;
+    const fee = outstandingFees ? (outstandingFees.toJSON ? outstandingFees.toJSON() : outstandingFees) : null;
 
     res.json({
       success: true,
       data: {
-        student: { ...student.User.getPublicProfile(), studentId: student.id, elimuid: student.elimuid, grade: student.grade, classId: student.classId, curriculum: student.curriculum, schoolCode: student.User?.schoolCode },
+        student: {
+          id: student.User?.id,
+          userId: student.User?.id,
+          name: student.User?.name || 'Student',
+          studentId: student.id,
+          elimuid: student.elimuid,
+          grade: student.grade,
+          classId: student.classId,
+          curriculum: student.curriculum,
+          schoolCode: student.User?.schoolCode,
+          profileImage: smallParentMedia(student.User?.profileImage || student.User?.profilePicture || '')
+        },
         classTeacher: classTeacher ? {
           id: classTeacher.id,
           name: classTeacher.User.name,
@@ -225,8 +277,18 @@ exports.getChildSummary = async (req, res) => {
         averageScore: avg,
         recentRecords: records,
         recentAttendance: attendance,
-        outstandingFees: outstandingFees,
-        school: school,
+        outstandingFees: fee ? {
+          id: fee.id,
+          totalAmount: fee.totalAmount,
+          paidAmount: fee.paidAmount,
+          parentPaidAmount: fee.parentPaidAmount,
+          balance: fee.balance,
+          status: fee.status,
+          term: fee.term,
+          year: fee.year,
+          dueDate: fee.dueDate
+        } : null,
+        school: schoolPayload,
         // Explicitly pass curriculum info for the frontend
         curriculum: school ? school.system : 'cbc',
         schoolLevel: school?.settings?.schoolLevel || 'secondary'

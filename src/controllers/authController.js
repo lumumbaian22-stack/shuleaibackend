@@ -9,21 +9,78 @@ const curriculumEngine = require('../services/curriculumStructureEngine');
 const classGeneration = require('../services/classGenerationService');
 function additionalRoles(user){return Array.isArray(user?.preferences?.additionalRoles)?user.preferences.additionalRoles.map(String):[];}function canLoginAs(user,requestedRole){const requested=String(requestedRole||user?.role||'').toLowerCase().replace('-','_');return requested===user?.role||additionalRoles(user).includes(requested);}function publicProfileForRole(user,effectiveRole){const payload=user.getPublicProfile(effectiveRole);payload.primaryRole=user.getDataValue?.('primaryRole')||user.primaryRole||user.role;payload.role=effectiveRole;payload.financeTitle=user.preferences?.finance?.title||null;payload.financePermissions=user.preferences?.finance?.permissions||[];return payload;}
 
+function smallSessionMedia(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return '';
+  return raw;
+}
+
+function buildSessionBranding(settings = {}) {
+  const branding = settings.branding || {};
+  const logo = smallSessionMedia(branding.logoUrl || branding.logo || settings.logo || '');
+  return {
+    schoolName: branding.schoolName || branding.displayName || settings.schoolName || settings.displayName || '',
+    displayName: branding.displayName || branding.schoolName || settings.displayName || settings.schoolName || '',
+    primaryColor: branding.primaryColor || '',
+    accentColor: branding.accentColor || '',
+    colorName: branding.colorName || '',
+    logoUrl: logo,
+    logo
+  };
+}
+
+function buildSessionSettings(json = {}) {
+  const settings = json.settings || {};
+  const engine = settings.curriculumEngine || {};
+  return {
+    schoolName: settings.schoolName || settings.displayName || json.name || '',
+    schoolLevel: settings.schoolLevel || 'both',
+    schoolStructure: settings.schoolStructure || engine.structureType || json.schoolStructure || 'mixed',
+    curriculum: settings.curriculum || engine.curriculum || json.system || 'cbc',
+    customSubjects: Array.isArray(settings.customSubjects) ? settings.customSubjects.slice(0, 200) : [],
+    branding: buildSessionBranding(settings),
+    curriculumEngine: {
+      curriculum: engine.curriculum || settings.curriculum || json.system || 'cbc',
+      structureType: engine.structureType || settings.schoolStructure || json.schoolStructure || 'mixed',
+      enabledLevels: Array.isArray(engine.enabledLevels) ? engine.enabledLevels : (Array.isArray(json.enabledLevels) ? json.enabledLevels : []),
+      enabledLevelGroups: Array.isArray(engine.enabledLevelGroups) ? engine.enabledLevelGroups : []
+    }
+  };
+}
+
 async function buildSchoolSessionPayload(school) {
   if (!school) return null;
   const json = school.toJSON ? school.toJSON() : school;
   const access = computeSchoolAccess(school);
   const featurePayload = await getSchoolFeatures(json.schoolId || json.schoolCode).catch(() => ({ planCode: access.planCode || 'starter', featureList: [], plan: null, fullAccess:false, brandingAllowed:false }));
+  const settings = buildSessionSettings(json);
   return {
-    ...json,
+    id: json.id,
+    schoolId: json.schoolId || json.schoolCode,
+    schoolCode: json.schoolCode || json.schoolId,
+    shortCode: json.shortCode || '',
+    name: json.name || settings.schoolName || '',
+    schoolName: settings.schoolName || json.name || '',
+    status: json.status || '',
+    system: json.system || settings.curriculum || 'cbc',
+    curriculum: json.system || settings.curriculum || 'cbc',
+    schoolStructure: json.schoolStructure || settings.schoolStructure || 'mixed',
+    enabledLevels: Array.isArray(json.enabledLevels) ? json.enabledLevels : settings.curriculumEngine.enabledLevels,
+    isActive: json.isActive !== false,
+    subscriptionPlan: json.subscriptionPlan || featurePayload.planCode || access.planCode || 'starter',
+    subscriptionStatus: json.subscriptionStatus || '',
+    accessMode: json.accessMode || access.accessMode || '',
+    accessStatus: json.accessStatus || access.accessStatus || '',
     access,
     planCode: featurePayload.planCode || access.planCode || 'starter',
     plan: featurePayload.plan || null,
-    features: featurePayload.featureList || [],
-    featureList: featurePayload.featureList || [],
+    features: Array.isArray(featurePayload.featureList) ? featurePayload.featureList : [],
+    featureList: Array.isArray(featurePayload.featureList) ? featurePayload.featureList : [],
     fullAccess: !!(featurePayload.fullAccess || access.fullAccess),
     brandingAllowed: !!(featurePayload.brandingAllowed || access.brandingAllowed),
-    curriculumSetup: curriculumEngine.getCurriculumConfig(school)
+    branding: settings.branding,
+    settings,
+    curriculumSetup: curriculumEngine.getCurriculumConfig({ ...json, settings })
   };
 }
 
