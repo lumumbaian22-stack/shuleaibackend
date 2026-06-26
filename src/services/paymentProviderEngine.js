@@ -6,6 +6,7 @@ const financeLedger = require('./financeLedgerService');
 const daraja = require('./darajaService');
 const vault = require('./paymentVaultService');
 const realtimeSync = require('./realtimeSyncService');
+const financialSystem = require('./financialSystemService');
 
 const PROVIDERS = ['manual','bank','cash','card','daraja','paystack','flutterwave','pesapal','stripe'];
 const SCHOOL_FEE = 'school_fee';
@@ -109,6 +110,42 @@ async function saveSchoolProviderSettings({ user, schoolCode, body }) {
   const enabled = body.enabled === false ? enabledList(row).filter(p => p !== provider) : [...new Set([...enabledList(row), provider])];
   const metadata = { ...(row.metadata || {}), paymentProviders: { ...existing, [provider]: merged }, enabledProviders: enabled, auditTrail: [...(row.metadata?.auditTrail || []), { action: 'provider_saved', provider, actorUserId: user?.id || null, at: new Date().toISOString() }] };
   await row.update({ metadata, enabledProviders: enabled, defaultProvider: body.isDefault === false ? row.defaultProvider : provider, paymentMode: enabled.includes('daraja') && enabled.length > 1 ? 'mixed' : (provider === 'daraja' ? 'daraja' : row.paymentMode || 'mixed') });
+  await financialSystem.auditProviderCredentials({ schoolCode, scope: 'school', provider, action: body.enabled === false ? 'provider_disabled_or_saved' : 'provider_saved', actorUserId: user?.id || null, changedFields: Object.keys(body.config || body || {}).filter(k => !/secret|key|pass|token/i.test(k)), metadata: { finalLock: 'v200', credentialsEncrypted: true } });
+  return serializeSettings(row.reload ? await row.reload() : row);
+}
+
+
+async function savePlatformProviderSettings({ user, body }) {
+  const row = await getPlatformRow();
+  const provider = normalizeProvider(body.provider || body.defaultProvider || 'manual');
+  const existing = providerMap(row);
+  const secretFields = ['secretKey','apiKey','privateKey','consumerSecret','passkey','clientSecret','webhookSecret','encryptionKey','accessToken'];
+  const incoming = {
+    ...(body.config || {}),
+    provider,
+    enabled: body.enabled !== false,
+    methods: body.methods || body.config?.methods || [],
+    publicKey: body.publicKey || body.config?.publicKey || undefined,
+    shortcode: body.shortcode || body.config?.shortcode || undefined,
+    callbackUrl: body.callbackUrl || body.config?.callbackUrl || publicUrl(`/api/payments/webhook/${provider}`),
+    updatedBy: user?.id || null,
+    updatedAt: new Date().toISOString()
+  };
+  const merged = vault.mergeEncryptedCredentials(existing[provider] || {}, incoming, secretFields);
+  const enabled = body.enabled === false ? enabledList(row).filter(p => p !== provider) : [...new Set([...enabledList(row), provider])];
+  const metadata = {
+    ...(row.metadata || {}),
+    paymentProviders: { ...existing, [provider]: merged },
+    enabledProviders: enabled,
+    auditTrail: [...(row.metadata?.auditTrail || []), { action: 'platform_provider_saved', provider, actorUserId: user?.id || null, at: new Date().toISOString() }]
+  };
+  await row.update({
+    metadata,
+    enabledProviders: enabled,
+    defaultProvider: body.isDefault === false ? row.defaultProvider : provider,
+    paymentMode: enabled.includes('daraja') && enabled.length > 1 ? 'mixed' : (provider === 'daraja' ? 'daraja' : row.paymentMode || 'mixed')
+  });
+  await financialSystem.auditProviderCredentials({ schoolCode: 'platform', scope: 'platform', provider, action: body.enabled === false ? 'provider_disabled_or_saved' : 'provider_saved', actorUserId: user?.id || null, changedFields: Object.keys(body.config || body || {}).filter(k => !/secret|key|pass|token/i.test(k)), metadata: { finalLock: 'v200_full', credentialsEncrypted: true } });
   return serializeSettings(row.reload ? await row.reload() : row);
 }
 
@@ -198,7 +235,8 @@ async function initiatePayment({ user, body }) {
       }
       fee = await Fee.findOne({ where: { id: body.feeId, studentId: student.id, schoolCode }, transaction });
       if (!fee) throw new Error('Fee account not found for this student');
-      const balance = Math.max(0, Number(fee.totalAmount || 0) - Number(fee.paidAmount || 0));
+      var invoice = await financialSystem.ensureInvoiceForFee({ feeId: fee.id, transaction });
+      const balance = invoice ? Number(invoice.balanceAmount || 0) : Math.max(0, Number(fee.totalAmount || 0) - Number((fee.parentPaidAmount ?? fee.paidAmount) || 0) - Number(fee.creditAmount || 0));
       if (amount > balance && body.allowOverpay !== true) throw new Error(`Amount exceeds outstanding balance. Balance is ${balance}`);
     }
 
@@ -216,13 +254,17 @@ async function initiatePayment({ user, body }) {
       expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24)
     }, { transaction });
 
+    await financialSystem.mirrorLegacyPayment({ payment, invoiceId: typeof invoice !== 'undefined' ? invoice?.id || null : null, transaction });
+
     try {
       const config = await getProviderConfig({ paymentType, schoolCode, provider });
       const prompt = await createProviderPrompt({ provider, payment, phone, email: user?.email || body.email, name: user?.name || body.name, config });
       await payment.update({ promptStatus: prompt.status, promptType: prompt.promptType, checkoutUrl: prompt.checkoutUrl || null, providerReference: prompt.providerReference || null, transactionId: prompt.checkoutRequestId || prompt.providerReference || payment.transactionId, checkoutRequestId: prompt.checkoutRequestId || payment.checkoutRequestId, merchantRequestId: prompt.merchantRequestId || payment.merchantRequestId, gatewayResponse: prompt.gatewayResponse || {}, metadata: { ...(payment.metadata || {}), promptMessage: prompt.message } }, { transaction });
+      await financialSystem.mirrorLegacyPayment({ payment: await payment.reload({ transaction }), invoiceId: typeof invoice !== 'undefined' ? invoice?.id || null : null, transaction });
       return payment.reload({ transaction });
     } catch (error) {
       await payment.update({ status: 'pending_provider_error', promptStatus: 'provider_error', providerStatus: 'provider_error', notes: error.message, metadata: { ...(payment.metadata || {}), providerError: error.message } }, { transaction });
+      await financialSystem.mirrorLegacyPayment({ payment: await payment.reload({ transaction }), invoiceId: typeof invoice !== 'undefined' ? invoice?.id || null : null, transaction });
       return payment.reload({ transaction });
     }
   });
@@ -274,7 +316,8 @@ async function processConfirmedPayment({ payment, status, provider, providerRefe
       metadata: { ...(locked.metadata || {}), lastProviderPayload: rawPayload || {} }
     }, { transaction });
 
-    if (paid && locked.paymentType === SCHOOL_FEE && locked.feeId) await financeLedger.recalculateFeeAccount(locked.feeId, { transaction });
+    await financialSystem.finalizeConfirmedPayment({ legacyPayment: locked, status, provider, providerReference, amount, currency, rawPayload, event, transaction });
+    if (paid && locked.paymentType === SCHOOL_FEE && locked.feeId) await financeLedger.recalculateFeeAccount(locked.feeId, { transaction }).catch(() => null);
     if (event) await event.update({ processed: true, paymentId: locked.id, schoolCode: locked.schoolCode }, { transaction });
   });
   realtimeSync.emitPaymentUpdate(payment.schoolCode, { paymentId: payment.id, studentId: payment.studentId, feeId: payment.feeId, status: status === 'paid' ? 'completed' : status, action: 'payment_provider_confirmation', provider });
@@ -308,12 +351,18 @@ async function reconcilePayment({ reference, user }) {
   const payment = await Payment.findOne({ where: user?.role === 'super_admin' ? { reference } : { reference, schoolCode: user?.schoolCode } });
   if (!payment) throw new Error('Payment not found');
   if (FINAL_PAID.includes(String(payment.status).toLowerCase())) {
-    if (payment.paymentType === SCHOOL_FEE && payment.feeId) await financeLedger.recalculateFeeAccount(payment.feeId);
+    const invoice = payment.feeId ? await financialSystem.ensureInvoiceForFee({ feeId: payment.feeId }) : null;
+    const tx = await financialSystem.mirrorLegacyPayment({ payment, invoiceId: invoice?.id || null });
+    if (payment.paymentType === SCHOOL_FEE && invoice) await financialSystem.recalculateInvoice(invoice.id);
+    if (payment.paymentType === SCHOOL_FEE && payment.feeId) await financeLedger.recalculateFeeAccount(payment.feeId).catch(() => null);
+    await financialSystem.recordReconciliation({ legacyPayment: payment, transactionRow: tx, result: 'already_paid', message: 'Payment was already final; balances recalculated.' });
     return getPaymentStatus({ reference, user });
   }
   // Safe fallback: leave pending unless a real provider status endpoint is added/configured.
   await payment.update({ lastStatusQueryAt: new Date(), reconciliationStatus: 'pending', metadata: { ...(payment.metadata || {}), lastReconcileMessage: 'No confirmed provider status yet; payment left pending safely.' } });
+  const tx = await financialSystem.mirrorLegacyPayment({ payment });
+  await financialSystem.recordReconciliation({ legacyPayment: payment, transactionRow: tx, result: 'pending', message: 'No confirmed provider status yet; payment left pending safely.' });
   return getPaymentStatus({ reference, user });
 }
 
-module.exports = { PROVIDERS, SCHOOL_FEE, PLATFORM, getSettings, saveSchoolProviderSettings, initiatePayment, handleWebhook, getPaymentStatus, reconcilePayment, normalizeProvider, normalizePaymentType };
+module.exports = { PROVIDERS, SCHOOL_FEE, PLATFORM, getSettings, saveSchoolProviderSettings, savePlatformProviderSettings, initiatePayment, handleWebhook, getPaymentStatus, reconcilePayment, normalizeProvider, normalizePaymentType };

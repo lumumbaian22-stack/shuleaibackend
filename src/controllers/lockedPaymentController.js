@@ -30,6 +30,14 @@ exports.getPlatformProviderSettings = async (req, res) => {
   } catch (error) { res.status(400).json({ success: false, message: error.message }); }
 };
 
+
+exports.savePlatformProviderSettings = async (req, res) => {
+  try {
+    const data = await engine.savePlatformProviderSettings({ user: req.user, body: req.body });
+    res.json({ success: true, message: 'Platform payment provider saved. Private credentials are encrypted and never sent to schools/parents.', data });
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+};
+
 exports.initiatePayment = async (req, res) => {
   try {
     const payment = await engine.initiatePayment({ user: req.user, body: req.body });

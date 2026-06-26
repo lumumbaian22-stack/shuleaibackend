@@ -39,6 +39,7 @@ const gamificationRoutes = require('./routes/gamificationRoutes');
 const chatV9Routes = require('./routes/chatV9Routes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const financeRoutes = require('./routes/financeRoutes');
+const financialSystemRoutes = require('./routes/financialSystemRoutes');
 const nationalRolloutRoutes = require('./routes/nationalRolloutRoutes');
 const scaleRoutes = require('./routes/scaleRoutes');
 const jobRoutes = require('./routes/jobRoutes');
@@ -370,6 +371,7 @@ app.use('/api/tutor', tutorRoutes);
 // endpoints such as /api/payments/parent/subscription/stk must remain reachable.
 app.use('/api/payments', paymentRoutes);
 app.use('/api/finance', financeRoutes);
+app.use('/api/finance-system', financialSystemRoutes);
 // National rollout completion routes fill missing school-operations APIs and disable old live-money endpoints.
 app.use('/api', nationalRolloutRoutes);
 app.use('/api/owner', ownerHardeningRoutes);

@@ -13,6 +13,8 @@ module.exports = (sequelize, DataTypes) => {
     darajaShortcode: { type: DataTypes.STRING, allowNull: true },
     darajaEnvironment: { type: DataTypes.ENUM('sandbox', 'production'), defaultValue: 'sandbox' },
     callbackUrl: { type: DataTypes.STRING, allowNull: true },
+    enabledProviders: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+    defaultProvider: { type: DataTypes.STRING, allowNull: true },
     bankName: { type: DataTypes.STRING, allowNull: true },
     bankAccountName: { type: DataTypes.STRING, allowNull: true },
     bankAccountNumber: { type: DataTypes.STRING, allowNull: true },

@@ -12,6 +12,7 @@ router.get('/providers', protect, locked.getAllowedProviders);
 router.get('/admin/providers', protect, authorize('admin', 'finance_officer'), financePermission('settings'), locked.getSchoolProviderSettings);
 router.put('/admin/providers', protect, authorize('admin', 'finance_officer'), financePermission('settings'), locked.saveSchoolProviderSettings);
 router.get('/superadmin/providers', protect, authorize('super_admin'), locked.getPlatformProviderSettings);
+router.put('/superadmin/providers', protect, authorize('super_admin'), locked.savePlatformProviderSettings);
 router.get('/parent/methods', protect, authorize('parent'), locked.getParentPaymentMethods);
 router.post('/initiate', protect, locked.initiatePayment);
 router.get('/:reference/status', protect, locked.getPaymentStatus);

@@ -74,6 +74,14 @@ const ReportShare = require('./ReportShare')(sequelize, DataTypes);
 const BirthdayEvent = require('./BirthdayEvent')(sequelize, DataTypes);
 const MediaAsset = require('./MediaAsset')(sequelize, DataTypes);
 const FinanceExpense = require('./FinanceExpense')(sequelize, DataTypes);
+const FeeInvoice = require('./FeeInvoice')(sequelize, DataTypes);
+const FeeInvoiceItem = require('./FeeInvoiceItem')(sequelize, DataTypes);
+const StudentFeeAccount = require('./StudentFeeAccount')(sequelize, DataTypes);
+const PaymentTransaction = require('./PaymentTransaction')(sequelize, DataTypes);
+const PaymentReconciliation = require('./PaymentReconciliation')(sequelize, DataTypes);
+const ProviderCredentialsAudit = require('./ProviderCredentialsAudit')(sequelize, DataTypes);
+const PaymentRefund = require('./PaymentRefund')(sequelize, DataTypes);
+const PlatformSubscription = require('./PlatformSubscription')(sequelize, DataTypes);
 
 // Add to associations: School.hasMany(SchoolCalendar)
 
@@ -216,6 +224,28 @@ FeeStructure.hasMany(Fee, { foreignKey: 'feeStructureId', sourceKey: 'id' });
 // Fee
 Fee.belongsTo(Student, { foreignKey: 'studentId' });
 Student.hasMany(Fee, { foreignKey: 'studentId' });
+
+// V200 financial-system lock associations
+FeeInvoice.belongsTo(Student, { foreignKey: 'studentId' });
+Student.hasMany(FeeInvoice, { foreignKey: 'studentId' });
+FeeInvoice.belongsTo(Fee, { foreignKey: 'feeId' });
+Fee.hasMany(FeeInvoice, { foreignKey: 'feeId' });
+FeeInvoice.hasMany(FeeInvoiceItem, { foreignKey: 'invoiceId' });
+FeeInvoiceItem.belongsTo(FeeInvoice, { foreignKey: 'invoiceId' });
+StudentFeeAccount.belongsTo(Student, { foreignKey: 'studentId' });
+Student.hasOne(StudentFeeAccount, { foreignKey: 'studentId' });
+PaymentTransaction.belongsTo(Payment, { foreignKey: 'legacyPaymentId' });
+Payment.hasOne(PaymentTransaction, { foreignKey: 'legacyPaymentId' });
+PaymentTransaction.belongsTo(FeeInvoice, { foreignKey: 'invoiceId' });
+FeeInvoice.hasMany(PaymentTransaction, { foreignKey: 'invoiceId' });
+PaymentTransaction.belongsTo(Student, { foreignKey: 'studentId' });
+Student.hasMany(PaymentTransaction, { foreignKey: 'studentId' });
+PaymentReconciliation.belongsTo(PaymentTransaction, { foreignKey: 'paymentTransactionId' });
+PaymentTransaction.hasMany(PaymentReconciliation, { foreignKey: 'paymentTransactionId' });
+PaymentRefund.belongsTo(PaymentTransaction, { foreignKey: 'paymentTransactionId' });
+PaymentTransaction.hasMany(PaymentRefund, { foreignKey: 'paymentTransactionId' });
+PlatformSubscription.belongsTo(PaymentTransaction, { foreignKey: 'lastPaymentTransactionId' });
+PaymentTransaction.hasOne(PlatformSubscription, { foreignKey: 'lastPaymentTransactionId' });
 
 // Payment
 Payment.hasMany(PaymentEvent, { foreignKey: 'paymentId' });
@@ -451,7 +481,7 @@ function attachRealtimeHooks(model, modelName) {
   model.addHook('afterDestroy', (instance, options) => emitModelChange(modelName, 'deleted', instance, options));
 }
 [
-  [Payment,'Payment'],[PaymentEvent,'PaymentEvent'],[Fee,'Fee'],[FeeStructure,'FeeStructure'],[AcademicRecord,'AcademicRecord'],
+  [Payment,'Payment'],[PaymentEvent,'PaymentEvent'],[PaymentTransaction,'PaymentTransaction'],[FeeInvoice,'FeeInvoice'],[StudentFeeAccount,'StudentFeeAccount'],[Fee,'Fee'],[FeeStructure,'FeeStructure'],[AcademicRecord,'AcademicRecord'],
   [ReportSnapshot,'ReportSnapshot'],[Attendance,'Attendance'],[HomeTask,'HomeTask'],
   [HomeTaskAssignment,'HomeTaskAssignment'],[ApprovalRequest,'ApprovalRequest'],
   [Student,'Student'],[Teacher,'Teacher'],[Parent,'Parent'],[Class,'Class'],[Message,'Message']
@@ -484,7 +514,7 @@ function installTenantHooks(models) {
     });
   });
 }
-installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ClassTransferRequest, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, PaymentEvent, AuditLog, MediaAsset, FinanceExpense });
+installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ClassTransferRequest, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, PaymentEvent, AuditLog, MediaAsset, FinanceExpense, FeeInvoice, FeeInvoiceItem, StudentFeeAccount, PaymentTransaction, PaymentReconciliation, ProviderCredentialsAudit, PaymentRefund, PlatformSubscription });
 
 module.exports = {
     sequelize,
@@ -559,5 +589,13 @@ module.exports = {
     BirthdayEvent,
     MediaAsset,
     FinanceExpense,
+    FeeInvoice,
+    FeeInvoiceItem,
+    StudentFeeAccount,
+    PaymentTransaction,
+    PaymentReconciliation,
+    ProviderCredentialsAudit,
+    PaymentRefund,
+    PlatformSubscription,
     StudentParent
 };
