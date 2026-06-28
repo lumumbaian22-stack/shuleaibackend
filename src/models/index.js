@@ -82,6 +82,36 @@ const PaymentReconciliation = require('./PaymentReconciliation')(sequelize, Data
 const ProviderCredentialsAudit = require('./ProviderCredentialsAudit')(sequelize, DataTypes);
 const PaymentRefund = require('./PaymentRefund')(sequelize, DataTypes);
 const PlatformSubscription = require('./PlatformSubscription')(sequelize, DataTypes);
+const LearnFeedUser = require('./LearnFeedUser')(sequelize, DataTypes);
+const LearnFeedVideo = require('./LearnFeedVideo')(sequelize, DataTypes);
+const LearnFeedInteraction = require('./LearnFeedInteraction')(sequelize, DataTypes);
+const LearnFeedFollow = require('./LearnFeedFollow')(sequelize, DataTypes);
+const LearnFeedComment = require('./LearnFeedComment')(sequelize, DataTypes);
+const LearnFeedLiveRoom = require('./LearnFeedLiveRoom')(sequelize, DataTypes);
+const LearnFeedMessage = require('./LearnFeedMessage')(sequelize, DataTypes);
+const LearnFeedSubscriptionPayment = require('./LearnFeedSubscriptionPayment')(sequelize, DataTypes);
+
+// LearnFeed public app associations
+LearnFeedUser.hasMany(LearnFeedVideo, { foreignKey: 'creatorId', as: 'videos' });
+LearnFeedVideo.belongsTo(LearnFeedUser, { foreignKey: 'creatorId', as: 'Creator' });
+LearnFeedUser.hasMany(LearnFeedInteraction, { foreignKey: 'userId' });
+LearnFeedInteraction.belongsTo(LearnFeedUser, { foreignKey: 'userId' });
+LearnFeedVideo.hasMany(LearnFeedInteraction, { foreignKey: 'videoId' });
+LearnFeedInteraction.belongsTo(LearnFeedVideo, { foreignKey: 'videoId' });
+LearnFeedUser.hasMany(LearnFeedComment, { foreignKey: 'userId' });
+LearnFeedComment.belongsTo(LearnFeedUser, { foreignKey: 'userId', as: 'User' });
+LearnFeedVideo.hasMany(LearnFeedComment, { foreignKey: 'videoId' });
+LearnFeedComment.belongsTo(LearnFeedVideo, { foreignKey: 'videoId' });
+LearnFeedUser.hasMany(LearnFeedFollow, { foreignKey: 'followerId', as: 'followingCreators' });
+LearnFeedUser.hasMany(LearnFeedFollow, { foreignKey: 'creatorId', as: 'followers' });
+LearnFeedFollow.belongsTo(LearnFeedUser, { foreignKey: 'followerId', as: 'Follower' });
+LearnFeedFollow.belongsTo(LearnFeedUser, { foreignKey: 'creatorId', as: 'Creator' });
+LearnFeedUser.hasMany(LearnFeedLiveRoom, { foreignKey: 'hostUserId', as: 'liveRooms' });
+LearnFeedLiveRoom.belongsTo(LearnFeedUser, { foreignKey: 'hostUserId', as: 'Host' });
+LearnFeedUser.hasMany(LearnFeedMessage, { foreignKey: 'fromUserId', as: 'sentLearnFeedMessages' });
+LearnFeedUser.hasMany(LearnFeedMessage, { foreignKey: 'toUserId', as: 'receivedLearnFeedMessages' });
+LearnFeedUser.hasMany(LearnFeedSubscriptionPayment, { foreignKey: 'userId', as: 'learnFeedSubscriptionPayments' });
+LearnFeedSubscriptionPayment.belongsTo(LearnFeedUser, { foreignKey: 'userId' });
 
 // Add to associations: School.hasMany(SchoolCalendar)
 
@@ -597,5 +627,13 @@ module.exports = {
     ProviderCredentialsAudit,
     PaymentRefund,
     PlatformSubscription,
+    LearnFeedUser,
+    LearnFeedVideo,
+    LearnFeedInteraction,
+    LearnFeedFollow,
+    LearnFeedComment,
+    LearnFeedLiveRoom,
+    LearnFeedMessage,
+    LearnFeedSubscriptionPayment,
     StudentParent
 };

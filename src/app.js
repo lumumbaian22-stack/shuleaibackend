@@ -44,6 +44,7 @@ const nationalRolloutRoutes = require('./routes/nationalRolloutRoutes');
 const scaleRoutes = require('./routes/scaleRoutes');
 const jobRoutes = require('./routes/jobRoutes');
 const tutorRoutes = require('./routes/tutorRoutes');
+const learnFeedRoutes = require('./routes/learnFeedRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const smsRoutes = require('./routes/smsRoutes');
 const feeStructureRoutes = require('./routes/feeStructureRoutes');
@@ -80,7 +81,11 @@ const builtInAllowedOrigins = [
   'https://shuleaiinfo-cmd.github.io',
   'http://localhost:3000',
   'http://localhost:5173',
-  'http://127.0.0.1:5500'
+  'http://localhost:19006',
+  'http://localhost:8081',
+  'http://127.0.0.1:5500',
+  'http://127.0.0.1:19006',
+  'http://127.0.0.1:8081'
 ];
 
 const allowedOrigins = Array.from(new Set([
@@ -366,6 +371,7 @@ app.use('/api/chat-v9', chatV9Routes);
 app.use('/api/scale', scaleRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/tutor', tutorRoutes);
+app.use('/api/learnfeed', learnFeedRoutes);
 // Payment routes must be mounted BEFORE nationalRolloutRoutes.
 // nationalRolloutRoutes intentionally disables legacy/fake payment endpoints, but real Daraja STK
 // endpoints such as /api/payments/parent/subscription/stk must remain reachable.
