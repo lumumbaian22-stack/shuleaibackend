@@ -453,7 +453,7 @@ exports.genericPlatformSTK = async (req, res) => startLockedPayment(req, res, {
 
 // ============================================================================
 // V200.3 FINAL BYPASS SEAL
-// These overrides close the remaining legacy manual/Daraja routes so every
+// These overrides close the remaining legacy manual/M-Pesa alias routes so every
 // payment path obeys the same active-provider rule:
 // - school fees -> Finance Officer school provider
 // - child/school subscriptions, add-ons, name change -> Super Admin platform provider
@@ -477,7 +477,7 @@ exports.darajaCallback = async (req, res) => {
     await paymentEngine.handleWebhook({ provider: 'mpesa', payload: req.body || {}, headers: req.headers || {} });
     res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
   } catch (error) {
-    console.error('Locked Daraja callback error:', error.message);
+    console.error('Locked M-Pesa callback error:', error.message);
     res.json({ ResultCode: 0, ResultDesc: 'Accepted with internal reconciliation logging' });
   }
 };
