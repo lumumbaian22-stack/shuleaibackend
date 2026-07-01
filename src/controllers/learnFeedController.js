@@ -435,15 +435,15 @@ exports.checkout = async (req, res) => {
     if (!plan.monthlyKes) return res.json({ success: true, data: { noPaymentRequired: true, plan, user: publicUser(user) } });
     const phone = normalizePhone(req.body.phone || req.body.payerPhone);
     if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required for M-Pesa STK prompt.' });
-    const provider = paymentEngine.normalizeProvider(req.body.provider || 'daraja') || 'daraja';
     const reference = 'LF-' + user.learnFeedId.replace(/[^A-Z0-9]/gi, '') + '-' + Date.now();
     const payment = await paymentEngine.initiatePayment({
       user: { id: user.id, role: 'learnfeed_user', email: user.email, name: user.displayName, phone, schoolCode: 'platform' },
-      body: { paymentType: 'platform', platformPurpose: 'learnfeed_subscription', purpose: 'learnfeed_subscription', provider, amount: plan.monthlyKes, currency: 'KES', phone, email: user.email, name: user.displayName, reference, accountReference: user.learnFeedId, metadata: { learnFeedUserId: user.id, learnFeedId: user.learnFeedId, planCode: plan.code } }
+      body: { paymentType: 'platform', platformPurpose: 'learnfeed_subscription', purpose: 'learnfeed_subscription', amount: plan.monthlyKes, currency: 'KES', phone, email: user.email, name: user.displayName, reference, accountReference: user.learnFeedId, paymentMethod: req.body.paymentMethod || 'mobile_money', metadata: { learnFeedUserId: user.id, learnFeedId: user.learnFeedId, planCode: plan.code } }
     });
+    const provider = payment.paymentGateway;
     const record = await LearnFeedSubscriptionPayment.create({ userId: user.id, learnFeedId: user.learnFeedId, legacyPaymentId: payment.id, planCode: plan.code, planName: plan.name, provider, phone, amount: plan.monthlyKes, currency: 'KES', status: 'pending', internalReference: payment.reference || reference, providerReference: payment.providerReference || null, checkoutRequestId: payment.checkoutRequestId || null, checkoutUrl: payment.checkoutUrl || null, metadata: { promptStatus: payment.promptStatus, promptType: payment.promptType, message: payment.metadata?.promptMessage || null } });
     await user.update({ lastSubscriptionPaymentReference: record.internalReference });
-    res.status(201).json({ success: true, data: { reference: record.internalReference, status: payment.status, promptStatus: payment.promptStatus, promptType: payment.promptType, provider, phone, amount: plan.monthlyKes, currency: 'KES', checkoutUrl: payment.checkoutUrl, message: payment.metadata?.promptMessage || 'M-Pesa prompt sent.', plan, learnFeedId: user.learnFeedId } });
+    res.status(201).json({ success: true, data: { reference: record.internalReference, status: payment.status, promptStatus: payment.promptStatus, promptType: payment.promptType, provider, phone, amount: plan.monthlyKes, currency: 'KES', checkoutUrl: payment.checkoutUrl, message: payment.metadata?.promptMessage || 'Payment started using the active platform provider.', plan, learnFeedId: user.learnFeedId } });
   } catch (error) { res.status(400).json({ success: false, message: error.message }); }
 };
 

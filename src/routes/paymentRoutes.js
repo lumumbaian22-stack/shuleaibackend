@@ -20,8 +20,8 @@ router.post('/reconcile/:reference', protect, locked.reconcilePayment);
 router.get('/webhook/:provider', locked.webhook);
 router.post('/webhook/:provider', locked.webhook);
 
-router.post('/daraja/callback', ctrl.darajaCallback);
 router.post('/mpesa/callback', ctrl.darajaCallback);
+router.post('/daraja/callback', ctrl.darajaCallback);
 router.post('/callback', ctrl.darajaCallback);
 
 router.get('/admin/context', protect, authorize('admin', 'finance_officer'), financePermission('overview'), ctrl.getFinanceContext);

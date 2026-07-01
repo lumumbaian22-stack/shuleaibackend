@@ -16,9 +16,9 @@ async function teacherById(id, schoolCode){ return Teacher.findByPk(id, { includ
 async function studentById(id, schoolCode){ return Student.findByPk(id, { include:[{ model:User, attributes:['id','name','email','phone','schoolCode','isActive','role'] }] }).then(s => s && s.User?.schoolCode === schoolCode ? s : null); }
 
 // ============ REAL MONEY ROUTE COMPATIBILITY ============
-// These routes used to hard-disable money collection. In the rollout build they are
-// compatibility aliases into the audited payment controller. Real collection still
-// depends on Daraja env vars and school payment settings being configured.
+// These routes are compatibility aliases into the audited locked payment controller.
+// Real collection uses the active provider selected for the correct scope; disabled providers
+// cannot initiate or finalize payments through these aliases.
 router.post('/payments/parent/fee/stk', authorize('parent'), paymentController.parentFeeSTK);
 router.post('/payments/parent/subscription/stk', authorize('parent'), paymentController.parentSubscriptionSTK);
 router.post('/payments/admin/name-change/stk', authorize('admin'), paymentController.adminNameChangePaymentSTK);

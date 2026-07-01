@@ -1,805 +1,177 @@
 const { Op } = require('sequelize');
-const { Payment, Fee, Parent, Student, User, School, Settings, SchoolNameRequest, AuditLog, SubscriptionPlan, Subscription, SubscriptionPayment, SchoolPaymentSetting, Class } = require('../models');
-const daraja = require('../services/darajaService');
+const {
+  Payment,
+  Fee,
+  Parent,
+  Student,
+  User,
+  School,
+  AuditLog,
+  SubscriptionPlan,
+  SubscriptionPayment,
+  Subscription,
+  Class
+} = require('../models');
 const subscriptionController = require('./subscriptionController');
-const subscriptionEnforcement = require('../services/subscriptionEnforcementService');
-const realtimeSync = require('../services/realtimeSyncService');
 const financeLedger = require('../services/financeLedgerService');
-const { CORE_SCHOOL_FEATURES } = require('../services/schoolFeatureService');
+const paymentEngine = require('../services/paymentProviderEngine');
 
-function ref(prefix){ return `${prefix}-${Date.now()}-${Math.floor(Math.random()*100000).toString().padStart(5,'0')}`; }
-function cleanAmount(v){ const n = Math.round(Number(v)); if(!Number.isFinite(n) || n < 1) throw new Error('Payment amount must be at least KES 1'); return n; }
-function schoolCode(req){return req.user?.role==='super_admin'?(req.body?.schoolCode||req.query?.schoolCode||req.user?.schoolCode||null):(req.user?.schoolCode||null);}
-function auditEntry(action, actor, extra={}){ return { action, actorUserId: actor?.id || null, actorRole: actor?.role || null, at: new Date().toISOString(), ...extra }; }
-async function writeAudit(req, data){ try { await AuditLog?.create({ schoolCode: schoolCode(req) || data.schoolCode || 'platform', actorUserId:req.user?.id, actorRole:req.user?.role, ipAddress:req.ip, userAgent:req.get?.('user-agent'), ...data }); } catch(e){ console.error('Payment audit failed:', e.message); } }
-
-async function findSchoolByAnyCode(code) {
-  const value = String(code || '').trim();
-  if (!value) return null;
-  return School.findOne({ where: { [Op.or]: [{ schoolId: value }, { shortCode: value }, { lookupCodes: { [Op.contains]: [value] } }] } }).catch(() => null);
+function getSchoolCode(req) {
+  if (req.user?.role === 'super_admin') return req.body?.schoolCode || req.query?.schoolCode || req.user?.schoolCode || null;
+  return req.user?.schoolCode || null;
 }
 
-async function currentParent(req){ return Parent.findOne({ where:{ userId:req.user.id } }); }
-async function findStudentForParent(req, studentId){
-  const rawId = Number(studentId) || 0;
-  const student = await Student.findOne({ where: { [require('sequelize').Op.or]: [{ id: rawId }, { userId: rawId }] }, include:[{model:User, attributes:['id','name','schoolCode']}] });
-  if(!student) return null;
-  if(req.user.role !== 'parent') return student;
-  const parent = await currentParent(req);
-  if(!parent) return null;
-  const parentProfileId = Number(parent.id || 0);
-  const parentUserId = Number(req.user.id || parent.userId || 0);
-  const studentIds = [...new Set([Number(student.id || 0), Number(student.userId || student.User?.id || 0)].filter(Boolean))];
-  const parentIds = [...new Set([parentProfileId, parentUserId].filter(Boolean))];
-  const rows = await require('../models').sequelize.query(`
-    SELECT sp."studentId", sp."parentId", p."userId" AS "linkedParentUserId"
-      FROM "StudentParents" sp
-      LEFT JOIN "Parents" p ON p."id" = sp."parentId"
-     WHERE sp."studentId" IN (:studentIds)
-       AND (sp."parentId" IN (:parentIds) OR p."userId" = :parentUserId)
-     LIMIT 1`,
-    { replacements:{ studentIds, parentIds, parentUserId }, type:require('../models').sequelize.QueryTypes.SELECT }
-  ).catch(() => []);
-  if(!rows.length) return null;
-  if(parentProfileId && (Number(rows[0].studentId) !== Number(student.id) || Number(rows[0].parentId) !== parentProfileId)) {
-    await require('../models').sequelize.query(`INSERT INTO "StudentParents" ("studentId", "parentId") VALUES (:studentId, :parentId) ON CONFLICT ("studentId", "parentId") DO NOTHING`, { replacements:{ studentId:student.id, parentId:parentProfileId } }).catch(() => null);
+function auditEntry(action, actor, extra = {}) {
+  return { action, actorUserId: actor?.id || null, actorRole: actor?.role || null, at: new Date().toISOString(), ...extra };
+}
+
+async function writeAudit(req, data) {
+  try {
+    await AuditLog?.create({
+      schoolCode: getSchoolCode(req) || data.schoolCode || 'platform',
+      actorUserId: req.user?.id,
+      actorRole: req.user?.role,
+      ipAddress: req.ip,
+      userAgent: req.get?.('user-agent'),
+      ...data
+    });
+  } catch (error) {
+    console.error('Payment audit failed:', error.message);
   }
-  return student;
 }
 
-async function currentSchool(req){
-  return findSchoolByAnyCode(req.user.schoolCode);
+function errorJson(res, error, fallback = 400) {
+  return res.status(error.statusCode || fallback).json({ success: false, message: error.message, data: error.data || undefined });
 }
 
-function feeBalance(fee){ return Math.max(0, Number(fee?.totalAmount || 0) - Number(fee?.paidAmount || 0)); }
-function feeStatus(total, paid){ const t=Number(total||0), p=Number(paid||0); if(p >= t && t > 0) return 'paid'; if(p > 0) return 'partial'; return 'unpaid'; }
-function studentSchoolCode(student){ return student?.User?.schoolCode || student?.schoolCode || null; }
-function studentElimuId(student){ return student?.elimuid || student?.elimuId || student?.admissionNumber || `STU-${student?.id}`; }
-function paymentAccountReference(student, fee, format='elimuid'){
-  const f = String(format || 'elimuid').toLowerCase();
-  if (f.includes('admission')) return student?.admissionNumber || studentElimuId(student);
-  if (f.includes('studentid')) return String(student?.id || studentElimuId(student));
-  if (f.includes('term')) return `${studentElimuId(student)}-${fee?.term || ''}`.slice(0,12);
-  return String(studentElimuId(student)).slice(0,12);
-}
-
-async function getPlatformPaymentConfig() {
-  const defaultValue = {
-    paymentMode: 'manual',
-    manualEnabled: true,
-    darajaEnabled: false,
-    accountName: 'Shule AI',
-    currency: 'KES',
-    parentSubscriptionsEnabled: true,
-    schoolSubscriptionsEnabled: true,
-    parentPlans: [{ code:'child_basic', name:'Basic', amount:100, days:30, features:['Report cards','Attendance','Progress'] }, { code:'child_premium', name:'Premium', amount:250, days:30, features:['Everything in Basic','AI Tutor: 6 messages/day','Child timetable if school has timetable'] }, { code:'child_ultimate', name:'Ultimate', amount:500, days:30, features:['Everything in Premium','Extended AI Tutor','Live child analytics','Stronger alerts','Child recommendations'] }],
-    schoolPlans: [{ code:'school_starter', name:'Starter', amount:5000, days:30, minStudents:1, maxStudents:400, features:['Complete Shule AI school platform'] }, { code:'school_growth', name:'Growth', amount:10000, days:30, minStudents:401, maxStudents:800, features:['Complete Shule AI school platform'] }, { code:'school_enterprise', name:'Enterprise', amount:30000, days:30, minStudents:801, maxStudents:null, features:['Complete Shule AI school platform'] }],
-    darajaCredentials: {}
-  };
-  const [row] = await Settings.findOrCreate({
-    where: { key: 'platform_payment_settings' },
-    defaults: { category:'payments', description:'Shule AI platform payment settings', value: defaultValue }
-  });
-  return { row, value: { ...defaultValue, ...(row.value || {}) } };
-}
-function normalizePlatformPaymentMode(value) {
-  const mode = String(value?.paymentMode || value?.mode || value?.darajaMode || '').toLowerCase();
-  if (mode === 'daraja' || mode === 'stk') return 'daraja';
-  if (mode === 'both' || mode === 'manual+daraja' || mode === 'manual_daraja') return 'both';
-  if (value?.darajaEnabled && value?.manualEnabled) return 'both';
-  if (value?.darajaEnabled) return 'daraja';
-  return 'manual';
-}
-function normalizePlatformDarajaCredentials(value) {
-  const d = value?.darajaCredentials || value?.daraja || {};
+function providerBodyFromLegacyRequest(req, fallbackProvider = 'manual') {
+  const body = req.body || {};
+  const config = { ...(body.config || {}) };
+  for (const key of ['publicKey','secretKey','consumerKey','consumerSecret','passkey','shortcode','businessShortcode','webhookSecret','callbackUrl','returnUrl','successUrl','cancelUrl','environment','ipnId','notificationId','bankName','accountName','accountNumber','branch','manualInstructions']) {
+    if (body[key] !== undefined && config[key] === undefined) config[key] = body[key];
+  }
+  let provider = body.provider || body.activeProvider || body.defaultProvider;
+  if (!provider) {
+    const mode = String(body.paymentMode || body.mode || '').toLowerCase();
+    if (['daraja','mpesa','stk','m-pesa'].includes(mode) || body.darajaEnabled === true) provider = 'mpesa';
+    else if (['paystack','flutterwave','pesapal','stripe','bank','cash','card','manual'].includes(mode)) provider = mode;
+    else provider = fallbackProvider;
+  }
   return {
-    mode: d.environment || d.env || d.mode || value?.darajaMode || process.env.DARAJA_ENV || 'sandbox',
-    consumerKey: d.consumerKey || value?.consumerKey,
-    consumerSecret: d.consumerSecret || value?.consumerSecret,
-    shortcode: d.shortcode || d.businessShortCode || d.businessShortcode || value?.shortcode || value?.paybill,
-    passkey: d.passkey || value?.passkey,
-    callbackUrl: d.callbackUrl || value?.callbackUrl,
-    transactionType: d.transactionType || value?.transactionType || 'CustomerPayBillOnline'
+    ...body,
+    provider,
+    enabled: body.enabled !== undefined ? body.enabled === true : body.active !== false,
+    isDefault: true,
+    active: body.active !== false,
+    methods: body.methods || body.enabledMethods || body.paymentMethods || body.config?.methods,
+    linkingRule: body.linkingRule || body.studentLinkRule || body.accountReferenceFormat || body.referenceFormat,
+    config
   };
 }
-async function requirePlatformStkAllowed(kind) {
-  const { value } = await getPlatformPaymentConfig();
-  const mode = normalizePlatformPaymentMode(value);
-  const enabled = kind === 'school' ? value.schoolSubscriptionsEnabled !== false : value.parentSubscriptionsEnabled !== false;
-  if (!enabled) {
-    const label = kind === 'school' ? 'School subscriptions' : 'Parent subscriptions';
-    const err = new Error(`${label} are disabled in Super Admin Platform Payments.`);
-    err.statusCode = 403;
-    throw err;
-  }
-  if (mode === 'manual') {
-    const err = new Error('Platform is currently in Manual Verification mode. Submit the M-Pesa code for super admin approval instead of STK.');
-    err.statusCode = 400;
-    err.data = { paymentMode: mode, paybill: value.paybill || value.shortcode || '', till: value.till || '', instructions: value.manualInstructions || '' };
-    throw err;
-  }
-  const credentials = normalizePlatformDarajaCredentials(value);
-  return { settings:value, mode, credentials };
-}
-function normalizePlanCode(raw, ownerType) {
-  const text = String(raw?.code || raw?.id || raw?.name || '').trim().toLowerCase().replace(/\s+/g, '_');
-  if (ownerType === 'school') {
-    if (!text || text === 'growth' || text === 'school_growth') return 'school_growth';
-    if (text.includes('starter')) return 'school_starter';
-    if (text.includes('enterprise')) return 'school_enterprise';
-    return text.startsWith('school_') ? text : `school_${text}`;
-  }
-  if (!text || text === 'basic' || text === 'essential' || text === 'child_basic' || text === 'child_basic') return 'child_basic';
-  if (text.includes('premium') || text.includes('smart')) return 'child_premium';
-  if (text.includes('ultimate') || text.includes('genius')) return 'child_ultimate';
-  return text.startsWith('child_') ? text : `child_${text}`;
-}
-function normalizePlanName(raw, fallback) {
-  return String(raw?.displayName || raw?.name || raw?.title || fallback || 'Plan').trim();
-}
-function normalizePlanAmount(raw) {
-  return Math.max(0, Math.round(Number(raw?.monthlyPriceKes ?? raw?.price_kes ?? raw?.price ?? raw?.amount ?? raw?.monthly ?? 0)) || 0);
-}
-async function syncPlatformSubscriptionPlans(value) {
-  const syncOne = async (raw, ownerType, index) => {
-    if (!raw || typeof raw !== 'object') return null;
-    const code = normalizePlanCode(raw, ownerType);
-    const name = code.replace(/^(school|child)_/, '');
-    const displayName = normalizePlanName(raw, name);
-    const monthly = normalizePlanAmount(raw);
-    const payload = {
-      code,
-      name,
-      displayName,
-      ownerType,
-      price_kes: monthly,
-      monthlyPriceKes: monthly,
-      termlyPriceKes: raw.termlyPriceKes ?? raw.termly ?? (ownerType === 'child' && monthly ? monthly * 3 : null),
-      yearlyPriceKes: raw.yearlyPriceKes ?? raw.yearly ?? (monthly ? monthly * 12 : null),
-      setupFeeMinKes: raw.setupFeeMinKes ?? raw.setupMin ?? null,
-      setupFeeMaxKes: raw.setupFeeMaxKes ?? raw.setupMax ?? null,
-      features: ownerType === 'school' ? [...CORE_SCHOOL_FEATURES] : (Array.isArray(raw.features) ? raw.features : []),
-      lockedFeatures: ownerType === 'school' ? [] : (Array.isArray(raw.lockedFeatures) ? raw.lockedFeatures : []),
-      limits: ownerType === 'school'
-        ? { ...(raw.limits && typeof raw.limits === 'object' ? raw.limits : {}), days:Number(raw.days || raw.limits?.days || 30) || 30, minStudents:Number(raw.minStudents ?? raw.limits?.minStudents ?? (name==='starter'?1:name==='growth'?401:801)), maxStudents:raw.maxStudents ?? raw.limits?.maxStudents ?? (name==='starter'?400:name==='growth'?800:null), pricingBasis:'active_students' }
-        : (raw.limits && typeof raw.limits === 'object' ? raw.limits : { days: Number(raw.days || 30) || 30 }),
-      sortOrder: Number(raw.sortOrder ?? index ?? 0),
-      isActive: raw.isActive !== false
-    };
-    const [plan] = await SubscriptionPlan.findOrCreate({ where: { code }, defaults: payload });
-    await plan.update(payload);
-    return plan;
+
+function legacySchoolSettingsPayload(data, school = null) {
+  return {
+    ...data,
+    schoolName: school?.name || data.schoolName || null,
+    schoolCode: data.schoolCode || school?.schoolId || null,
+    paymentSettings: {
+      activeProvider: data.activeProvider,
+      defaultProvider: data.defaultProvider,
+      enabledProviders: data.enabledProviders,
+      disabledProviders: data.disabledProviders,
+      providerSelectionRule: data.providerSelectionRule,
+      providers: data.providers,
+      methods: data.publicMethods || data.methods || [],
+      publicMethods: data.publicMethods || data.methods || [],
+      linkingRule: data.linkingRule,
+      matchingRules: data.matchingRules,
+      notifications: data.notifications,
+      paymentMode: data.paymentMode,
+      accountReferenceFormat: data.linkingRule,
+      active: !!data.activeProvider,
+      currency: 'KES'
+    }
   };
-  const parentPlans = Array.isArray(value.parentPlans) ? value.parentPlans : [];
-  const schoolPlans = Array.isArray(value.schoolPlans) ? value.schoolPlans : [];
-  const synced = [];
-  for (let i = 0; i < parentPlans.length; i++) synced.push(await syncOne(parentPlans[i], 'child', i + 10));
-  for (let i = 0; i < schoolPlans.length; i++) synced.push(await syncOne(schoolPlans[i], 'school', i + 10));
-  return synced.filter(Boolean);
-}
-
-async function getSchoolPaymentConfig(schoolCodeValue){
-  const school = await findSchoolByAnyCode(schoolCodeValue);
-  const existingSettings = school?.settings?.paymentSettings || {};
-  const modelRow = await SchoolPaymentSetting?.findOne({ where:{ schoolCode:schoolCodeValue } }).catch(()=>null);
-  const merged = {
-    paymentMode: modelRow?.paymentMode || existingSettings.paymentMode || 'manual',
-    mpesaType: modelRow?.mpesaType || existingSettings.mpesaType || 'paybill',
-    paybillNumber: modelRow?.paybillNumber || existingSettings.paybill || existingSettings.paybillNumber || '',
-    tillNumber: modelRow?.tillNumber || existingSettings.till || existingSettings.tillNumber || '',
-    businessShortCode: modelRow?.businessShortCode || existingSettings.businessShortcode || existingSettings.businessShortCode || existingSettings.paybill || existingSettings.till || '',
-    accountReferenceFormat: modelRow?.accountReferenceFormat || existingSettings.accountReferenceFormat || existingSettings.referenceFormat || 'elimuid',
-    darajaEnabled: modelRow?.darajaEnabled === true || existingSettings.darajaEnabled === true || existingSettings.paymentMode === 'daraja',
-    darajaConsumerKey: modelRow?.darajaConsumerKey || existingSettings.consumerKey || existingSettings.darajaConsumerKey || '',
-    darajaConsumerSecret: modelRow?.darajaConsumerSecret || existingSettings.consumerSecret || existingSettings.darajaConsumerSecret || '',
-    darajaPasskey: modelRow?.darajaPasskey || existingSettings.passkey || existingSettings.darajaPasskey || '',
-    darajaShortcode: modelRow?.darajaShortcode || existingSettings.shortcode || existingSettings.businessShortcode || existingSettings.businessShortCode || '',
-    darajaEnvironment: modelRow?.darajaEnvironment || existingSettings.darajaEnvironment || existingSettings.environment || process.env.DARAJA_ENV || 'sandbox',
-    callbackUrl: modelRow?.callbackUrl || existingSettings.callbackUrl || process.env.DARAJA_CALLBACK_URL || process.env.MPESA_CALLBACK_URL || '',
-    bankName: modelRow?.bankName || school?.bankDetails?.bankName || existingSettings.bankName || '',
-    bankAccountName: modelRow?.bankAccountName || school?.bankDetails?.accountName || existingSettings.accountName || school?.name || '',
-    bankAccountNumber: modelRow?.bankAccountNumber || school?.bankDetails?.accountNumber || existingSettings.accountNumber || '',
-    bankBranch: modelRow?.bankBranch || school?.bankDetails?.branch || existingSettings.branch || '',
-    manualInstructions: modelRow?.metadata?.manualInstructions || existingSettings.manualInstructions || 'Use the displayed account details, then submit your payment reference for verification.',
-    offlineInstructions: modelRow?.metadata?.offlineInstructions || existingSettings.offlineInstructions || 'Cash/card payments should be made at the school office and receipt/reference submitted for records.',
-    cashEnabled: modelRow?.metadata?.cashEnabled !== false && existingSettings.cashEnabled !== false,
-    cardEnabled: modelRow?.metadata?.cardEnabled === true || existingSettings.cardEnabled === true,
-    schoolName: school?.name || existingSettings.accountName || 'School',
-    isActive: modelRow?.isActive !== false && existingSettings.active !== false
-  };
-  merged.canUseDaraja = merged.isActive && (merged.paymentMode === 'daraja' || merged.paymentMode === 'mixed' || merged.darajaEnabled) && merged.darajaConsumerKey && merged.darajaConsumerSecret && merged.darajaPasskey && merged.darajaShortcode;
-  merged.manualAccount = merged.mpesaType === 'till' ? merged.tillNumber : merged.paybillNumber;
-  return { school, row:modelRow, settings:merged, bankDetails: school?.bankDetails || { bankName: merged.bankName, accountName: merged.bankAccountName, accountNumber: merged.bankAccountNumber, branch: merged.bankBranch } };
-}
-async function applyFeePayment(payment, receipt='manual'){
-  if(!payment?.feeId) return null;
-  // V75: balances are reconciled from the student-specific ledger so approved
-  // M-Pesa, manual, bank, cash, card, bursary and waiver rows all update the
-  // same fee account without double-counting.
-  return financeLedger.recalculateFeeAccount(payment.feeId);
-}
-
-async function createManualPayment(req, { student, parent, fee, amount, mpesaCode, phone, notes }){
-  const reference = String(mpesaCode || ref(`MAN-${student.id}`)).trim().toUpperCase();
-  const existing = await Payment.findOne({ where:{ reference, schoolCode:studentSchoolCode(student) } });
-  if(existing) throw new Error('This M-Pesa code/reference has already been submitted.');
-  const payment = await Payment.create({
-    studentId:student.id, parentId:parent?.id || null, feeId:fee?.id || null,
-    amount, method:'mpesa', reference, status:'pending', transactionId:`MANUAL-${reference}`,
-    accountReference:paymentAccountReference(student, fee, 'elimuid'), schoolCode:studentSchoolCode(student), paymentType:'fee', currency:'KES', paymentGateway:'manual_mpesa', paidTo:'school', payerPhone:phone || null, locked:true,
-    notes:notes || 'Manual M-Pesa payment awaiting school verification',
-    metadata:{ studentElimuid:studentElimuId(student), feeId:fee?.id || null, term:fee?.term, year:fee?.year, submittedBy:'parent', manual:true },
-    auditTrail:[auditEntry('manual_payment_submitted', req.user, { reference, amount, elimuId:studentElimuId(student) })]
-  });
-  await writeAudit(req, { module:'payments', action:'manual_payment_submitted', entityType:'Payment', entityId:String(payment.id), after:payment.toJSON(), metadata:{reference, amount} });
-  realtimeSync.emitPaymentUpdate(studentSchoolCode(student), {
-    paymentId: payment.id,
-    studentId: student.id,
-    feeId: fee?.id || null,
-    amount,
-    status: 'pending',
-    action: 'manual_payment_submitted'
-  });
-  return payment;
-}
-
-function normalizePlanInput(plan, ownerType){
-  const raw = String(plan || '').trim().toLowerCase().replace(/\s+/g, '_');
-  if (ownerType === 'school') {
-    if (!raw || raw === 'growth' || raw === 'school_growth') return 'school_growth';
-    if (raw.includes('enterprise') || raw === 'school_enterprise') return 'school_enterprise';
-    if (raw.includes('starter') || raw === 'school_starter') return 'school_starter';
-    return raw.startsWith('school_') ? raw : `school_${raw}`;
-  }
-  if (!raw || raw === 'essential' || raw === 'basic' || raw === 'child_basic' || raw === 'child_basic') return 'child_basic';
-  if (raw.includes('genius') || raw.includes('ultimate') || raw === 'child_ultimate') return 'child_ultimate';
-  if (raw.includes('smart') || raw.includes('premium') || raw === 'child_premium') return 'child_premium';
-  return raw.startsWith('child_') ? raw : `child_${raw}`;
-}
-
-function billingCycleFromBody(body){
-  const value = String(body.billingCycle || body.billingPeriod || 'monthly').toLowerCase();
-  return ['monthly','termly','yearly','custom'].includes(value) ? value : 'monthly';
-}
-
-async function createPendingPayment(req, payload){
-  const idempotencyKey = payload.idempotencyKey || payload.checkoutRequestId || payload.reference;
-  if (idempotencyKey) {
-    const existing = await Payment.findOne({ where: { idempotencyKey } }).catch(() => null);
-    if (existing) return existing;
-  }
-  const row = await Payment.create({
-    studentId: payload.studentId || null,
-    parentId: payload.parentId || null,
-    feeId: payload.feeId || null,
-    feeStructureId: payload.feeStructureId || payload.metadata?.feeStructureId || null,
-    amount: payload.amount,
-    method: payload.method || 'mpesa_stk',
-    transactionType: payload.transactionType || 'payment',
-    source: payload.source || 'parent',
-    reference: payload.reference,
-    idempotencyKey,
-    reconciliationStatus: 'pending',
-    plan: payload.plan || payload.planCode || null,
-    status: 'pending',
-    transactionId: payload.checkoutRequestId,
-    checkoutRequestId: payload.checkoutRequestId,
-    merchantRequestId: payload.merchantRequestId,
-    accountReference: payload.accountReference,
-    schoolCode: payload.schoolCode,
-    paymentType: payload.paymentType,
-    subscriptionPaymentId: payload.subscriptionPaymentId || null,
-    subscriptionId: payload.subscriptionId || null,
-    ownerType: payload.ownerType || null,
-    billingCycle: payload.billingCycle || null,
-    planCode: payload.planCode || payload.plan || null,
-    planName: payload.planName || payload.plan || null,
-    currency: 'KES',
-    paymentGateway: 'daraja',
-    paidTo: payload.paidTo,
-    payerPhone: payload.phone,
-    locked: true,
-    gatewayResponse: payload.gatewayResponse || {},
-    metadata: payload.metadata || {},
-    auditTrail: [auditEntry('stk_initiated', req.user, { reference: payload.reference, checkoutRequestId: payload.checkoutRequestId })]
-  });
-  await writeAudit(req, { module:'payments', action:'stk_initiated', entityType:'Payment', entityId:String(row.id), after:row.toJSON(), metadata:{reference:payload.reference} });
-  return row;
 }
 
 exports.getAdminPaymentSettings = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const { settings } = await getSchoolPaymentConfig(school.schoolId);
-    res.json({ success:true, data: {
-      schoolName: school.name,
-      schoolCode: school.schoolId,
-      paymentSettings: {
-        paymentMode: settings.paymentMode,
-        mpesaType: settings.mpesaType,
-        paybill: settings.paybillNumber,
-        till: settings.tillNumber,
-        businessShortcode: settings.businessShortCode,
-        shortcode: settings.darajaShortcode || settings.businessShortCode,
-        accountReferenceFormat: settings.accountReferenceFormat || 'elimuid',
-        darajaEnabled: !!settings.canUseDaraja,
-        darajaEnvironment: settings.darajaEnvironment,
-        callbackUrl: settings.callbackUrl,
-        active: settings.isActive,
-        accountName: settings.schoolName,
-        manualAccount: settings.manualAccount,
-        currency: 'KES',
-        acceptedMethods: ['manual_mpesa','daraja_stk','bank','cash','card'],
-        manualInstructions: settings.manualInstructions,
-        offlineInstructions: settings.offlineInstructions,
-        cashEnabled: settings.cashEnabled,
-        cardEnabled: settings.cardEnabled
-      },
-      bankDetails: school.bankDetails || {}
-    }});
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+    const code = getSchoolCode(req);
+    const [data, school] = await Promise.all([
+      paymentEngine.getSettings({ scope: 'school', schoolCode: code }),
+      School.findOne({ where: { schoolId: code } }).catch(() => null)
+    ]);
+    res.json({ success: true, data: legacySchoolSettingsPayload(data, school) });
+  } catch (error) { errorJson(res, error); }
 };
 
 exports.updateAdminPaymentSettings = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const incoming = req.body || {};
-    const paymentMode = incoming.paymentMode || incoming.mode || 'manual';
-    const mpesaType = incoming.mpesaType || incoming.type || 'paybill';
-    const paybillNumber = incoming.paybillNumber || incoming.paybill || incoming.businessShortcode || '';
-    const tillNumber = incoming.tillNumber || incoming.till || '';
-    const businessShortCode = incoming.businessShortCode || incoming.businessShortcode || incoming.shortcode || (mpesaType === 'till' ? tillNumber : paybillNumber) || '';
-    const accountReferenceFormat = incoming.accountReferenceFormat || incoming.referenceFormat || 'elimuid';
-    const rowPayload = {
-      schoolId: school.id,
-      schoolCode: school.schoolId,
-      paymentMode,
-      mpesaType,
-      tillNumber,
-      paybillNumber,
-      businessShortCode,
-      accountReferenceFormat,
-      bankName: incoming.bankName || incoming.bankDetails?.bankName || '',
-      bankAccountName: incoming.accountName || incoming.bankDetails?.accountName || school.name,
-      bankAccountNumber: incoming.bankAccount || incoming.accountNumber || incoming.bankDetails?.accountNumber || '',
-      bankBranch: incoming.branch || incoming.bankDetails?.branch || '',
-      darajaEnabled: paymentMode === 'daraja' || incoming.darajaEnabled === true,
-      darajaConsumerKey: incoming.consumerKey || incoming.darajaConsumerKey || '',
-      darajaConsumerSecret: incoming.consumerSecret || incoming.darajaConsumerSecret || '',
-      darajaPasskey: incoming.passkey || incoming.darajaPasskey || '',
-      darajaShortcode: incoming.shortcode || incoming.darajaShortcode || businessShortCode,
-      darajaEnvironment: incoming.environment || incoming.darajaEnvironment || process.env.DARAJA_ENV || 'sandbox',
-      callbackUrl: incoming.callbackUrl || process.env.DARAJA_CALLBACK_URL || process.env.MPESA_CALLBACK_URL || '',
-      isActive: incoming.active !== false,
-      metadata: {
-        ...(incoming.metadata || {}),
-        manualInstructions: incoming.manualInstructions || incoming.instructions || '',
-        offlineInstructions: incoming.offlineInstructions || '',
-        cashEnabled: incoming.cashEnabled !== false,
-        cardEnabled: incoming.cardEnabled === true,
-        updatedBy:req.user.id,
-        updatedAt:new Date().toISOString(),
-        auditTrail: [auditEntry('school_payment_settings_saved', req.user, { paymentMode, mpesaType })]
-      }
-    };
-    const [paymentRow] = await SchoolPaymentSetting.findOrCreate({ where:{ schoolCode:school.schoolId }, defaults:rowPayload });
-    await paymentRow.update(rowPayload);
-    const settings = school.settings || {};
-    settings.paymentSettings = {
-      ...(settings.paymentSettings || {}),
-      paymentMode, mpesaType, paybill:paybillNumber, till:tillNumber, businessShortcode:businessShortCode,
-      accountReferenceFormat, referenceFormat:accountReferenceFormat, active:incoming.active !== false,
-      darajaEnabled: rowPayload.darajaEnabled,
-      shortcode: rowPayload.darajaShortcode,
-      callbackUrl: rowPayload.callbackUrl,
-      manualInstructions: rowPayload.metadata.manualInstructions,
-      offlineInstructions: rowPayload.metadata.offlineInstructions,
-      cashEnabled: rowPayload.metadata.cashEnabled,
-      cardEnabled: rowPayload.metadata.cardEnabled,
-      updatedAt:new Date().toISOString(), updatedBy:req.user.id
-    };
-    const bankDetails = {
-      ...(school.bankDetails || {}),
-      bankName: rowPayload.bankName,
-      accountName: rowPayload.bankAccountName,
-      accountNumber: rowPayload.bankAccountNumber,
-      branch: rowPayload.bankBranch
-    };
-    await school.update({ settings, bankDetails });
-    await writeAudit(req, { module:'payments', action:'school_payment_settings_updated', entityType:'SchoolPaymentSetting', entityId:String(paymentRow.id), after:rowPayload });
-    res.json({ success:true, message:'School payment settings saved', data: { paymentSettings: settings.paymentSettings, schoolPaymentSetting: paymentRow, bankDetails } });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+    const data = await paymentEngine.saveSchoolProviderSettings({ user: req.user, schoolCode: getSchoolCode(req), body: providerBodyFromLegacyRequest(req, 'manual') });
+    await writeAudit(req, { module: 'payments', action: 'school_payment_provider_saved_exclusive', entityType: 'SchoolPaymentSetting', entityId: String(data.id || 'school-provider'), after: data });
+    res.json({ success: true, message: 'School payment provider saved. Only the selected active provider can receive school fees.', data: legacySchoolSettingsPayload(data) });
+  } catch (error) { errorJson(res, error); }
 };
 
 exports.testAdminPaymentConnection = async (req, res) => {
   try {
-    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
-    if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const { settings } = await getSchoolPaymentConfig(school.schoolId);
-    if (settings.paymentMode !== 'daraja' && !settings.darajaEnabled) return res.json({ success:true, message:'Manual M-Pesa mode is active. No Daraja test is required.', data:{ paymentMode:'manual', account:settings.manualAccount } });
-    const missing = [];
-    if(!settings.darajaConsumerKey) missing.push('consumerKey');
-    if(!settings.darajaConsumerSecret) missing.push('consumerSecret');
-    if(!settings.darajaShortcode) missing.push('shortcode');
-    if(!settings.darajaPasskey) missing.push('passkey');
-    if(!settings.callbackUrl) missing.push('callbackUrl');
-    if (missing.length) return res.status(400).json({ success:false, message:`School Daraja settings missing: ${missing.join(', ')}` });
-    await daraja.getAccessToken({ consumerKey:settings.darajaConsumerKey, consumerSecret:settings.darajaConsumerSecret, shortcode:settings.darajaShortcode, passkey:settings.darajaPasskey, callbackUrl:settings.callbackUrl, mode:settings.darajaEnvironment });
-    res.json({ success:true, message:'School Daraja connection verified successfully.', data:{ environment:settings.darajaEnvironment, shortcode:settings.darajaShortcode, callbackUrl:settings.callbackUrl } });
-  } catch(error) {
-    console.error('School Daraja test connection failed:', error.message);
-    res.status(400).json({ success:false, message:error.message || 'Daraja connection test failed' });
-  }
+    const data = await paymentEngine.getSettings({ scope: 'school', schoolCode: getSchoolCode(req) });
+    if (!data.activeProvider) return res.status(400).json({ success: false, message: 'No active school payment provider is configured.' });
+    res.json({ success: true, message: `School payment provider lock is active: ${data.activeProvider}. Disabled providers cannot receive school fees.`, data: { activeProvider: data.activeProvider, enabledProviders: data.enabledProviders, methods: data.publicMethods || data.methods || [] } });
+  } catch (error) { errorJson(res, error); }
 };
-
 
 exports.getPlatformPaymentSettings = async (req, res) => {
   try {
-    const { row, value } = await getPlatformPaymentConfig();
-    const mode = normalizePlatformPaymentMode(value);
-    const normalized = {
-      ...value,
-      paymentMode: mode,
-      manualEnabled: mode === 'manual' || mode === 'both',
-      darajaEnabled: mode === 'daraja' || mode === 'both',
-      darajaCredentials: normalizePlatformDarajaCredentials(value)
-    };
-    if (JSON.stringify(row.value || {}) !== JSON.stringify(normalized)) await row.update({ value: normalized }).catch(() => null);
-    res.json({ success:true, data: normalized });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+    const data = await paymentEngine.getSettings({ scope: 'platform' });
+    res.json({ success: true, data });
+  } catch (error) { errorJson(res, error); }
 };
 
 exports.updatePlatformPaymentSettings = async (req, res) => {
   try {
-    const { row, value: current } = await getPlatformPaymentConfig();
-    const incoming = req.body || {};
-    const mode = normalizePlatformPaymentMode(incoming.paymentMode ? incoming : { ...current, ...incoming });
-    const next = {
-      ...current,
-      ...incoming,
-      paymentMode: mode,
-      manualEnabled: mode === 'manual' || mode === 'both',
-      darajaEnabled: mode === 'daraja' || mode === 'both',
-      darajaCredentials: normalizePlatformDarajaCredentials({ ...current, ...incoming }),
-      updatedAt:new Date().toISOString(),
-      updatedBy:req.user.id
-    };
-    await row.update({ value: next, category:'payments', description:'Shule AI platform payment settings' });
-    const syncedPlans = await syncPlatformSubscriptionPlans(next).catch((e) => { console.error('Platform plan sync failed:', e.message); return []; });
-    await writeAudit(req, { schoolCode:'platform', module:'payments', action:'platform_payment_settings_updated', entityType:'Settings', entityId:'platform_payment_settings', after:{ ...next, syncedPlanCount:syncedPlans.length } });
-    res.json({ success:true, message:'Platform payment settings saved and subscription plans synced', data:{ ...next, syncedPlanCount:syncedPlans.length } });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
+    const data = await paymentEngine.savePlatformProviderSettings({ user: req.user, body: providerBodyFromLegacyRequest(req, 'manual') });
+    await writeAudit(req, { schoolCode: 'platform', module: 'payments', action: 'platform_payment_provider_saved_exclusive', entityType: 'PlatformPaymentSetting', entityId: String(data.id || 'platform-provider'), after: data });
+    res.json({ success: true, message: 'Platform payment provider saved. Only the selected active provider can receive platform payments.', data });
+  } catch (error) { errorJson(res, error); }
 };
 
-
-exports.parentFeeSTK = async (req, res) => {
+exports.getParentSchoolPaymentSettings = async (req, res) => {
   try {
-    const { studentId, feeId, phone, amount } = req.body;
-    if(!studentId || !phone || !amount) return res.status(400).json({ success:false, message:'studentId, phone, and amount are required' });
-    const student = await findStudentForParent(req, studentId);
-    if(!student) return res.status(404).json({ success:false, message:'Student not found or not linked to this parent' });
-    const parent = await currentParent(req);
-    if(!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-    const realSchoolCode = studentSchoolCode(student) || schoolCode(req);
-    const fee = feeId ? await Fee.findOne({ where:{ id:feeId, studentId:student.id, schoolCode:realSchoolCode } }) : await Fee.findOne({ where:{ studentId:student.id, schoolCode:realSchoolCode }, order:[['year','DESC'],['term','DESC']] });
-    const payAmount = cleanAmount(amount);
-    if(fee && payAmount > feeBalance(fee)) return res.status(400).json({ success:false, message:'Payment amount exceeds outstanding balance' });
-    const { settings } = await getSchoolPaymentConfig(realSchoolCode);
-    if(!settings.canUseDaraja){
-      return res.status(400).json({ success:false, message:'This school is in Manual M-Pesa mode. Submit the M-Pesa code after paying to the displayed school account.', data:{ paymentMode:'manual', paybill:settings.paybillNumber, till:settings.tillNumber, mpesaType:settings.mpesaType, accountReference:paymentAccountReference(student, fee, settings.accountReferenceFormat), elimuId:studentElimuId(student), amount:payAmount } });
-    }
-    const accountReference = paymentAccountReference(student, fee, settings.accountReferenceFormat);
-    const reference = ref(`FEE-${student.id}`);
-    const stk = await daraja.initiateSTKPush({
-      phone,
-      amount: payAmount,
-      accountReference,
-      transactionDesc:`School fees for ${studentElimuId(student)}`,
-      callbackUrl: settings.callbackUrl,
-      credentials:{ consumerKey:settings.darajaConsumerKey, consumerSecret:settings.darajaConsumerSecret, shortcode:settings.darajaShortcode, passkey:settings.darajaPasskey, mode:settings.darajaEnvironment, callbackUrl:settings.callbackUrl },
-      metadata:{ type:'fee', schoolCode:realSchoolCode, studentId:student.id, feeId:fee?.id || feeId, reference, elimuId:studentElimuId(student), paidTo:'school' }
-    });
-    const payment = await createPendingPayment(req, { studentId:student.id, parentId:parent.id, feeId:fee?.id || feeId, amount:payAmount, reference, phone, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, accountReference, schoolCode:realSchoolCode, paymentType:'fee', paidTo:'school', gatewayResponse:stk, metadata:{ studentElimuid:studentElimuId(student), feeId:fee?.id || feeId, paymentMode:'daraja', schoolPaymentMode:settings.paymentMode } });
-    res.json({ success:true, message:'M-PESA prompt sent. Fee balance updates after Daraja callback confirmation.', data:{ paymentId:payment.id, reference, accountReference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
-  } catch(error){ console.error('Parent fee STK error:', error); res.status(500).json({ success:false, message:error.message }); }
-};
-
-exports.parentSubscriptionSTK = async (req, res) => {
-  try {
-    const { studentId, phone } = req.body || {};
-    const billingCycle = billingCycleFromBody(req.body || {});
-    const planCode = normalizePlanInput(req.body?.planCode || req.body?.plan || 'child_basic', 'child');
-    if(!studentId || !phone) return res.status(400).json({ success:false, message:'studentId and phone are required' });
-    const student = await findStudentForParent(req, studentId);
-    if(!student) return res.status(404).json({ success:false, message:'Student not found or not linked to this parent' });
-    const parent = await currentParent(req);
-    if(!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-    const platform = await requirePlatformStkAllowed('child');
-    const plan = await subscriptionController.getPlanByCode(planCode, 'child');
-    if(!plan) return res.status(404).json({ success:false, message:'Child subscription plan not found' });
-    const payAmount = cleanAmount(req.body.amount || subscriptionController.planAmount(plan, billingCycle));
-    const subscription = await subscriptionController.findOrCreateChildSubscription(parent, student, plan, billingCycle);
-    await subscription.update({ planId:plan.id, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle, status:'pending', features:plan.features || [], limits:plan.limits || {} });
-    const reference = ref(`SUB-${student.id}`);
-    const stk = await daraja.initiateSTKPush({ phone, amount: payAmount, accountReference:reference, transactionDesc:`Shule AI ${plan.displayName || plan.name} subscription`, credentials:platform.credentials, callbackUrl:platform.credentials.callbackUrl, metadata:{ type:'subscription', ownerType:'child', schoolCode:schoolCode(req), studentId:student.id, parentId:parent.id, planCode:plan.code || plan.name, billingCycle, reference, platformPaymentMode:platform.mode } });
-    const subscriptionPayment = await SubscriptionPayment.create({ subscriptionId:subscription.id, ownerType:'child', schoolCode:schoolCode(req), parentId:parent.id, studentId:student.id, planId:plan.id, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle, amount:payAmount, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, status:'pending', metadata:{ reference, phone, source:'parent-child-subscription-stk' }, auditTrail:[auditEntry('child_subscription_stk_initiated', req.user, { reference, checkoutRequestId:stk.CheckoutRequestID })] });
-    const payment = await createPendingPayment(req, { studentId:student.id, parentId:parent.id, amount:payAmount, reference, phone, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, accountReference:reference, schoolCode:schoolCode(req), paymentType:'subscription', paidTo:'platform', ownerType:'child', plan:plan.code || plan.name, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle, subscriptionPaymentId:subscriptionPayment.id, subscriptionId:subscription.id, gatewayResponse:stk, metadata:{ planCode:plan.code || plan.name, billingCycle, studentId:student.id, parentId:parent.id, ownerType:'child' } });
-    res.json({ success:true, message:'M-PESA prompt sent. Subscription activates only after Daraja callback confirmation.', data:{ paymentId:payment.id, subscriptionPaymentId:subscriptionPayment.id, subscriptionId:subscription.id, reference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
-  } catch(error){ res.status(error.statusCode || 500).json({ success:false, message:error.message, data:error.data || undefined }); }
-};
-
-
-
-exports.parentSubscriptionManual = async (req, res) => {
-  try {
-    const { studentId, planCode, plan, amount, phone, mpesaCode, reference, billingCycle='monthly', notes } = req.body || {};
-    const code = normalizePlanInput(planCode || plan || 'child_basic', 'child');
-    if (!studentId || !(mpesaCode || reference)) return res.status(400).json({ success:false, message:'studentId and M-Pesa code/reference are required' });
-    const parent = await currentParent(req);
-    if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-    const student = await findStudentForParent(req, studentId);
-    if (!student) return res.status(403).json({ success:false, message:'Student is not linked to this parent' });
-    const platform = await getPlatformPaymentConfig();
-    const mode = normalizePlatformPaymentMode(platform.value);
-    if (!(mode === 'manual' || mode === 'both')) return res.status(400).json({ success:false, message:'Manual platform subscription verification is disabled. Use Daraja STK.' });
-    if (platform.value.parentSubscriptionsEnabled === false) return res.status(403).json({ success:false, message:'Parent subscriptions are disabled in Super Admin Platform Payments.' });
-    const subPlan = await subscriptionController.getPlanByCode(code, 'child');
-    if (!subPlan) return res.status(404).json({ success:false, message:'Child subscription plan not found' });
-    const payAmount = cleanAmount(amount || subscriptionController.planAmount(subPlan, billingCycle));
-    const subscription = await subscriptionController.findOrCreateChildSubscription(parent, student, subPlan, billingCycle);
-    await subscription.update({ planId:subPlan.id, planCode:subPlan.code || subPlan.name, planName:subPlan.displayName || subPlan.name, billingCycle, status:'pending', features:subPlan.features || [], limits:subPlan.limits || {} });
-    const manualRef = String(mpesaCode || reference).trim().toUpperCase();
-    const subscriptionPayment = await SubscriptionPayment.create({
-      subscriptionId:subscription.id,
-      ownerType:'child',
-      schoolCode:studentSchoolCode(student) || schoolCode(req),
-      parentId:parent.id,
-      studentId:student.id,
-      planId:subPlan.id,
-      planCode:subPlan.code || subPlan.name,
-      planName:subPlan.displayName || subPlan.name,
-      billingCycle,
-      amount:payAmount,
-      status:'pending',
-      mpesaReceiptNumber:manualRef,
-      metadata:{ reference:manualRef, phone, source:'parent-child-subscription-manual', notes },
-      auditTrail:[auditEntry('child_subscription_manual_submitted', req.user, { reference:manualRef })]
-    });
-    const payment = await Payment.create({
-      studentId:student.id,
-      parentId:parent.id,
-      amount:payAmount,
-      method:'manual_mpesa',
-      transactionType:'payment',
-      source:'parent',
-      reference:manualRef,
-      idempotencyKey:`manual-child-sub-${student.id}-${manualRef}`,
-      reconciliationStatus:'pending',
-      plan:subPlan.code || subPlan.name,
-      status:'pending',
-      transactionId:manualRef,
-      schoolCode:studentSchoolCode(student) || schoolCode(req),
-      paymentType:'subscription',
-      subscriptionPaymentId:subscriptionPayment.id,
-      subscriptionId:subscription.id,
-      ownerType:'child',
-      billingCycle,
-      planCode:subPlan.code || subPlan.name,
-      planName:subPlan.displayName || subPlan.name,
-      currency:'KES',
-      paymentGateway:'manual_mpesa',
-      paidTo:'platform',
-      payerPhone:phone,
-      locked:true,
-      metadata:{ planCode:subPlan.code || subPlan.name, billingCycle, studentId:student.id, parentId:parent.id, ownerType:'child', manual:true, notes },
-      auditTrail:[auditEntry('manual_child_subscription_submitted', req.user, { reference:manualRef })]
-    });
-    res.json({ success:true, message:'Subscription code submitted for Super Admin approval. The child subscription activates after approval.', data:{ paymentId:payment.id, subscriptionPaymentId:subscriptionPayment.id, reference:manualRef, status:'pending', amount:payAmount } });
-  } catch(error) {
-    console.error('Parent manual subscription error:', error);
-    res.status(error.statusCode || 500).json({ success:false, message:error.message });
-  }
-};
-
-exports.getPlatformManualQueue = async (req, res) => {
-  try {
-    const rows = await Payment.findAll({
-      where:{ paymentType:'subscription', paidTo:'platform', paymentGateway:'manual_mpesa', status:'pending' },
-      include:[{ model:Student, include:[{ model:User, attributes:['id','name','email','schoolCode'] }] }, { model:Parent, include:[{ model:User, attributes:['id','name','phone','email'] }] }],
-      order:[['createdAt','DESC']], limit:200
-    });
-    res.json({ success:true, data:rows });
-  } catch(error){ res.status(500).json({ success:false, message:error.message }); }
-};
-
-exports.reviewPlatformManualPayment = async (req, res) => {
-  try {
-    const { action, notes } = req.body || {};
-    const approve = String(action || '').toLowerCase() !== 'reject';
-    const payment = await Payment.findOne({ where:{ id:req.params.paymentId, paymentType:'subscription', paidTo:'platform', paymentGateway:'manual_mpesa' } });
-    if (!payment) return res.status(404).json({ success:false, message:'Manual platform payment not found' });
-    if (payment.status !== 'pending') return res.status(400).json({ success:false, message:`Payment is already ${payment.status}` });
-    const before = payment.toJSON();
-    const trail = Array.isArray(payment.auditTrail) ? payment.auditTrail : [];
-    trail.push(auditEntry(approve ? 'manual_platform_subscription_approved' : 'manual_platform_subscription_rejected', req.user, { notes }));
-    await payment.update({ status: approve ? 'completed' : 'rejected', completedAt: approve ? new Date() : null, notes:notes || payment.notes, auditTrail:trail, reconciliationStatus: approve ? 'matched' : 'rejected' });
-    if (payment.subscriptionPaymentId) {
-      const subscriptionPayment = await SubscriptionPayment.findByPk(payment.subscriptionPaymentId);
-      if (subscriptionPayment) {
-        const spTrail = Array.isArray(subscriptionPayment.auditTrail) ? subscriptionPayment.auditTrail : [];
-        spTrail.push(auditEntry(approve ? 'manual_confirmed' : 'manual_rejected', req.user, { paymentId:payment.id, notes }));
-        await subscriptionPayment.update({ status: approve ? 'success' : 'failed', paidAt: approve ? new Date() : subscriptionPayment.paidAt, auditTrail:spTrail });
-        if (approve) {
-          const subPlan = await SubscriptionPlan.findByPk(subscriptionPayment.planId) || await subscriptionController.getPlanByCode(subscriptionPayment.planCode, subscriptionPayment.ownerType === 'school' ? 'school' : 'child');
-          const subscription = await Subscription.findByPk(subscriptionPayment.subscriptionId);
-          if (subPlan && subscription) await subscriptionController.renewSubscription(subscription, subPlan, subscriptionPayment.billingCycle, payment.id);
-        }
+    const data = await paymentEngine.getSettings({ scope: 'school', schoolCode: getSchoolCode(req) });
+    res.json({ success: true, data: {
+      activeProvider: data.activeProvider,
+      defaultProvider: data.defaultProvider,
+      enabledProviders: data.enabledProviders,
+      paymentMode: data.paymentMode,
+      referenceFormat: data.linkingRule,
+      linkingRule: data.linkingRule,
+      matchingRules: data.matchingRules,
+      methods: data.publicMethods || data.methods || [],
+      publicMethods: data.publicMethods || data.methods || [],
+      supports: {
+        stk: (data.publicMethods || data.methods || []).some(m => m.prompt === 'phone_prompt'),
+        checkout: (data.publicMethods || data.methods || []).some(m => m.prompt === 'checkout_url'),
+        manual: (data.publicMethods || data.methods || []).some(m => m.prompt === 'manual_instructions'),
+        bank: (data.publicMethods || data.methods || []).some(m => m.method === 'bank'),
+        cash: (data.publicMethods || data.methods || []).some(m => m.method === 'cash'),
+        card: (data.publicMethods || data.methods || []).some(m => m.method === 'card'),
+        mobileMoney: (data.publicMethods || data.methods || []).some(m => m.method === 'mobile_money')
       }
-    }
-    await writeAudit(req, { schoolCode:payment.schoolCode || 'platform', module:'payments', action:approve?'platform_manual_payment_approved':'platform_manual_payment_rejected', entityType:'Payment', entityId:String(payment.id), before, after:payment.toJSON(), metadata:{ notes } });
-    res.json({ success:true, message: approve ? 'Manual platform payment approved and subscription activated.' : 'Manual platform payment rejected.', data:payment });
-  } catch(error){ console.error('Review platform manual payment error:', error); res.status(500).json({ success:false, message:error.message }); }
+    }});
+  } catch (error) { errorJson(res, error); }
 };
 
-
-exports.schoolSubscriptionSTK = async (req, res) => {
+exports.queryStatus = async (req, res) => {
   try {
-    const { phone } = req.body || {};
-    const billingCycle = subscriptionEnforcement.requireBillingCycle(req.body?.billingCycle || req.body?.billingPeriod || 'monthly');
-    const planCode = normalizePlanInput(req.body?.planCode || req.body?.plan || 'school_growth', 'school');
-    if (!phone) return res.status(400).json({ success:false, message:'phone is required' });
-    const school = await currentSchool(req);
-    if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const platform = await requirePlatformStkAllowed('school');
-    const plan = await subscriptionController.getPlanByCode(planCode, 'school');
-    if (!plan) return res.status(404).json({ success:false, message:'School subscription plan not found' });
-    const amount = cleanAmount(req.body.amount || subscriptionController.planAmount(plan, billingCycle));
-    const subscription = await subscriptionController.findOrCreateSchoolSubscription(school, plan, billingCycle);
-    await subscription.update({ planId:plan.id, planCode:plan.code || plan.name, planName:plan.displayName || plan.name, billingCycle, status:'pending', features:plan.features || [], limits:plan.limits || {} });
-    await subscriptionEnforcement.configurePending(subscription, school, billingCycle);
-    const reference = ref(`SCH-SUB-${school.id}`);
-    const stk = await daraja.initiateSTKPush({
-      phone,
-      amount,
-      accountReference: reference,
-      transactionDesc: `Shule AI ${plan.displayName || plan.name} school subscription`,
-      credentials: platform.credentials,
-      callbackUrl: platform.credentials.callbackUrl,
-      metadata: { type:'school_subscription', ownerType:'school', schoolId:school.id, schoolCode:school.schoolId, planCode:plan.code || plan.name, billingCycle, reference, platformPaymentMode:platform.mode }
-    });
-    const subscriptionPayment = await SubscriptionPayment.create({
-      subscriptionId: subscription.id,
-      ownerType: 'school',
-      schoolId: school.id,
-      schoolCode: school.schoolId,
-      planId: plan.id,
-      planCode: plan.code || plan.name,
-      planName: plan.displayName || plan.name,
-      billingCycle,
-      amount,
-      checkoutRequestId: stk.CheckoutRequestID,
-      merchantRequestId: stk.MerchantRequestID,
-      status: 'pending',
-      metadata: { reference, phone, source:'school-subscription-stk' },
-      auditTrail: [auditEntry('school_subscription_stk_initiated', req.user, { reference, checkoutRequestId:stk.CheckoutRequestID })]
-    });
-    const payment = await createPendingPayment(req, {
-      amount,
-      reference,
-      phone,
-      checkoutRequestId: stk.CheckoutRequestID,
-      merchantRequestId: stk.MerchantRequestID,
-      accountReference: reference,
-      schoolCode: school.schoolId,
-      paymentType: 'subscription',
-      paidTo: 'platform',
-      ownerType: 'school',
-      plan: plan.code || plan.name,
-      planCode: plan.code || plan.name,
-      planName: plan.displayName || plan.name,
-      billingCycle,
-      subscriptionPaymentId: subscriptionPayment.id,
-      subscriptionId: subscription.id,
-      gatewayResponse: stk,
-      metadata: { planCode:plan.code || plan.name, billingCycle, schoolId:school.id, ownerType:'school' }
-    });
-    res.json({ success:true, message:'M-PESA prompt sent. School subscription renews after Daraja callback confirmation.', data:{ paymentId:payment.id, subscriptionPaymentId:subscriptionPayment.id, subscriptionId:subscription.id, reference, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
-  } catch(error) {
-    console.error('School subscription STK error:', error);
-    const calendarMissing = /academic calendar|term dates|academic year/i.test(String(error.message || ''));
-    res.status(error.statusCode || (calendarMissing ? 400 : 500)).json({ success:false, code:error.code || (calendarMissing ? 'ACADEMIC_CALENDAR_REQUIRED' : undefined), message:error.message, data:error.data || undefined });
-  }
+    const key = String(req.params.checkoutRequestId || req.query.reference || '').trim();
+    if (!key) return res.status(400).json({ success: false, message: 'Payment reference is required' });
+    const payment = await Payment.findOne({ where: { [Op.or]: [{ reference: key }, { checkoutRequestId: key }, { transactionId: key }, { providerReference: key }] } });
+    if (!payment) return res.status(404).json({ success: false, message: 'Payment not found' });
+    res.json({ success: true, data: lockedPaymentPayload(payment) });
+  } catch (error) { errorJson(res, error, 500); }
 };
 
-exports.adminNameChangePaymentSTK = async (req, res) => {
-  try {
-    const { phone, amount, newName, reason } = req.body;
-    if(!phone || !amount || !newName) return res.status(400).json({ success:false, message:'phone, amount, and newName are required' });
-    const school = await School.findOne({ where:{ schoolId:req.user.schoolCode } });
-    if (!school) return res.status(404).json({ success:false, message:'School not found' });
-    const reference = ref('NAME');
-    const payAmount = cleanAmount(amount);
-    const stk = await daraja.initiateSTKPush({ phone, amount: payAmount, accountReference:reference, transactionDesc:`School name change - ${school.name}`, metadata:{ type:'name_change', schoolCode:req.user.schoolCode, newName, reason, reference } });
-    res.json({ success:true, message:'M-PESA prompt sent. The request remains pending until callback confirmation.', data:{ reference, schoolCode:req.user.schoolCode, currentName:school.name, newName, amount:payAmount, checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
-  } catch(error){ console.error('Name change payment error:', error); res.status(500).json({ success:false, message:error.message }); }
-};
-
-exports.genericPlatformSTK = async (req, res) => {
-  try {
-    const { phone, amount, accountReference='SHULEAI', description='Shule AI payment', metadata={} } = req.body;
-    if(!phone || !amount) return res.status(400).json({ success:false, message:'phone and amount are required' });
-    const platform = await requirePlatformStkAllowed(metadata?.ownerType === 'school' ? 'school' : 'child');
-    const stk = await daraja.initiateSTKPush({ phone, amount: cleanAmount(amount), accountReference, transactionDesc: description, credentials:platform.credentials, callbackUrl:platform.credentials.callbackUrl, metadata:{ ...metadata, userId:req.user.id, role:req.user.role, schoolCode:req.user.schoolCode, platformPaymentMode:platform.mode } });
-    await writeAudit(req, { module:'payments', action:'platform_stk_initiated', entityType:'STK', entityId:stk.CheckoutRequestID, after:{ accountReference, amount, description, checkoutRequestId:stk.CheckoutRequestID } });
-    res.json({ success:true, message:'M-PESA prompt sent.', data:{ checkoutRequestId:stk.CheckoutRequestID, merchantRequestId:stk.MerchantRequestID, responseDescription:stk.ResponseDescription, customerMessage:stk.CustomerMessage, environment:stk.environment } });
-  } catch(error){ res.status(error.statusCode || 500).json({ success:false, message:error.message, data:error.data || undefined }); }
-};
-
-exports.queryStatus = async (req, res) => { try { const data = await daraja.querySTKStatus(req.params.checkoutRequestId); res.json({ success:true, data }); } catch(error){ res.status(500).json({ success:false, message:error.message }); } };
-
-exports.darajaCallback = async (req, res) => {
-  try {
-    const parsed = daraja.parseCallback(req.body);
-    const payment = parsed.checkoutRequestId ? await Payment.findOne({ where: { transactionId: parsed.checkoutRequestId } }) : null;
-    if (payment) {
-      const success = Number(parsed.resultCode) === 0;
-      const before = payment.toJSON();
-      const trail = Array.isArray(payment.auditTrail) ? payment.auditTrail : [];
-      trail.push({ action: success ? 'daraja_confirmed' : 'daraja_failed', at:new Date().toISOString(), resultCode:parsed.resultCode, resultDesc:parsed.resultDesc, receipt:parsed.mpesaReceiptNumber });
-      await payment.update({
-        status: success ? 'completed' : 'failed',
-        completedAt: success ? new Date() : payment.completedAt,
-        mpesaReceiptNumber: parsed.mpesaReceiptNumber || payment.mpesaReceiptNumber,
-        payerPhone: parsed.phoneNumber || payment.payerPhone,
-        gatewayResponse: parsed.raw,
-        notes: parsed.resultDesc || payment.notes,
-        auditTrail: trail,
-        metadata: { ...(payment.metadata || {}), darajaCallback: parsed, mpesaReceiptNumber: parsed.mpesaReceiptNumber, phoneNumber: parsed.phoneNumber }
-      });
-      if (success && payment.feeId && before.status !== 'completed') {
-        const actualAmount = parsed.amount ? cleanAmount(parsed.amount) : Number(payment.amount || 0);
-        if (actualAmount && actualAmount !== Number(payment.amount || 0)) {
-          await payment.update({ amount: actualAmount, metadata: { ...(payment.metadata || {}), darajaCallback: parsed, actualDarajaAmount: actualAmount, mpesaReceiptNumber: parsed.mpesaReceiptNumber, phoneNumber: parsed.phoneNumber } });
-        }
-        await applyFeePayment(payment, parsed.mpesaReceiptNumber || payment.reference);
-      }
-      if (payment.paymentType === 'subscription' && payment.subscriptionPaymentId) {
-        const subscriptionPayment = await SubscriptionPayment.findByPk(payment.subscriptionPaymentId);
-        if (subscriptionPayment) {
-          const spTrail = Array.isArray(subscriptionPayment.auditTrail) ? subscriptionPayment.auditTrail : [];
-          spTrail.push({ action: success ? 'daraja_confirmed' : 'daraja_failed', at:new Date().toISOString(), resultCode:parsed.resultCode, resultDesc:parsed.resultDesc, receipt:parsed.mpesaReceiptNumber });
-          await subscriptionPayment.update({
-            status: success ? 'success' : 'failed',
-            paidAt: success ? new Date() : subscriptionPayment.paidAt,
-            mpesaReceiptNumber: parsed.mpesaReceiptNumber || subscriptionPayment.mpesaReceiptNumber,
-            rawCallback: parsed.raw || parsed,
-            auditTrail: spTrail
-          });
-          if (success) {
-            const plan = await SubscriptionPlan.findByPk(subscriptionPayment.planId) || await subscriptionController.getPlanByCode(subscriptionPayment.planCode, subscriptionPayment.ownerType === 'school' ? 'school' : 'child');
-            const subscription = await Subscription.findByPk(subscriptionPayment.subscriptionId);
-            if (plan && subscription) await subscriptionController.renewSubscription(subscription, plan, subscriptionPayment.billingCycle, payment.id);
-          }
-        }
-      } else if (success && payment.paymentType === 'subscription' && payment.studentId) {
-        const student = await Student.findByPk(payment.studentId);
-        if (student) await student.upgradeSubscription(payment.plan || 'basic', payment.amount);
-      }
-      await AuditLog?.create({ schoolCode:payment.schoolCode, module:'payments', action:success?'payment_completed':'payment_failed', entityType:'Payment', entityId:String(payment.id), before, after:payment.toJSON(), metadata:{ parsed } });
-      realtimeSync.emitPaymentUpdate(payment.schoolCode, {
-        paymentId: payment.id,
-        studentId: payment.studentId,
-        feeId: payment.feeId,
-        amount: payment.amount,
-        status: success ? 'completed' : 'failed',
-        action: success ? 'daraja_payment_completed' : 'daraja_payment_failed'
-      });
-    }
-    res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
-  } catch(error){ console.error('Daraja callback error:', error); res.json({ ResultCode: 0, ResultDesc:'Accepted with internal logging error' }); }
-};
 
 // ============================================================================
 // V75 FINAL FINANCE LEDGER OVERRIDES
@@ -990,54 +362,6 @@ exports.rejectManualPayment = async (req, res) => {
   } catch(error){ res.status(400).json({ success:false, message:error.message }); }
 };
 
-exports.parentFeeManual = async (req, res) => {
-  try {
-    const { studentId, feeId, amount, mpesaCode, reference, phone, notes, method = 'manual_mpesa' } = req.body || {};
-    if(!studentId || !amount || !(mpesaCode || reference)) return res.status(400).json({ success:false, message:'studentId, amount, and reference/M-Pesa code are required' });
-    const { parent, student } = await financeLedger.assertParentOwnsStudent({ parentUserId: req.user.id, studentId, schoolCode: req.user.schoolCode });
-    const payment = await financeLedger.recordTransaction({
-      user: req.user,
-      schoolCode: req.user.schoolCode,
-      studentId: student.id,
-      parentId: parent.id,
-      feeId: Number(feeId),
-      amount,
-      method,
-      transactionType: 'payment',
-      status: 'pending',
-      reference: mpesaCode || reference,
-      source: 'parent',
-      notes: notes || `${method} payment awaiting school verification`,
-      processedBy: req.user.id,
-      paymentDate: new Date(),
-      metadata: { phone, submittedBy: 'parent' }
-    });
-    res.json({ success:true, message:'Payment submitted for school finance verification. Balance updates after approval.', data:{ paymentId:payment.id, reference:payment.reference, status:payment.status, amount:payment.amount } });
-  } catch(error){ console.error('Manual school fee payment error:', error); res.status(400).json({ success:false, message:error.message }); }
-};
-
-
-exports.getParentSchoolPaymentSettings = async (req, res) => {
-  try {
-    const { settings, bankDetails } = await getSchoolPaymentConfig(req.user.schoolCode);
-    res.json({ success:true, data:{
-      paymentMode: settings.paymentMode || 'manual',
-      mpesaType: settings.mpesaType || 'paybill',
-      paybill: settings.paybillNumber || settings.paybill || settings.businessShortcode || '',
-      till: settings.tillNumber || settings.till || '',
-      shortcode: settings.darajaShortcode || settings.businessShortcode || settings.shortcode || '',
-      referenceFormat: settings.accountReferenceFormat || 'elimuid',
-      bankName: bankDetails?.bankName || settings.bankName || '',
-      accountName: bankDetails?.accountName || settings.bankAccountName || settings.accountName || '',
-      accountNumber: bankDetails?.accountNumber || settings.bankAccountNumber || settings.bankAccount || settings.accountNumber || '',
-      branch: bankDetails?.branch || settings.bankBranch || settings.branch || '',
-      manualInstructions: settings.manualInstructions || 'Use the displayed account details, then submit your payment reference for verification.',
-      offlineInstructions: settings.offlineInstructions || '',
-      supports: { stk: !!settings.canUseDaraja, manualMpesa: ['manual','mixed'].includes(String(settings.paymentMode||'manual')), paybill: !!settings.paybillNumber, till: !!settings.tillNumber, bank: !!(settings.bankAccountNumber || bankDetails?.accountNumber), cash: settings.cashEnabled !== false, card: settings.cardEnabled === true }
-    }});
-  } catch (error) { res.status(500).json({ success:false, message:error.message }); }
-};
-
 
 // Finance Officer/Admin read context used by the dedicated Finance Workspace.
 exports.getFinanceContext = async (req, res) => {
@@ -1049,4 +373,206 @@ exports.getFinanceContext = async (req, res) => {
     ]);
     res.json({ success:true, data:{ classes, students } });
   } catch (error) { res.status(500).json({ success:false, message:error.message }); }
+};
+
+// Locked provider payment initiation, callback, and platform manual review.
+function lockedPaymentPayload(payment) {
+  return {
+    paymentId: payment.id,
+    subscriptionPaymentId: payment.subscriptionPaymentId || null,
+    subscriptionId: payment.subscriptionId || null,
+    reference: payment.reference,
+    accountReference: payment.accountReference,
+    checkoutRequestId: payment.checkoutRequestId,
+    merchantRequestId: payment.merchantRequestId,
+    providerReference: payment.providerReference,
+    provider: payment.paymentGateway,
+    paymentMethod: payment.method,
+    promptType: payment.promptType,
+    promptStatus: payment.promptStatus,
+    checkoutUrl: payment.checkoutUrl,
+    status: payment.status,
+    amount: payment.amount,
+    currency: payment.currency,
+    environment: payment.gatewayResponse?.environment || null,
+    customerMessage: payment.metadata?.promptMessage || null,
+    responseDescription: payment.gatewayResponse?.ResponseDescription || payment.metadata?.promptMessage || null
+  };
+}
+
+async function startLockedPayment(req, res, payload, successMessage) {
+  try {
+    const payment = await paymentEngine.initiatePayment({ user: req.user, body: payload });
+    const data = lockedPaymentPayload(payment);
+    res.status(payment.status === 'pending_provider_error' ? 202 : 200).json({
+      success: true,
+      message: payment.metadata?.promptMessage || successMessage || 'Payment started using the active configured provider.',
+      data
+    });
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ success: false, message: error.message, data: error.data || undefined });
+  }
+}
+
+exports.parentFeeSTK = async (req, res) => startLockedPayment(req, res, {
+  ...req.body,
+  paymentType: 'school_fee',
+  paymentMethod: req.body?.paymentMethod || 'mobile_money',
+  purpose: 'school_fee'
+}, 'School fee payment started using the active school provider.');
+
+exports.parentSubscriptionSTK = async (req, res) => startLockedPayment(req, res, {
+  ...req.body,
+  paymentType: 'platform',
+  platformPurpose: 'child_subscription',
+  purpose: 'child_subscription',
+  ownerType: 'child',
+  paymentMethod: req.body?.paymentMethod || 'mobile_money',
+  billingCycle: req.body?.billingCycle || req.body?.billingPeriod || 'monthly'
+}, 'Child subscription payment started using the active platform provider.');
+
+exports.schoolSubscriptionSTK = async (req, res) => startLockedPayment(req, res, {
+  ...req.body,
+  paymentType: 'platform',
+  platformPurpose: 'school_subscription',
+  purpose: 'school_subscription',
+  ownerType: 'school',
+  paymentMethod: req.body?.paymentMethod || 'mobile_money',
+  billingCycle: req.body?.billingCycle || req.body?.billingPeriod || 'monthly'
+}, 'School subscription payment started using the active platform provider.');
+
+exports.genericPlatformSTK = async (req, res) => startLockedPayment(req, res, {
+  ...req.body,
+  paymentType: 'platform',
+  platformPurpose: req.body?.platformPurpose || req.body?.purpose || req.body?.metadata?.type || 'platform_payment',
+  purpose: req.body?.purpose || req.body?.metadata?.type || 'platform_payment',
+  ownerType: req.body?.ownerType || req.body?.metadata?.ownerType || (req.user?.role === 'parent' ? 'child' : 'school'),
+  paymentMethod: req.body?.paymentMethod || 'mobile_money',
+  billingCycle: req.body?.billingCycle || req.body?.billingPeriod || 'monthly'
+}, 'Platform payment started using the active platform provider.');
+
+// ============================================================================
+// V200.3 FINAL BYPASS SEAL
+// These overrides close the remaining legacy manual/Daraja routes so every
+// payment path obeys the same active-provider rule:
+// - school fees -> Finance Officer school provider
+// - child/school subscriptions, add-ons, name change -> Super Admin platform provider
+// - disabled providers cannot initiate or finalize payments
+// ============================================================================
+
+function v2003ManualProviderQueueWhere(extra = {}) {
+  return {
+    ...extra,
+    paidTo: 'platform',
+    status: 'pending',
+    [Op.or]: [
+      { promptType: 'manual_instructions' },
+      { paymentGateway: { [Op.in]: ['manual', 'bank', 'cash', 'card', 'manual_mpesa'] } }
+    ]
+  };
+}
+
+exports.darajaCallback = async (req, res) => {
+  try {
+    await paymentEngine.handleWebhook({ provider: 'mpesa', payload: req.body || {}, headers: req.headers || {} });
+    res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+  } catch (error) {
+    console.error('Locked Daraja callback error:', error.message);
+    res.json({ ResultCode: 0, ResultDesc: 'Accepted with internal reconciliation logging' });
+  }
+};
+
+exports.parentFeeManual = async (req, res) => startLockedPayment(req, res, {
+  ...req.body,
+  paymentType: 'school_fee',
+  paymentMethod: req.body?.paymentMethod || req.body?.method || 'manual',
+  reference: req.body?.reference || req.body?.mpesaCode || req.body?.transactionCode || undefined,
+  purpose: 'school_fee_manual_reference'
+}, 'School fee reference submitted using the active school provider rule.');
+
+exports.parentSubscriptionManual = async (req, res) => startLockedPayment(req, res, {
+  ...req.body,
+  paymentType: 'platform',
+  platformPurpose: 'child_subscription',
+  purpose: 'child_subscription_manual_reference',
+  ownerType: 'child',
+  paymentMethod: req.body?.paymentMethod || req.body?.method || 'mobile_money',
+  reference: req.body?.reference || req.body?.mpesaCode || req.body?.transactionCode || undefined,
+  billingCycle: req.body?.billingCycle || req.body?.billingPeriod || 'monthly'
+}, 'Child subscription reference submitted using the active platform provider rule.');
+
+exports.adminNameChangePaymentSTK = async (req, res) => startLockedPayment(req, res, {
+  ...req.body,
+  paymentType: 'platform',
+  platformPurpose: 'name_change',
+  purpose: 'school_name_change',
+  ownerType: 'school',
+  paymentMethod: req.body?.paymentMethod || 'mobile_money',
+  accountReference: req.body?.accountReference || req.body?.reference || 'SCHOOL-NAME-CHANGE',
+  metadata: { ...(req.body?.metadata || {}), newName: req.body?.newName || null, reason: req.body?.reason || null }
+}, 'School name change payment started using the active platform provider.');
+
+exports.getPlatformManualQueue = async (req, res) => {
+  try {
+    const rows = await Payment.findAll({
+      where: v2003ManualProviderQueueWhere({ paymentType: { [Op.in]: ['platform', 'subscription'] } }),
+      include: [
+        { model: Student, required: false, include: [{ model: User, required: false, attributes: ['id', 'name', 'email', 'schoolCode'] }] },
+        { model: Parent, required: false, include: [{ model: User, required: false, attributes: ['id', 'name', 'phone', 'email'] }] }
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: 200
+    });
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.reviewPlatformManualPayment = async (req, res) => {
+  try {
+    const { action, notes } = req.body || {};
+    const approve = String(action || '').toLowerCase() !== 'reject';
+    const payment = await Payment.findOne({ where: v2003ManualProviderQueueWhere({ id: req.params.paymentId, paymentType: { [Op.in]: ['platform', 'subscription'] } }) });
+    if (!payment) return res.status(404).json({ success: false, message: 'Manual/platform payment not found or already reviewed.' });
+
+    const before = payment.toJSON();
+    const trail = Array.isArray(payment.auditTrail) ? payment.auditTrail : [];
+    trail.push(auditEntry(approve ? 'manual_platform_payment_approved_v2003' : 'manual_platform_payment_rejected_v2003', req.user, { notes, provider: payment.paymentGateway }));
+    await payment.update({
+      status: approve ? 'completed' : 'rejected',
+      providerStatus: approve ? 'manual_approved' : 'manual_rejected',
+      completedAt: approve ? new Date() : null,
+      paymentDate: approve ? new Date() : payment.paymentDate,
+      reconciledAt: new Date(),
+      reconciliationStatus: approve ? 'matched' : 'rejected',
+      notes: notes || payment.notes,
+      auditTrail: trail,
+      metadata: { ...(payment.metadata || {}), manualReview: { approve, notes: notes || null, reviewedBy: req.user?.id || null, reviewedAt: new Date().toISOString() } }
+    });
+
+    if (payment.subscriptionPaymentId) {
+      const subscriptionPayment = await SubscriptionPayment.findByPk(payment.subscriptionPaymentId);
+      if (subscriptionPayment) {
+        const spTrail = Array.isArray(subscriptionPayment.auditTrail) ? subscriptionPayment.auditTrail : [];
+        spTrail.push(auditEntry(approve ? 'manual_provider_confirmed_v2003' : 'manual_provider_rejected_v2003', req.user, { paymentId: payment.id, notes }));
+        await subscriptionPayment.update({
+          status: approve ? 'success' : 'failed',
+          paidAt: approve ? new Date() : subscriptionPayment.paidAt,
+          mpesaReceiptNumber: payment.mpesaReceiptNumber || payment.reference || subscriptionPayment.mpesaReceiptNumber,
+          auditTrail: spTrail
+        });
+        if (approve) {
+          const subPlan = await SubscriptionPlan.findByPk(subscriptionPayment.planId) || await subscriptionController.getPlanByCode(subscriptionPayment.planCode, subscriptionPayment.ownerType === 'school' ? 'school' : 'child');
+          const subscription = await Subscription.findByPk(subscriptionPayment.subscriptionId);
+          if (subPlan && subscription) await subscriptionController.renewSubscription(subscription, subPlan, subscriptionPayment.billingCycle, payment.id);
+        }
+      }
+    }
+
+    await writeAudit(req, { schoolCode: 'platform', module: 'payments', action: approve ? 'platform_manual_payment_approved' : 'platform_manual_payment_rejected', entityType: 'Payment', entityId: String(payment.id), before, after: payment.toJSON() });
+    res.json({ success: true, message: approve ? 'Platform payment approved and subscription/add-on activated.' : 'Platform payment rejected.', data: payment });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
 };

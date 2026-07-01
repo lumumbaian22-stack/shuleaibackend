@@ -190,7 +190,7 @@ async function finalizeConfirmedPayment({ legacyPayment, status = 'paid', provid
 }
 
 async function applyPlatformSubscriptionPayment({ tx, transaction } = {}) {
-  if (!tx || !PlatformSubscription || tx.paymentType !== 'platform') return null;
+  if (!tx || !PlatformSubscription || tx.paymentType !== 'platform' || tx.metadata?.ownerType === 'child') return null;
   const months = tx.metadata?.billingCycle === 'yearly' ? 12 : 1;
   const startsAt = new Date();
   const endsAt = new Date(startsAt);
