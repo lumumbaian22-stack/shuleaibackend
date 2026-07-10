@@ -25,6 +25,13 @@ function originAllowed(origin) {
 
 function setCorsHeaders(req, res) {
   const origin = req.headers.origin;
+
+  // Direct browser navigation, Render health checks, curl, and server-to-server
+  // requests usually do not send an Origin header. Never set
+  // Access-Control-Allow-Origin to undefined; Node rejects that header value and
+  // turns safe health checks into 500 Internal Server Error responses.
+  if (!origin) return;
+
   if (!originAllowed(origin)) return;
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
