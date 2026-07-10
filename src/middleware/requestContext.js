@@ -4,7 +4,7 @@ const { AsyncLocalStorage } = require('async_hooks');
 const requestStore = new AsyncLocalStorage();
 
 function originAllowed(origin) {
-  if (!origin) return false;
+  if (!origin) return true;
   const allowed = new Set([
     'https://shuleai.live',
     'https://www.shuleai.live',
@@ -12,7 +12,11 @@ function originAllowed(origin) {
     'https://shuleaiinfo-cmd.github.io',
     'http://localhost:3000',
     'http://localhost:5173',
+    'http://localhost:19006',
+    'http://localhost:8081',
     'http://127.0.0.1:5500',
+    'http://127.0.0.1:19006',
+    'http://127.0.0.1:8081',
     ...(process.env.CORS_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean),
     ...(process.env.FRONTEND_URL || '').split(',').map(x => x.trim()).filter(Boolean)
   ]);
@@ -26,7 +30,7 @@ function setCorsHeaders(req, res) {
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin,Stripe-Signature,X-Paystack-Signature,verif-hash,flutterwave-signature');
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
@@ -35,7 +39,6 @@ function requestContext(req, res, next) {
   const context = { requestId: req.headers['x-request-id'] || randomUUID(), user: null };
   req.requestId = context.requestId;
   res.setHeader('X-Request-Id', context.requestId);
-  if (req.method === 'OPTIONS') return res.status(204).end();
   requestStore.run(context, () => next());
 }
 

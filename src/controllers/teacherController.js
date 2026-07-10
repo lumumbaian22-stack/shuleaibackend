@@ -13,6 +13,8 @@ const crypto = require('crypto');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 const sequelize = require('../config/database');
 const { generateTemporaryPassword } = require('../utils/passwords');
+const cache = require('../services/cacheService');
+const { findStudentInSchool, findTeacherInSchool, teacherCanAccessStudentClass } = require('../services/studentScopeService');
 
 
 
@@ -273,6 +275,7 @@ exports.addStudent = async (req, res) => {
     const classItem = await resolveSafeClassForNewStudent({ schoolCode:req.user.schoolCode, grade, classId });
     const student = await Student.create({
       userId: user.id,
+      schoolCode: req.user.schoolCode,
       grade: classItem?.name || grade,
       classId: classItem?.id || null,
       dateOfBirth: dateOfBirth,
@@ -314,6 +317,7 @@ exports.addStudent = async (req, res) => {
       }
     }
 
+    cache.flushSchoolCache(req.user.schoolCode);
     res.status(201).json({
       success: true,
       message: 'Student added successfully',
@@ -343,13 +347,13 @@ exports.takeAttendance = require('./attendanceLifecycleController').saveSingleDr
 exports.addComment = async (req, res) => {
   try {
     const { studentId, comment } = req.body;
-    
-    const student = await Student.findByPk(studentId, { 
-      include: [{ model: User, attributes: ['id','name','profileImage','profilePicture'] }] 
-    });
-    
-    if (!student) {
-      return res.status(404).json({ success: false, message: 'Student not found' });
+    const teacher = await findTeacherInSchool(req.user.id, req.user.schoolCode);
+    if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found in this school' });
+
+    const student = await findStudentInSchool(studentId, req.user.schoolCode, { userAttributes: ['id','name','profileImage','profilePicture','schoolCode'] });
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found in this school' });
+    if (!(await teacherCanAccessStudentClass(teacher, student, req.user.schoolCode))) {
+      return res.status(403).json({ success: false, message: 'This student is not assigned to your class' });
     }
 
     const parents = await student.getParents({ 
@@ -688,21 +692,18 @@ exports.deleteStudent = async (req, res) => {
   try {
     const { studentId } = req.params;
     
-    const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
+    const teacher = await findTeacherInSchool(req.user.id, req.user.schoolCode);
     if (!teacher) {
-      return res.status(404).json({ success: false, message: 'Teacher not found' });
+      return res.status(404).json({ success: false, message: 'Teacher not found in this school' });
     }
     
-    const student = await Student.findByPk(studentId, {
-      include: [{ model: User }]
-    });
-    
+    const student = await findStudentInSchool(studentId, req.user.schoolCode);
     if (!student) {
-      return res.status(404).json({ success: false, message: 'Student not found' });
+      return res.status(404).json({ success: false, message: 'Student not found in this school' });
     }
     
-    if (student.grade !== teacher.classTeacher) {
-      return res.status(403).json({ success: false, message: 'This student is not in your class' });
+    if (!(await teacherCanAccessStudentClass(teacher, student, req.user.schoolCode))) {
+      return res.status(403).json({ success: false, message: 'This student is not assigned to your class' });
     }
     
     const studentName = student.User.name;
@@ -1093,11 +1094,12 @@ exports.uploadStudentsCSV = async (req,res) => {
       for (const row of rows) { try {
         const name = row.name || row.fullName || row.studentName; if (!name) { errors.push({ row, error:'Missing name' }); continue; }
         const user = await User.create({ name, email: row.email || null, phone: row.phone || null, password: generateTemporaryPassword(), role:'student', schoolCode:req.user.schoolCode, isActive:true, firstLogin:true });
-        const student = await Student.create({ userId:user.id, classId:classItem.id, grade:classItem.name, dateOfBirth: row.dob || row.dateOfBirth || null, gender: row.gender || null, assessmentNumber: row.assessmentNumber || row.assessment_number || null, nemisNumber: row.nemisNumber || row.nemis_number || null, location: row.location || null, parentName: row.parentName || row.parent_name || null, parentEmail: row.parentEmail || row.parent_email || null, parentPhone: row.parentPhone || row.parent_phone || null, parentRelationship: row.parentRelationship || row.relationship || 'guardian', isPrefect: String(row.isPrefect || '').toLowerCase() === 'true' });
+        const student = await Student.create({ userId:user.id, schoolCode:req.user.schoolCode, classId:classItem.id, grade:classItem.name, dateOfBirth: row.dob || row.dateOfBirth || null, gender: row.gender || null, assessmentNumber: row.assessmentNumber || row.assessment_number || null, nemisNumber: row.nemisNumber || row.nemis_number || null, location: row.location || null, parentName: row.parentName || row.parent_name || null, parentEmail: row.parentEmail || row.parent_email || null, parentPhone: row.parentPhone || row.parent_phone || null, parentRelationship: row.parentRelationship || row.relationship || 'guardian', isPrefect: String(row.isPrefect || '').toLowerCase() === 'true' });
         await createEnrollmentForNewStudent({ student, classItem, schoolCode:req.user.schoolCode, actorId:req.user.id });
         elimuids.push({ name, elimuid:student.elimuid, assessmentNumber:student.assessmentNumber }); successCount++;
       } catch(err) { errors.push({ row, error:err.message }); } }
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      cache.flushSchoolCache(req.user.schoolCode);
       res.json({ success:true, message:`Class ${classItem.name}: success ${successCount}, failed ${errors.length}`, data:{ classId:classItem.id, className:classItem.name, successCount, failedCount:errors.length, elimuids, errors:errors.slice(0,20) } });
     }).on('error', err => { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); res.status(500).json({ success:false, message:err.message }); });
   } catch(error) { console.error('V3 CSV upload error:', error); res.status(500).json({ success:false, message:error.message }); }

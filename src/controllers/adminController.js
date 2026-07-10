@@ -1,7 +1,11 @@
 const { Op } = require('sequelize');
 const { resolveClassStudents, resolveStudentClass } = require('../services/schoolLinkageService');
-const { User, Teacher, Student, Parent, School, Alert, Class, TeacherSubjectAssignment } = require('../models');
+const { User, UserRoleAssignment, Teacher, Student, Parent, School, Alert, Class, TeacherSubjectAssignment } = require('../models');
 const { createAlert } = require('../services/notificationService');
+const { getPagination, buildPaginatedResponse } = require('../utils/pagination');
+const cache = require('../services/cacheService');
+const { findStudentInSchool } = require('../services/studentScopeService');
+
 
 // Helper for curriculum names
 const getCurriculumName = (curriculum) => {
@@ -13,18 +17,26 @@ const getCurriculumName = (curriculum) => {
 exports.getDashboardStats = async (req, res) => {
   try {
     const schoolCode = req.user.schoolCode;
-    const stats = {
-      teachers: await Teacher.count({ include: [{ model: User, where: { schoolCode, role: 'teacher' } }] }),
-      students: await Student.count({ include: [{ model: User, where: { schoolCode, role: 'student' } }] }),
-      parents: await Parent.count({ include: [{ model: User, where: { schoolCode, role: 'parent' } }] }),
-      classes: await Class.count({ where: { schoolCode, isActive: true } }),
-      pendingApprovals: await Teacher.count({
-        include: [{ model: User, where: { schoolCode, role: 'teacher' } }],
+    const cacheKey = cache.getCacheKey(['school', schoolCode, 'admin-dashboard-stats']);
+    const cached = cache.get(cacheKey);
+    if (cached) return res.json({ success: true, cached: true, data: cached });
+
+    const sevenDaysAgo = new Date(Date.now() - 7*24*60*60*1000);
+    const [teachers, students, parents, classes, pendingApprovals, recentAlerts] = await Promise.all([
+      Teacher.count({ include: [{ model: User, where: { schoolCode, role: 'teacher' }, attributes: [] }] }),
+      Student.count({ include: [{ model: User, where: { schoolCode, role: 'student' }, attributes: [] }] }),
+      Parent.count({ include: [{ model: User, where: { schoolCode, role: 'parent' }, attributes: [] }] }),
+      Class.count({ where: { schoolCode, isActive: true } }),
+      Teacher.count({
+        include: [{ model: User, where: { schoolCode, role: 'teacher' }, attributes: [] }],
         where: { approvalStatus: 'pending' }
       }),
-      recentAlerts: await Alert.count({ where: { role: 'admin', createdAt: { [Op.gte]: new Date(Date.now() - 7*24*60*60*1000) } } })
-    };
-    res.json({ success: true, data: stats });
+      Alert.count({ where: { role: 'admin', createdAt: { [Op.gte]: sevenDaysAgo } } })
+    ]);
+
+    const stats = { teachers, students, parents, classes, pendingApprovals, recentAlerts };
+    cache.set(cacheKey, stats, 45);
+    res.json({ success: true, cached: false, data: stats });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -33,13 +45,19 @@ exports.getDashboardStats = async (req, res) => {
 // ============ TEACHER MANAGEMENT ============
 exports.getAllTeachers = async (req, res) => {
   try {
-    const teachers = await Teacher.findAll({
-      include: [
-        { model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id','name','email','phone','profileImage','profilePicture','createdAt'] },
-        { model: TeacherSubjectAssignment, required: false, attributes: ['id','classId','subject','isClassTeacher'], include: [{ model: Class, required: false, attributes: ['id','name','grade','stream','isActive','schoolCode'] }] }
-      ],
+    const { page, limit, offset } = getPagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+    const include = [
+      { model: User, where: { schoolCode: req.user.schoolCode }, attributes: ['id','name','email','phone','profileImage','profilePicture','createdAt'] },
+      { model: TeacherSubjectAssignment, required: false, attributes: ['id','classId','subject','isClassTeacher'], include: [{ model: Class, required: false, attributes: ['id','name','grade','stream','isActive','schoolCode'] }] }
+    ];
+    const result = await Teacher.findAndCountAll({
+      include,
+      distinct: true,
+      limit,
+      offset,
       order: [['createdAt', 'DESC']]
     });
+    const teachers = result.rows;
     const teacherIds = teachers.map(t => Number(t.id)).filter(Boolean);
     const legacyClassIds = teachers.map(t => Number(t.classId)).filter(Boolean);
     let classes = [];
@@ -56,7 +74,7 @@ exports.getAllTeachers = async (req, res) => {
       teacher.Class = teacher.Classes[0] || null;
       return teacher;
     });
-    res.json({ success: true, data });
+    res.json({ success: true, ...buildPaginatedResponse({ rows: data, count: result.count, page, limit }) });
   } catch (error) {
     console.error('Get teachers error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -84,6 +102,7 @@ exports.updateTeacher = async (req, res) => {
     const existingDuties = teacher.duties && typeof teacher.duties === 'object' ? teacher.duties : {};
     teacherFields.duties = { ...(Array.isArray(existingDuties) ? { list: existingDuties } : existingDuties), profile: { gender: gender ?? existingDuties?.profile?.gender ?? null, dateOfBirth: dateOfBirth ?? existingDuties?.profile?.dateOfBirth ?? null, location: location ?? existingDuties?.profile?.location ?? null, notes: notes ?? existingDuties?.profile?.notes ?? null, tscNumber: tscNumber ?? existingDuties?.profile?.tscNumber ?? null, roles: roles ?? existingDuties?.profile?.roles ?? [] } };
     await teacher.update(teacherFields);
+    cache.flushSchoolCache(req.user.schoolCode);
     res.json({ success: true, message: 'Teacher profile updated. Class and subject assignments were preserved.', data: teacher });
   } catch (error) {
     console.error('Update teacher error:', error);
@@ -103,6 +122,7 @@ exports.deleteTeacher = async (req, res) => {
       approvalStatus: 'suspended',
       duties: { ...(Array.isArray(existingDuties) ? { list: existingDuties } : existingDuties), deactivatedAt: new Date().toISOString(), deactivatedBy: req.user.id }
     });
+    cache.flushSchoolCache(req.user.schoolCode);
     res.json({ success: true, message: `${userName} deactivated. Class, subject, academic and audit history were preserved.` });
   } catch (error) {
     console.error('Deactivate teacher error:', error);
@@ -113,15 +133,19 @@ exports.deleteTeacher = async (req, res) => {
 // ============ STUDENT MANAGEMENT ============
 exports.getAllStudents = async (req, res) => {
   try {
-    const students = await Student.findAll({
-      include: [{ 
-        model: User, 
-        where: { schoolCode: req.user.schoolCode }, 
-        attributes: ['id','name','email','phone','profileImage','profilePicture','createdAt'] 
+    const { page, limit, offset } = getPagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+    const result = await Student.findAndCountAll({
+      include: [{
+        model: User,
+        where: { schoolCode: req.user.schoolCode },
+        attributes: ['id','name','email','phone','profileImage','profilePicture','createdAt']
       }],
+      distinct: true,
+      limit,
+      offset,
       order: [['createdAt', 'DESC']]
     });
-    res.json({ success: true, data: students });
+    res.json({ success: true, ...buildPaginatedResponse({ rows: result.rows, count: result.count, page, limit }) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -153,8 +177,8 @@ exports.getStudentDetails = async (req, res) => {
 exports.deleteStudent = async (req, res) => {
   try {
     const { studentId } = req.params;
-    const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    const student = await findStudentInSchool(studentId, req.user.schoolCode);
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found in this school' });
     
     const userName = student.User.name;
     await student.destroy();
@@ -171,8 +195,8 @@ exports.suspendStudent = async (req, res) => {
     const { reason } = req.body;
     if (!reason) return res.status(400).json({ success: false, message: 'Suspension reason is required' });
     
-    const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    const student = await findStudentInSchool(studentId, req.user.schoolCode);
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found in this school' });
     
     student.status = 'suspended';
     student.User.isActive = false;
@@ -187,7 +211,7 @@ exports.suspendStudent = async (req, res) => {
       });
     }
     
-    const teacher = await Teacher.findOne({ where: { classTeacher: student.grade }, include: [{ model: User }] });
+    const teacher = await Teacher.findOne({ where: { classTeacher: student.grade }, include: [{ model: User, required: true, where: { schoolCode: req.user.schoolCode } }] });
     if (teacher) {
       await createAlert({
         userId: teacher.userId, role: 'teacher', type: 'system', severity: 'critical',
@@ -205,8 +229,8 @@ exports.suspendStudent = async (req, res) => {
 exports.reactivateStudent = async (req, res) => {
   try {
     const { studentId } = req.params;
-    const student = await Student.findByPk(studentId, { include: [{ model: User }] });
-    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    const student = await findStudentInSchool(studentId, req.user.schoolCode);
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found in this school' });
     
     student.status = 'active';
     student.User.isActive = true;
@@ -1039,14 +1063,145 @@ exports.submitSchoolPaymentConfirmation = async (req, res) => {
 
 
 // ============ FINANCE STAFF WORKSPACE ============
-function userHasFinanceRole(user){const roles=Array.isArray(user?.preferences?.additionalRoles)?user.preferences.additionalRoles:[];return user?.role==='finance_officer'||roles.includes('finance_officer');}function financePublicUser(user){const f=user?.preferences?.finance||{};return{id:user.id,name:user.name,email:user.email,phone:user.phone,isActive:user.isActive,lastLogin:user.lastLogin,createdAt:user.createdAt,primaryRole:user.role,title:f.title||'Finance Officer',permissions:Array.isArray(f.permissions)?f.permissions:[],isAdditionalRole:user.role!=='finance_officer'};}
-exports.getFinanceStaff=async(req,res)=>{try{const users=await User.findAll({where:{schoolCode:req.user.schoolCode,isActive:{[Op.in]:[true,false]}},attributes:['id','name','email','phone','role','isActive','lastLogin','createdAt','preferences'],order:[['name','ASC']]});res.json({success:true,data:users.filter(userHasFinanceRole).map(financePublicUser)});}catch(e){res.status(500).json({success:false,message:e.message});}};
-exports.createFinanceStaff=async(req,res)=>{try{const name=String(req.body.name||'').trim(),email=String(req.body.email||'').trim().toLowerCase(),phone=String(req.body.phone||'').trim()||null,password=String(req.body.password||''),title=['Finance Officer','Bursar','Accountant'].includes(String(req.body.title||''))?String(req.body.title):'Finance Officer';const allFinancePerms=['overview','fee_structures','invoices','payments','verification','balances','defaulters','receipts','bursaries','expenses','reconciliation','analytics','reports','settings','alerts','audit'];const roleDefaults={
+const FINANCE_PERMISSIONS = ['overview','fee_structures','invoices','payments','verification','balances','defaulters','receipts','bursaries','expenses','reconciliation','analytics','reports','settings','alerts','audit'];
+const FINANCE_ROLE_DEFAULTS = {
   'Bursar':['overview','fee_structures','invoices','payments','verification','balances','defaulters','receipts','bursaries','reports','settings','analytics','alerts'],
   'Accountant':['overview','payments','verification','expenses','reconciliation','reports','settings','alerts'],
   'Finance Officer':['overview','fee_structures','invoices','payments','verification','balances','defaulters','receipts','bursaries','expenses','reconciliation','reports','settings','alerts']
-};const defaults=roleDefaults[title]||roleDefaults['Finance Officer'],allowed=new Set(allFinancePerms),requested=Array.isArray(req.body.permissions)?req.body.permissions.map(String).filter(x=>allowed.has(x)):[],permissions=requested.length?[...new Set(requested)]:defaults;if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return res.status(400).json({success:false,message:'A valid finance staff email is required.'});const existing=await User.findOne({where:{email}});if(existing){if(String(existing.schoolCode||'')!==String(req.user.schoolCode||''))return res.status(409).json({success:false,code:'EMAIL_REGISTERED_OTHER_SCHOOL',message:'This email is already registered under another school and cannot be assigned here.'});if(existing.role==='super_admin')return res.status(403).json({success:false,code:'PROTECTED_ACCOUNT',message:'This protected platform account cannot be assigned to a school Finance Team.'});if(['student','parent'].includes(existing.role))return res.status(409).json({success:false,code:'ACCOUNT_NOT_ELIGIBLE',message:'This existing account is not eligible for a staff finance role. Use a school staff email instead.'});if(userHasFinanceRole(existing))return res.json({success:true,message:'This user already has Finance Team access.',data:financePublicUser(existing)});if(req.body.assignExisting!==true)return res.status(409).json({success:false,code:'EXISTING_SAME_SCHOOL_USER',message:'An account with this email already exists in this school. You can assign this person to the Finance Team.',data:{id:existing.id,name:existing.name,email:existing.email,role:existing.role}});const preferences={...(existing.preferences||{})};preferences.additionalRoles=[...new Set([...(Array.isArray(preferences.additionalRoles)?preferences.additionalRoles:[]),'finance_officer'])];preferences.finance={...(preferences.finance||{}),title,permissions,assignedBy:req.user.id,assignedAt:new Date().toISOString()};await existing.update({preferences,isActive:true});await createAlert({userId:existing.id,role:existing.role,type:'system',severity:'info',title:'Finance Team access assigned',message:`You can now sign in using the Finance Staff role as ${title}.`,categoryLabel:'Finance',sourceType:'finance_team',sourceLabel:'School Administration',dedupeKey:`finance-role:${existing.id}:${req.user.schoolCode}`,data:{schoolCode:req.user.schoolCode,targetRoles:['finance_officer'],financeTitle:title}}).catch(()=>null);return res.json({success:true,message:'Existing school user assigned to the Finance Team.',data:financePublicUser(existing)});}if(name.length<2)return res.status(400).json({success:false,message:'Finance staff name is required.'});if(password.length<8)return res.status(400).json({success:false,message:'Temporary password must be at least 8 characters.'});const user=await User.create({name,email,phone,password,role:'finance_officer',schoolCode:req.user.schoolCode,isActive:true,firstLogin:true,mustChangePassword:true,passwordIssuedAt:new Date(),preferences:{notifications:{email:true,sms:false,push:true},theme:'light',additionalRoles:[],finance:{title,permissions,assignedBy:req.user.id,assignedAt:new Date().toISOString()}}});res.status(201).json({success:true,message:'Finance staff account created.',data:financePublicUser(user)});}catch(e){console.error(e);res.status(500).json({success:false,message:e.message});}};
-exports.updateFinanceStaff=async(req,res)=>{try{const user=await User.findOne({where:{id:Number(req.params.userId),schoolCode:req.user.schoolCode}});if(!user||!userHasFinanceRole(user))return res.status(404).json({success:false,message:'Finance staff account not found.'});const preferences={...(user.preferences||{})},f={...(preferences.finance||{})};if(req.body.title!==undefined)f.title=String(req.body.title||'Finance Officer');if(Array.isArray(req.body.permissions)){const allowed=new Set(['overview','fee_structures','invoices','payments','verification','balances','defaulters','receipts','bursaries','expenses','reconciliation','analytics','reports','settings','alerts','audit']),list=[...new Set(req.body.permissions.map(String).filter(x=>allowed.has(x)))];if(!list.length)return res.status(400).json({success:false,message:'Select at least one valid finance permission.'});f.permissions=list;}f.updatedBy=req.user.id;f.updatedAt=new Date().toISOString();preferences.finance=f;if(req.body.removeFinanceRole===true){if(user.role==='finance_officer'){await user.update({isActive:false,preferences:{...preferences,finance:{...f,removedAt:new Date().toISOString(),removedBy:req.user.id}}});return res.json({success:true,message:'Finance account deactivated.',data:financePublicUser(user)});}preferences.additionalRoles=(Array.isArray(preferences.additionalRoles)?preferences.additionalRoles:[]).filter(r=>r!=='finance_officer');await user.update({preferences});return res.json({success:true,message:'Finance Team role removed. The original user account remains active.',data:{id:user.id,removed:true}});}const updates={preferences};for(const k of['name','phone','isActive'])if(req.body[k]!==undefined)updates[k]=req.body[k];if(req.body.password){if(String(req.body.password).length<8)return res.status(400).json({success:false,message:'Password must be at least 8 characters.'});updates.password=String(req.body.password);updates.mustChangePassword=true;updates.passwordIssuedAt=new Date();}await user.update(updates);res.json({success:true,message:'Finance Team member updated.',data:financePublicUser(user)});}catch(e){res.status(500).json({success:false,message:e.message});}};
+};
+
+function normalizeFinanceTitle(value) {
+  return ['Finance Officer','Bursar','Accountant'].includes(String(value || '')) ? String(value) : 'Finance Officer';
+}
+
+function normalizeFinancePermissions(input, title) {
+  const allowed = new Set(FINANCE_PERMISSIONS);
+  const requested = Array.isArray(input) ? input.map(String).filter(x => allowed.has(x)) : [];
+  return requested.length ? [...new Set(requested)] : (FINANCE_ROLE_DEFAULTS[title] || FINANCE_ROLE_DEFAULTS['Finance Officer']);
+}
+
+async function getActiveFinanceAssignment(userId, schoolCode) {
+  if (!UserRoleAssignment) return null;
+  return UserRoleAssignment.findOne({ where: { userId: Number(userId), schoolCode, role: 'finance_officer', status: 'active' } }).catch(() => null);
+}
+
+async function userHasFinanceRole(user, schoolCode) {
+  if (!user) return false;
+  if (user.role === 'finance_officer') return true;
+  return Boolean(await getActiveFinanceAssignment(user.id, schoolCode || user.schoolCode));
+}
+
+async function financePublicUser(user, schoolCode) {
+  const assignment = user.role === 'finance_officer' ? null : await getActiveFinanceAssignment(user.id, schoolCode || user.schoolCode);
+  const f = assignment?.metadata || user?.preferences?.finance || {};
+  return {
+    id:user.id,
+    name:user.name,
+    email:user.email,
+    phone:user.phone,
+    isActive:user.isActive,
+    lastLogin:user.lastLogin,
+    createdAt:user.createdAt,
+    primaryRole:user.role,
+    title:f.title||'Finance Officer',
+    permissions:Array.isArray(f.permissions)?f.permissions:[],
+    isAdditionalRole:user.role!=='finance_officer'
+  };
+}
+
+async function assignFinanceRole(user, schoolCode, actorUserId, { title, permissions }) {
+  if (user.role === 'finance_officer') {
+    const preferences = { ...(user.preferences || {}) };
+    delete preferences.additionalRoles;
+    preferences.finance = { ...(preferences.finance || {}), title, permissions, assignedBy: actorUserId, assignedAt: preferences.finance?.assignedAt || new Date().toISOString(), updatedBy: actorUserId, updatedAt: new Date().toISOString() };
+    await user.update({ preferences, isActive: true });
+    return null;
+  }
+  const [assignment] = await UserRoleAssignment.findOrCreate({
+    where: { userId: user.id, schoolCode, role: 'finance_officer' },
+    defaults: { status: 'active', assignedBy: actorUserId, assignedAt: new Date(), metadata: { title, permissions } }
+  });
+  await assignment.update({ status: 'active', revokedBy: null, revokedAt: null, assignedBy: actorUserId, assignedAt: assignment.assignedAt || new Date(), metadata: { ...(assignment.metadata || {}), title, permissions, updatedBy: actorUserId, updatedAt: new Date().toISOString() } });
+  const preferences = { ...(user.preferences || {}) };
+  delete preferences.additionalRoles;
+  preferences.finance = { title, permissions, assignedBy: actorUserId, assignedAt: preferences.finance?.assignedAt || new Date().toISOString(), updatedBy: actorUserId, updatedAt: new Date().toISOString() };
+  await user.update({ preferences, isActive: true });
+  return assignment;
+}
+
+exports.getFinanceStaff = async (req, res) => {
+  try {
+    const schoolCode = req.user.schoolCode;
+    const users = await User.findAll({ where:{ schoolCode, isActive:{[Op.in]:[true,false]} }, attributes:['id','name','email','phone','role','isActive','lastLogin','createdAt','preferences','schoolCode'], order:[['name','ASC']] });
+    const assignments = UserRoleAssignment ? await UserRoleAssignment.findAll({ where:{ schoolCode, role:'finance_officer', status:'active' }, attributes:['userId'] }).catch(()=>[]) : [];
+    const assignedIds = new Set(assignments.map(a => Number(a.userId)));
+    const financeUsers = users.filter(u => u.role === 'finance_officer' || assignedIds.has(Number(u.id)));
+    const data = [];
+    for (const user of financeUsers) data.push(await financePublicUser(user, schoolCode));
+    res.json({ success:true, data });
+  } catch(e) { res.status(500).json({success:false,message:e.message}); }
+};
+
+exports.createFinanceStaff = async (req,res) => {
+  try {
+    const name=String(req.body.name||'').trim(), email=String(req.body.email||'').trim().toLowerCase(), phone=String(req.body.phone||'').trim()||null, password=String(req.body.password||''), title=normalizeFinanceTitle(req.body.title);
+    const permissions = normalizeFinancePermissions(req.body.permissions, title);
+    const schoolCode = req.user.schoolCode;
+    if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return res.status(400).json({success:false,message:'A valid finance staff email is required.'});
+    const existing=await User.findOne({where:{email}});
+    if(existing){
+      if(String(existing.schoolCode||'')!==String(schoolCode||''))return res.status(409).json({success:false,code:'EMAIL_REGISTERED_OTHER_SCHOOL',message:'This email is already registered under another school and cannot be assigned here.'});
+      if(existing.role==='super_admin')return res.status(403).json({success:false,code:'PROTECTED_ACCOUNT',message:'This protected platform account cannot be assigned to a school Finance Team.'});
+      if(['student','parent'].includes(existing.role))return res.status(409).json({success:false,code:'ACCOUNT_NOT_ELIGIBLE',message:'This existing account is not eligible for a staff finance role. Use a school staff email instead.'});
+      if(await userHasFinanceRole(existing, schoolCode))return res.json({success:true,message:'This user already has Finance Team access.',data:await financePublicUser(existing, schoolCode)});
+      if(req.body.assignExisting!==true)return res.status(409).json({success:false,code:'EXISTING_SAME_SCHOOL_USER',message:'An account with this email already exists in this school. You can assign this person to the Finance Team.',data:{id:existing.id,name:existing.name,email:existing.email,role:existing.role}});
+      await assignFinanceRole(existing, schoolCode, req.user.id, { title, permissions });
+      await createAlert({userId:existing.id,role:existing.role,type:'system',severity:'info',title:'Finance Team access assigned',message:`You can now sign in using the Finance Staff role as ${title}.`,categoryLabel:'Finance',sourceType:'finance_team',sourceLabel:'School Administration',dedupeKey:`finance-role:${existing.id}:${schoolCode}`,data:{schoolCode,targetRoles:['finance_officer'],financeTitle:title}}).catch(()=>null);
+      return res.json({success:true,message:'Existing school user assigned to the Finance Team.',data:await financePublicUser(existing, schoolCode)});
+    }
+    if(name.length<2)return res.status(400).json({success:false,message:'Finance staff name is required.'});
+    if(password.length<8)return res.status(400).json({success:false,message:'Temporary password must be at least 8 characters.'});
+    const user=await User.create({name,email,phone,password,role:'finance_officer',schoolCode,isActive:true,firstLogin:true,mustChangePassword:true,passwordIssuedAt:new Date(),preferences:{notifications:{email:true,sms:false,push:true},theme:'light',finance:{title,permissions,assignedBy:req.user.id,assignedAt:new Date().toISOString()}}});
+    res.status(201).json({success:true,message:'Finance staff account created.',data:await financePublicUser(user, schoolCode)});
+  } catch(e) { console.error(e); res.status(500).json({success:false,message:e.message}); }
+};
+
+exports.updateFinanceStaff = async (req,res) => {
+  try {
+    const schoolCode = req.user.schoolCode;
+    const user=await User.findOne({where:{id:Number(req.params.userId),schoolCode}});
+    if(!user || !(await userHasFinanceRole(user, schoolCode)))return res.status(404).json({success:false,message:'Finance staff account not found.'});
+    const preferences={...(user.preferences||{})};
+    delete preferences.additionalRoles;
+    const f={...(preferences.finance||{})};
+    if(req.body.title!==undefined)f.title=normalizeFinanceTitle(req.body.title);
+    const title=f.title||'Finance Officer';
+    if(Array.isArray(req.body.permissions)){
+      const list=normalizeFinancePermissions(req.body.permissions,title);
+      if(!list.length)return res.status(400).json({success:false,message:'Select at least one valid finance permission.'});
+      f.permissions=list;
+    } else if (!Array.isArray(f.permissions)) {
+      f.permissions = normalizeFinancePermissions([], title);
+    }
+    f.updatedBy=req.user.id;f.updatedAt=new Date().toISOString();preferences.finance=f;
+    if(req.body.removeFinanceRole===true){
+      if(user.role==='finance_officer'){
+        await user.update({isActive:false,preferences:{...preferences,finance:{...f,removedAt:new Date().toISOString(),removedBy:req.user.id}}});
+        return res.json({success:true,message:'Finance account deactivated.',data:await financePublicUser(user, schoolCode)});
+      }
+      const assignment = await getActiveFinanceAssignment(user.id, schoolCode);
+      if (assignment) await assignment.update({ status:'revoked', revokedBy:req.user.id, revokedAt:new Date(), metadata:{...(assignment.metadata||{}), removedBy:req.user.id, removedAt:new Date().toISOString()} });
+      await user.update({preferences});
+      return res.json({success:true,message:'Finance Team role removed. The original user account remains active.',data:{id:user.id,removed:true}});
+    }
+    if (user.role !== 'finance_officer') await assignFinanceRole(user, schoolCode, req.user.id, { title, permissions:f.permissions });
+    const updates={preferences};
+    for(const k of['name','phone','isActive'])if(req.body[k]!==undefined)updates[k]=req.body[k];
+    if(req.body.password){if(String(req.body.password).length<8)return res.status(400).json({success:false,message:'Password must be at least 8 characters.'});updates.password=String(req.body.password);updates.mustChangePassword=true;updates.passwordIssuedAt=new Date();}
+    await user.update(updates);
+    res.json({success:true,message:'Finance Team member updated.',data:await financePublicUser(user, schoolCode)});
+  } catch(e) { res.status(500).json({success:false,message:e.message}); }
+};
 // ============ SCHOOL-SCOPED CUSTOM SUBJECTS ============
 exports.getCustomSubjects=async(req,res)=>{try{const school=await v102GetSchool(req.user.schoolCode);if(!school)return res.status(404).json({success:false,message:'School not found'});const cfg=curriculumEngine.getCurriculumConfig(school);res.json({success:true,data:(cfg.schoolSubjects||[]).filter(x=>x.isCustom)});}catch(e){res.status(500).json({success:false,message:e.message});}};
 exports.createCustomSubject=async(req,res)=>{try{const school=await v102GetSchool(req.user.schoolCode);if(!school)return res.status(404).json({success:false,message:'School not found'});const name=String(req.body.name||'').trim(),code=String(req.body.code||name).trim().toUpperCase().replace(/[^A-Z0-9_-]+/g,'_').slice(0,40),scope=req.body.scope==='class'?'class':'school',classIds=scope==='class'&&Array.isArray(req.body.classIds)?[...new Set(req.body.classIds.map(Number).filter(Boolean))]:[],levelCodes=Array.isArray(req.body.levelCodes)?[...new Set(req.body.levelCodes.map(String).filter(Boolean))]:[];if(name.length<2)return res.status(400).json({success:false,message:'Custom subject name is required.'});if(scope==='class'&&!classIds.length)return res.status(400).json({success:false,message:'Select at least one class for a class-scoped subject.'});if(classIds.length){const count=await Class.count({where:{id:{[Op.in]:classIds},schoolCode:req.user.schoolCode,isActive:true}});if(count!==classIds.length)return res.status(400).json({success:false,message:'One or more selected classes do not belong to this school.'});}const cfg=curriculumEngine.getCurriculumConfig(school),current=Array.isArray(cfg.schoolSubjects)?cfg.schoolSubjects:[],duplicate=current.find(x=>String(x.name||'').trim().toLowerCase()===name.toLowerCase()||String(x.code||'').trim().toUpperCase()===code);if(duplicate)return res.status(409).json({success:false,code:'CUSTOM_SUBJECT_EXISTS',message:'A subject with this name or code already exists in this school.',data:duplicate});const subject={subjectId:`custom_${code.toLowerCase()}_${Date.now()}`,name,code,category:'custom',isCustom:true,isOptional:req.body.isOptional!==false,countsInFinalByDefault:req.body.countsInFinalByDefault!==false,isOffered:true,scope,classIds,levelCodes,gradingMethod:String(req.body.gradingMethod||'school_default'),savedAt:new Date().toISOString(),savedBy:req.user.id};const settings=v102BuildCurriculumSettings(school,{schoolSubjects:[...current,subject]});school.settings=settings;school.enabledLevels=settings.curriculumEngine.enabledLevels;await school.save();const sync=await v130SyncClassesForEnabledLevels(school,req.user.id);if(global.io)global.io.to(`school-${school.schoolId}`).emit('curriculum:updated',{schoolCode:school.schoolId,customSubject:subject});res.status(201).json({success:true,message:`${name} added and synced to assignments, marks, reports, analytics and timetable options.`,data:{subject,classSync:sync}});}catch(e){console.error(e);res.status(500).json({success:false,message:e.message});}};

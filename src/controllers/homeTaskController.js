@@ -1,13 +1,6 @@
-const { HomeTask, HomeTaskAssignment, Student, Competency, LearningOutcome, StudentCompetencyProgress, AcademicRecord, Parent } = require('../models');
+const { HomeTask, HomeTaskAssignment, Student, Competency, LearningOutcome, StudentCompetencyProgress, AcademicRecord, Parent, User } = require('../models');
 const { Op } = require('sequelize');
-
-async function parentOwnsStudent(parentId, studentId, userId = null) {
-  const rows = await require('../models').sequelize.query(
-    'SELECT 1 FROM "StudentParents" WHERE ("parentId" = :parentId OR "parentId" = :userId) AND "studentId" = :studentId LIMIT 1',
-    { replacements: { parentId, userId: userId || parentId, studentId }, type: require('../models').sequelize.QueryTypes.SELECT }
-  );
-  return rows.length > 0;
-}
+const ownership = require('../services/parentOwnershipService');
 
 // Get today's recommendations for a student (parent view)
 exports.getTodayTasks = async (req, res) => {
@@ -15,8 +8,15 @@ exports.getTodayTasks = async (req, res) => {
     const { studentId } = req.query;
     if (!studentId) return res.status(400).json({ success: false, message: 'Student ID required' });
 
-    const student = await Student.findByPk(studentId);
-    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    const student = await (Student.unscoped ? Student.unscoped() : Student).findOne({
+      where: { id: Number(studentId) },
+      include: [{ model: User, required: true, where: { schoolCode: req.user.schoolCode }, attributes: ['id','name','schoolCode'] }]
+    });
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found in this school' });
+
+    if (req.user.role === 'parent') {
+      await ownership.assertParentOwnsStudent({ parentUserId: req.user.id, studentId: student.id, schoolCode: req.user.schoolCode });
+    }
 
     // First return teacher-assigned pending homework if available.
     try {
@@ -143,8 +143,7 @@ exports.completeTask = async (req, res) => {
     // Some older frontend cards passed HomeTask.id instead of HomeTaskAssignment.id.
     // Resolve it safely only for this parent's linked children.
     if (!assignment) {
-      const linkedChildren = await parent.getStudents().catch(() => []);
-      const linkedIds = linkedChildren.map(s => s.id);
+      const linkedIds = await ownership.listOwnedStudentIds({ parentUserId: req.user.id, schoolCode: req.user.schoolCode });
       assignment = await HomeTaskAssignment.findOne({
         where: { taskId: id, studentId: { [Op.in]: linkedIds.length ? linkedIds : [-1] } },
         include: [{ model: HomeTask }, { model: Student, include: [{ model: require('../models').User, attributes: ['id','schoolCode','name'] }] }],
@@ -158,21 +157,7 @@ exports.completeTask = async (req, res) => {
 
     const task = assignment.HomeTask;
     const student = assignment.Student;
-    let hasChild = await parentOwnsStudent(parent.id, student.id, req.user.id).catch(async () => parent.hasStudent ? parent.hasStudent(student).catch(() => false) : false);
-    if (!hasChild && typeof parent.hasStudent === 'function') {
-      hasChild = await parent.hasStudent(student).catch(() => false);
-    }
-    // Some older imported students are linked by parent email/phone before the
-    // StudentParents join row exists. Allow those only within the same logged-in
-    // parent identity, then the UI can continue while schools clean/link records.
-    if (!hasChild) {
-      const emailMatch = req.user.email && student.parentEmail && String(student.parentEmail).toLowerCase() === String(req.user.email).toLowerCase();
-      const phone = String(req.user.phone || req.user.phoneNumber || '').replace(/\D/g, '');
-      const childPhone = String(student.parentPhone || '').replace(/\D/g, '');
-      const phoneMatch = phone && childPhone && (phone.endsWith(childPhone.slice(-9)) || childPhone.endsWith(phone.slice(-9)));
-      hasChild = !!(emailMatch || phoneMatch);
-    }
-    if (!hasChild && requestedStudentId && Number(requestedStudentId) === Number(student.id) && student.User?.schoolCode === req.user.schoolCode) { hasChild = true; }
+    const hasChild = await ownership.ownsStudentId({ parentUserId: req.user.id, parentId: parent.id, studentId: student.id, schoolCode: req.user.schoolCode });
     if (!hasChild) return res.status(403).json({ success: false, message: 'You cannot update this task because it is not assigned to your child.' });
 
     assignment.status = 'completed';

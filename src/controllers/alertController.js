@@ -3,6 +3,7 @@ const realtime = require('../services/realtimeService');
 const { generateParentAlertSuggestion } = require('../services/aiProviderService');
 const { getAlertsForUser } = require('../services/alertReceiverEngine');
 const { createAlert: createNotification } = require('../services/notificationService');
+const ownership = require('../services/parentOwnershipService');
 
 async function userCanViewStudentAlert(req, studentId) {
   if (!studentId) return true;
@@ -19,11 +20,7 @@ async function userCanViewStudentAlert(req, studentId) {
   }
 
   if (role === 'parent') {
-    const rows = await sequelize.query(
-      'SELECT 1 FROM "StudentParents" sp LEFT JOIN "Parents" p ON p."id" = sp."parentId" JOIN "Students" s ON s."id" = sp."studentId" JOIN "Users" su ON su."id" = s."userId" WHERE sp."studentId" = :sid AND (p."userId" = :uid OR (p."id" IS NULL AND sp."parentId" = :uid)) AND su."schoolCode" = :schoolCode LIMIT 1',
-      { replacements: { sid, uid: req.user.id, schoolCode: req.user.schoolCode }, type: sequelize.QueryTypes.SELECT }
-    ).catch(() => []);
-    return rows.length > 0;
+    return ownership.ownsStudentId({ parentUserId: req.user.id, studentId: sid, schoolCode: req.user.schoolCode });
   }
 
   if (role === 'teacher') {
@@ -247,11 +244,7 @@ async function recipientCanReceiveStudentAlert(req, recipient, studentId, classI
     return rows.length > 0;
   }
   if (role === 'parent') {
-    const rows = await sequelize.query(
-      'SELECT 1 FROM "StudentParents" sp JOIN "Parents" p ON p."id"=sp."parentId" JOIN "Students" s ON s."id"=sp."studentId" JOIN "Users" su ON su."id"=s."userId" WHERE sp."studentId"=:sid AND (p."userId"=:uid OR (p."id" IS NULL AND sp."parentId"=:uid)) AND su."schoolCode"=:schoolCode LIMIT 1',
-      { replacements:{ sid, uid:recipient.id, schoolCode:req.user.schoolCode }, type: sequelize.QueryTypes.SELECT }
-    ).catch(()=>[]);
-    return rows.length > 0;
+    return ownership.ownsStudentId({ parentUserId: recipient.id, studentId: sid, schoolCode: req.user.schoolCode });
   }
   if (role === 'teacher') {
     const rows = await sequelize.query(

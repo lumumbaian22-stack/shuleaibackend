@@ -7,6 +7,7 @@ const cookieParser = require('cookie-parser');
 const fileUpload = require('express-fileupload');
 const path = require('path');
 const fs = require('fs');
+const { assertRequiredEnv } = require('./config/requiredEnv');
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
@@ -63,12 +64,13 @@ const { requireFeature } = require('./middleware/featureGate');
 const { protect } = require('./middleware/auth');
 const { applyLoadBalancingMiddleware, loadBalancingConfig } = require('./config/loadBalancing');
 
+assertRequiredEnv();
+
 const app = express();
 applyLoadBalancingMiddleware(app);
 
 // ============ MIDDLEWARE ============
 app.use((req, res, next) => { req._startAt = Date.now(); next(); });
-app.use(requestContext);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 // CORS must run before all /api routes and before rate limits.
@@ -110,18 +112,35 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'Stripe-Signature', 'X-Paystack-Signature', 'verif-hash', 'flutterwave-signature'],
   optionsSuccessStatus: 204
 };
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+app.use(requestContext);
 
 // Route-aware limits: strict for auth/uploads/writes, generous for dashboard reads.
 app.use('/api', routeAwareApiLimiter);
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+function isPaymentWebhookPath(req) {
+  const url = String(req.originalUrl || req.url || '');
+  return /\/api\/payments\/(webhook|mpesa\/callback|daraja\/callback|callback)/i.test(url);
+}
+
+app.use(express.json({
+  limit: '50mb',
+  verify: (req, res, buf) => {
+    if (isPaymentWebhookPath(req)) req.rawBody = Buffer.from(buf);
+  }
+}));
+app.use(express.urlencoded({
+  extended: true,
+  limit: '50mb',
+  verify: (req, res, buf) => {
+    if (isPaymentWebhookPath(req)) req.rawBody = Buffer.from(buf);
+  }
+}));
 app.use(cookieParser());
 app.use(compression());
 
@@ -274,59 +293,65 @@ app.use('/api', async (req, res, next) => {
 });
 
 
-async function ensureCriticalDashboardColumns(req, res, next) {
-  if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true' && process.env.NODE_ENV === 'production') return next();
-  try {
-    const { sequelize } = require('./models');
-    await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
-    await sequelize.query('ALTER TABLE IF EXISTS "Teachers" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
-    await sequelize.query('ALTER TABLE IF EXISTS "AcademicRecords" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
-    await sequelize.query('ALTER TABLE IF EXISTS "Attendances" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
-    await sequelize.query('ALTER TABLE IF EXISTS "Fees" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
-    await sequelize.query('ALTER TABLE IF EXISTS "ReportSnapshots" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "FeeStructures" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "TutorSessions" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "TutorMessages" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "pilotFullAccessEnabled" BOOLEAN DEFAULT FALSE').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "pilotStartedAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "pilotEndsAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "pilotEnabledBy" INTEGER').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "trialAccessEnabled" BOOLEAN DEFAULT FALSE').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "trialStartedAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "trialEndsAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "manualPaymentConfirmed" BOOLEAN DEFAULT FALSE').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "manualPaymentAmount" INTEGER').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "manualPaymentReference" VARCHAR(255)').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "manualPaymentConfirmedBy" INTEGER').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "manualPaymentConfirmedAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
-    await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "subscriptionPlan" VARCHAR(255) DEFAULT 'free'`).catch(() => null);
-    await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "subscriptionStatus" VARCHAR(255) DEFAULT 'inactive'`).catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "subscriptionStartedAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "subscriptionEndsAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
-    await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "accessMode" VARCHAR(255) DEFAULT 'default'`).catch(() => null);
-    await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "accessStatus" VARCHAR(255) DEFAULT 'limited'`).catch(() => null);
-    await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "schoolStructure" VARCHAR(255) DEFAULT 'mixed'`).catch(() => null);
-    await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "enabledLevels" JSONB DEFAULT '[]'::jsonb`).catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "curriculum" VARCHAR(255)').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "levelCode" VARCHAR(255)').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "levelLabel" VARCHAR(255)').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "curriculumLevel" VARCHAR(255)').catch(() => null);
-    await sequelize.query(`CREATE TABLE IF NOT EXISTS "SchoolPaymentRequests" ("id" SERIAL PRIMARY KEY, "schoolCode" VARCHAR(255) NOT NULL, "submittedBy" INTEGER, "amount" INTEGER DEFAULT 0, "currency" VARCHAR(255) DEFAULT 'KES', "method" VARCHAR(255) DEFAULT 'mpesa', "reference" VARCHAR(255), "paidAt" TIMESTAMP WITH TIME ZONE, "notes" TEXT, "proofUrl" TEXT, "requestedPlan" VARCHAR(255) DEFAULT 'growth', "status" VARCHAR(255) DEFAULT 'pending', "reviewedBy" INTEGER, "reviewedAt" TIMESTAMP WITH TIME ZONE, "reviewNotes" TEXT, "metadata" JSONB DEFAULT '{}'::jsonb, "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW())`).catch(() => null);
-    await sequelize.query(`CREATE TABLE IF NOT EXISTS "StudentSubjectSelections" ("id" SERIAL PRIMARY KEY, "schoolCode" VARCHAR(255) NOT NULL, "studentId" INTEGER NOT NULL, "classId" INTEGER, "subjectId" VARCHAR(255), "subjectName" VARCHAR(255) NOT NULL, "status" VARCHAR(255) DEFAULT 'taking', "pathway" VARCHAR(255), "track" VARCHAR(255), "isCompulsory" BOOLEAN DEFAULT FALSE, "isElective" BOOLEAN DEFAULT TRUE, "requestedBy" INTEGER, "approvedBy" INTEGER, "approvedAt" TIMESTAMP WITH TIME ZONE, "metadata" JSONB DEFAULT '{}'::jsonb, "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW())`).catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
-    await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "createdByUserId" INTEGER').catch(() => null);
-    await sequelize.query(`ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "metadata" JSONB DEFAULT '{}'::jsonb`).catch(() => null);
-    await sequelize.query('CREATE INDEX IF NOT EXISTS "idx_school_calendars_owner" ON "SchoolCalendars" ("schoolId", "createdByUserId")').catch(() => null);
-    await sequelize.query(`CREATE TABLE IF NOT EXISTS "PlatformAuditEvents" ("id" SERIAL PRIMARY KEY, "schoolCode" VARCHAR(255), "actorUserId" INTEGER, "actorRole" VARCHAR(255), "module" VARCHAR(255), "action" VARCHAR(255), "entityType" VARCHAR(255), "entityId" VARCHAR(255), "before" JSONB DEFAULT '{}'::jsonb, "after" JSONB DEFAULT '{}'::jsonb, "metadata" JSONB DEFAULT '{}'::jsonb, "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(), "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW())`).catch(() => null);
-    await sequelize.query(`ALTER TABLE IF EXISTS "TutorMessages" ADD COLUMN IF NOT EXISTS "content" TEXT NOT NULL DEFAULT ''`).catch(() => null);
-    await sequelize.query(`UPDATE "TutorMessages" SET "content" = COALESCE(NULLIF("content", ''), "message", 'Tutor message') WHERE "content" IS NULL OR "content" = ''`).catch(() => null);
-    await sequelize.query("UPDATE \"TutorSessions\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
-    await sequelize.query("UPDATE \"TutorMessages\" SET \"schoolCode\" = COALESCE(\"schoolCode\", \"schoolId\", 'default') WHERE \"schoolCode\" IS NULL").catch(() => null);
-  } catch (err) {
-    console.error('[critical-schema] repair failed:', err.message);
-  }
-  next();
+let __criticalDashboardColumnsPromise = null;
+async function runCriticalDashboardColumnsRepairOnce() {
+  const { sequelize } = require('./models');
+  await sequelize.query('ALTER TABLE IF EXISTS "Students" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+  await sequelize.query('ALTER TABLE IF EXISTS "Teachers" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+  await sequelize.query('ALTER TABLE IF EXISTS "AcademicRecords" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+  await sequelize.query('ALTER TABLE IF EXISTS "Attendances" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+  await sequelize.query('ALTER TABLE IF EXISTS "Fees" ADD COLUMN IF NOT EXISTS "classId" INTEGER');
+  await sequelize.query('ALTER TABLE IF EXISTS "ReportSnapshots" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "FeeStructures" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "TutorSessions" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "TutorMessages" ADD COLUMN IF NOT EXISTS "schoolCode" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "pilotFullAccessEnabled" BOOLEAN DEFAULT FALSE').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "pilotStartedAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "pilotEndsAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "pilotEnabledBy" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "trialAccessEnabled" BOOLEAN DEFAULT FALSE').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "trialStartedAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "trialEndsAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "manualPaymentConfirmed" BOOLEAN DEFAULT FALSE').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "manualPaymentAmount" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "manualPaymentReference" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "manualPaymentConfirmedBy" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "manualPaymentConfirmedAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
+  await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "subscriptionPlan" VARCHAR(255) DEFAULT 'free'`).catch(() => null);
+  await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "subscriptionStatus" VARCHAR(255) DEFAULT 'inactive'`).catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "subscriptionStartedAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "subscriptionEndsAt" TIMESTAMP WITH TIME ZONE').catch(() => null);
+  await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "accessMode" VARCHAR(255) DEFAULT 'default'`).catch(() => null);
+  await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "accessStatus" VARCHAR(255) DEFAULT 'limited'`).catch(() => null);
+  await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "schoolStructure" VARCHAR(255) DEFAULT 'mixed'`).catch(() => null);
+  await sequelize.query(`ALTER TABLE IF EXISTS "Schools" ADD COLUMN IF NOT EXISTS "enabledLevels" JSONB DEFAULT '[]'::jsonb`).catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "curriculum" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "levelCode" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "levelLabel" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "Classes" ADD COLUMN IF NOT EXISTS "curriculumLevel" VARCHAR(255)').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "classId" INTEGER').catch(() => null);
+  await sequelize.query('ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "createdByUserId" INTEGER').catch(() => null);
+  await sequelize.query(`ALTER TABLE IF EXISTS "SchoolCalendars" ADD COLUMN IF NOT EXISTS "metadata" JSONB DEFAULT '{}'::jsonb`).catch(() => null);
+  await sequelize.query(`ALTER TABLE IF EXISTS "TutorMessages" ADD COLUMN IF NOT EXISTS "content" TEXT NOT NULL DEFAULT ''`).catch(() => null);
 }
+
+async function ensureCriticalDashboardColumns(req, res, next) {
+  try {
+    if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') return next();
+    if (!__criticalDashboardColumnsPromise) {
+      __criticalDashboardColumnsPromise = runCriticalDashboardColumnsRepairOnce().catch((err) => {
+        __criticalDashboardColumnsPromise = null;
+        throw err;
+      });
+    }
+    await __criticalDashboardColumnsPromise;
+    next();
+  } catch (e) {
+    console.warn('[critical-dashboard-schema] skipped/failed:', e.message);
+    next();
+  }
+}
+
 app.use('/api', ensureCriticalDashboardColumns);
 
 app.post('/api/system/repair-schema', (req, res, next) => {

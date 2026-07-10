@@ -7,6 +7,7 @@ const SchoolDPA = require('./SchoolDPA')(sequelize, DataTypes);
 
 // Import all models
 const User = require('./User')(sequelize, DataTypes);
+const UserRoleAssignment = require('./UserRoleAssignment')(sequelize, DataTypes);
 const School = require('./School')(sequelize, DataTypes);
 const Student = require('./Student')(sequelize, DataTypes);
 const Teacher = require('./Teacher')(sequelize, DataTypes);
@@ -177,6 +178,9 @@ User.belongsTo(School, {
     foreignKey: 'schoolCode',
     targetKey: 'schoolId'
 });
+
+User.hasMany(UserRoleAssignment, { foreignKey: 'userId' });
+UserRoleAssignment.belongsTo(User, { foreignKey: 'userId' });
 
 // Student-Parent many-to-many
 const StudentParent = sequelize.define('StudentParent', {
@@ -544,11 +548,12 @@ function installTenantHooks(models) {
     });
   });
 }
-installTenantHooks({ User, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ClassTransferRequest, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, Class, Settings, Task, HomeTask, Subscription, SubscriptionPayment, SchoolPaymentSetting, PaymentEvent, AuditLog, MediaAsset, FinanceExpense, FeeInvoice, FeeInvoiceItem, StudentFeeAccount, PaymentTransaction, PaymentReconciliation, ProviderCredentialsAudit, PaymentRefund, PlatformSubscription });
+installTenantHooks({ User, UserRoleAssignment, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ClassTransferRequest, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, SchoolNameRequest, Class, Settings, Task, HomeTask, HomeTaskAssignment, Subscription, SubscriptionPayment, SchoolPaymentSetting, PaymentEvent, AuditLog, MediaAsset, FinanceExpense, FeeInvoice, FeeInvoiceItem, StudentFeeAccount, PaymentTransaction, PaymentReconciliation, ProviderCredentialsAudit, PaymentRefund, PlatformSubscription, Department, ChatGroup, ChatMessage, ClassroomThread, AchievementEvent, ReportSnapshot, TutorSession, TutorMessage, TutorProgress, TutorUsage });
 
 module.exports = {
     sequelize,
     User,
+    UserRoleAssignment,
     School,
     Student,
     Teacher,

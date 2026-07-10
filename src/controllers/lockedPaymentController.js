@@ -63,7 +63,7 @@ exports.initiatePayment = async (req, res) => {
 exports.webhook = async (req, res) => {
   try {
     const payload = { ...(req.query || {}), ...(req.body || {}) };
-    const result = await engine.handleWebhook({ provider: req.params.provider, payload, headers: req.headers });
+    const result = await engine.handleWebhook({ provider: req.params.provider, payload, headers: req.headers, rawBody: req.rawBody, sourceIp: req.ip });
     res.json({ success: true, accepted: true, data: result });
   } catch (error) {
     console.error('Locked payment webhook error:', error);

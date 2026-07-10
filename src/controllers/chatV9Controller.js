@@ -18,6 +18,15 @@ async function getTeacherProfile(userId) {
   return Teacher.findOne({ where: { userId } });
 }
 
+async function findTeacherInCurrentSchool(req, teacherId) {
+  const id = Number(teacherId);
+  if (!id) return null;
+  return Teacher.findOne({
+    where: { id },
+    include: [{ model: User, required: true, where: { schoolCode: schoolCodeOf(req), role: 'teacher', isActive: true }, attributes: ['id','name','email','role','schoolCode'] }]
+  }).catch(() => null);
+}
+
 async function getStudentProfile(userId) {
   return Student.unscoped ? Student.unscoped().findOne({ where: { userId } }) : Student.findOne({ where: { userId } });
 }
@@ -383,7 +392,15 @@ exports.createDepartment = async (req, res) => {
     const { name, description, teacherIds = [] } = req.body;
     if (!name) return res.status(400).json({ success: false, message: 'Department name is required' });
 
-    const department = await Department.create({ schoolCode: schoolCodeOf(req), name, description, headTeacherId: teacherIds[0] || null });
+    const requestedTeacherIds = Array.isArray(teacherIds) ? [...new Set(teacherIds.map(Number).filter(Boolean))] : [];
+    const validTeachers = [];
+    for (const teacherId of requestedTeacherIds) {
+      const teacher = await findTeacherInCurrentSchool(req, teacherId);
+      if (teacher) validTeachers.push(teacher);
+    }
+    const headTeacherId = validTeachers[0]?.id || null;
+
+    const department = await Department.create({ schoolCode: schoolCodeOf(req), name, description, headTeacherId });
     const group = await ChatGroup.create({
       schoolCode: schoolCodeOf(req),
       name: `${name} Department`,
@@ -393,11 +410,10 @@ exports.createDepartment = async (req, res) => {
       departmentId: department.id
     });
 
-    for (const teacherId of teacherIds) {
-      const teacher = await Teacher.findByPk(teacherId);
-      if (!teacher) continue;
-      await DepartmentMember.findOrCreate({ where: { departmentId: department.id, teacherId }, defaults: { role: teacherId === teacherIds[0] ? 'head' : 'member' } });
-      await ChatGroupMember.findOrCreate({ where: { groupId: group.id, userId: teacher.userId }, defaults: { role: teacherId === teacherIds[0] ? 'admin' : 'member' } });
+    for (const teacher of validTeachers) {
+      const isHead = Number(teacher.id) === Number(headTeacherId);
+      await DepartmentMember.findOrCreate({ where: { departmentId: department.id, teacherId: teacher.id }, defaults: { role: isHead ? 'head' : 'member' } });
+      await ChatGroupMember.findOrCreate({ where: { groupId: group.id, userId: teacher.userId }, defaults: { role: isHead ? 'admin' : 'member' } });
     }
 
     res.status(201).json({ success: true, data: { department, group } });
@@ -926,6 +942,8 @@ exports.awardThreadReply = async (req, res) => {
     if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only teachers/admins can award points' });
     const reply = await ThreadReply.findByPk(req.params.replyId);
     if (!reply) return res.status(404).json({ success: false, message: 'Reply not found' });
+    const thread = await ClassroomThread.findOne({ where: { id: reply.threadId, schoolCode: schoolCodeOf(req) } });
+    if (!thread) return res.status(404).json({ success: false, message: 'Reply not found in this school' });
     const { points = 0, streakDelta = 0, note } = req.body;
 
     reply.pointsAwarded = (reply.pointsAwarded || 0) + Number(points || 0);
@@ -936,15 +954,15 @@ exports.awardThreadReply = async (req, res) => {
     res.json({ success: true, data: { reply, achievement: event } });
   } catch (error) {
     console.error('awardThreadReply error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.awardChatMessage = async (req, res) => {
   try {
     if (!['teacher','admin','super_admin'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only teachers/admins can award points' });
-    const message = await ChatMessage.findByPk(req.params.messageId);
-    if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
+    const message = await ChatMessage.findOne({ where: { id: Number(req.params.messageId), schoolCode: schoolCodeOf(req) } });
+    if (!message) return res.status(404).json({ success: false, message: 'Message not found in this school' });
     const { points = 0, streakDelta = 0, note } = req.body;
 
     message.pointsAwarded = (message.pointsAwarded || 0) + Number(points || 0);
@@ -1164,12 +1182,24 @@ exports.updateDepartment = async (req, res) => {
 
     if (name) department.name = name;
     if (description !== undefined) department.description = description;
-    department.headTeacherId = headTeacherId || null;
+
+    let validTeachers = [];
+    if (Array.isArray(teacherIds)) {
+      const requestedTeacherIds = [...new Set(teacherIds.map(Number).filter(Boolean))];
+      for (const teacherId of requestedTeacherIds) {
+        const teacher = await findTeacherInCurrentSchool(req, teacherId);
+        if (teacher) validTeachers.push(teacher);
+      }
+      const validIds = new Set(validTeachers.map(t => Number(t.id)));
+      department.headTeacherId = validIds.has(Number(headTeacherId)) ? Number(headTeacherId) : (validTeachers[0]?.id || null);
+    } else {
+      department.headTeacherId = null;
+    }
     await department.save();
 
     if (Array.isArray(teacherIds)) {
       await DepartmentMember.destroy({ where: { departmentId } });
-      const group = await ChatGroup.findOne({ where: { departmentId: department.id, type: 'department' } });
+      const group = await ChatGroup.findOne({ where: { departmentId: department.id, schoolCode: schoolCodeOf(req), type: 'department' } });
 
       if (group) {
         group.name = `${department.name} Department`;
@@ -1178,11 +1208,9 @@ exports.updateDepartment = async (req, res) => {
         await ChatGroupMember.destroy({ where: { groupId: group.id } });
       }
 
-      for (const teacherId of teacherIds) {
-        const teacher = await Teacher.findByPk(teacherId);
-        if (!teacher) continue;
-        const isHead = Number(teacherId) === Number(headTeacherId);
-        await DepartmentMember.create({ departmentId, teacherId, role: isHead ? 'head' : 'member' });
+      for (const teacher of validTeachers) {
+        const isHead = Number(teacher.id) === Number(department.headTeacherId);
+        await DepartmentMember.create({ departmentId, teacherId: teacher.id, role: isHead ? 'head' : 'member' });
         if (group) await ChatGroupMember.create({ groupId: group.id, userId: teacher.userId, role: isHead ? 'admin' : 'member' });
       }
     }

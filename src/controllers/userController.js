@@ -5,6 +5,7 @@ const { createAlert } = require('../services/notificationService');
 const { saveUploadAsset } = require('../services/mediaAssetService');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 const { getAlertsForUser } = require('../services/alertReceiverEngine');
+const { sanitizePreferencePayload, removePrivilegeBearingPreferenceKeys } = require('../services/roleAccessService');
 
 // @desc    Get user statistics for profile
 exports.getUserStats = async (req, res) => {
@@ -112,7 +113,9 @@ exports.getPreferences = async (req, res) => {
 // @desc    Update user preferences
 exports.updatePreferences = async (req, res) => {
   try {
-    req.user.preferences = { ...req.user.preferences, ...req.body.preferences };
+    const incoming = sanitizePreferencePayload(req.body.preferences || {});
+    const existing = removePrivilegeBearingPreferenceKeys(req.user.preferences || {});
+    req.user.preferences = { ...existing, ...incoming };
     await req.user.save();
     res.json({ success: true, data: req.user.preferences });
   } catch (error) {

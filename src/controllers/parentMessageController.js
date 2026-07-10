@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const { createAlert } = require('../services/notificationService');
 const ownership = require('../services/parentOwnershipService');
 const realtime = require('../services/realtimeService');
+const { getCursorPagination, buildCursorResponse } = require('../utils/pagination');
 
 function meta(message) {
   const raw = message?.toJSON ? message.toJSON() : (message || {});
@@ -232,10 +233,14 @@ exports.getConversations = async (req, res) => {
 exports.getMessages = async (req, res) => {
   try {
     const { otherUserId } = req.params;
+    const { limit, before } = getCursorPagination(req.query, { defaultLimit: 50, maxLimit: 100 });
+    const where = { [Op.or]: [{ senderId: req.user.id, receiverId: otherUserId }, { senderId: otherUserId, receiverId: req.user.id }] };
+    if (before) where.createdAt = { [Op.lt]: new Date(before) };
     const messages = await Message.findAll({
-      where: { [Op.or]: [{ senderId: req.user.id, receiverId: otherUserId }, { senderId: otherUserId, receiverId: req.user.id }] },
+      where,
       include: [{ model: User, as: 'Sender', attributes:['id','name','role','profileImage','profilePicture'] }, { model: User, as: 'Receiver', attributes:['id','name','role','profileImage','profilePicture'] }],
-      order: [['createdAt', 'ASC']]
+      limit,
+      order: [['createdAt', 'DESC']]
     });
     const requestedStudentId = req.query.studentId || req.query.childId || null;
     const requestedType = String(req.query.recipientType || req.query.type || '').toLowerCase();
@@ -246,9 +251,9 @@ exports.getMessages = async (req, res) => {
       if (wantedConversation && md.conversationType !== wantedConversation) return false;
       if (requestedStudentId && String(md.studentId || '') !== String(requestedStudentId)) return false;
       return true;
-    });
+    }).reverse();
     await Message.update({ isRead: true, readAt: new Date() }, { where: { senderId: otherUserId, receiverId: req.user.id, isRead: false } });
-    res.json({ success: true, data: scoped });
+    res.json({ success: true, ...buildCursorResponse({ rows: scoped, limit, cursorPosition: 'first' }) });
   } catch (error) {
     console.error('Get parent messages error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -297,14 +302,18 @@ exports.getAdminConversations = async (req, res) => {
 exports.getAdminMessages = async (req, res) => {
   try {
     const { parentId } = req.params;
+    const { limit, before } = getCursorPagination(req.query, { defaultLimit: 50, maxLimit: 100 });
+    const where = { [Op.or]: [{ senderId: req.user.id, receiverId: parentId }, { senderId: parentId, receiverId: req.user.id }] };
+    if (before) where.createdAt = { [Op.lt]: new Date(before) };
     const messages = await Message.findAll({
-      where: { [Op.or]: [{ senderId: req.user.id, receiverId: parentId }, { senderId: parentId, receiverId: req.user.id }] },
+      where,
       include: [{ model: User, as: 'Sender', attributes:['id','name','role','profileImage','profilePicture'] }, { model: User, as: 'Receiver', attributes:['id','name','role','profileImage','profilePicture'] }],
-      order: [['createdAt', 'ASC']]
+      limit,
+      order: [['createdAt', 'DESC']]
     });
-    const scoped = messages.filter(m => schoolMatches(m, req.user.schoolCode) && meta(m).conversationType === 'parent_admin' && Number(meta(m).adminUserId || req.user.id) === Number(req.user.id));
+    const scoped = messages.filter(m => schoolMatches(m, req.user.schoolCode) && meta(m).conversationType === 'parent_admin' && Number(meta(m).adminUserId || req.user.id) === Number(req.user.id)).reverse();
     await Message.update({ isRead: true, readAt: new Date() }, { where: { senderId: parentId, receiverId: req.user.id, isRead: false } });
-    res.json({ success: true, data: scoped });
+    res.json({ success: true, ...buildCursorResponse({ rows: scoped, limit, cursorPosition: 'first' }) });
   } catch (error) {
     console.error('Get admin parent messages error:', error);
     res.status(500).json({ success: false, message: error.message });

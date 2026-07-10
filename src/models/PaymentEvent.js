@@ -10,6 +10,8 @@ module.exports = (sequelize, DataTypes) => {
     providerReference: { type: DataTypes.STRING, allowNull: true },
     idempotencyKey: { type: DataTypes.STRING, allowNull: true },
     verified: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    verificationMethod: { type: DataTypes.STRING, allowNull: true },
+    sourceIp: { type: DataTypes.STRING, allowNull: true },
     processed: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     processingError: { type: DataTypes.TEXT, allowNull: true },
     rawPayload: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
@@ -21,7 +23,7 @@ module.exports = (sequelize, DataTypes) => {
       { fields: ['schoolCode'] },
       { fields: ['provider'] },
       { fields: ['internalReference'] },
-      { fields: ['provider', 'providerEventId'] }
+      { fields: ['provider', 'providerEventId'], unique: true, name: 'payment_events_provider_event_unique' }
     ]
   });
   return PaymentEvent;

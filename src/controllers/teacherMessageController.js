@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const { Message, User, Teacher, Student, Parent, Class, TeacherSubjectAssignment, sequelize } = require('../models');
 const {createAlert}=require('../services/notificationService');
 const realtime=require('../services/realtimeService');
+const { getCursorPagination, buildCursorResponse } = require('../utils/pagination');
 
 function messageMeta(message) { return (message?.toJSON ? message.toJSON() : (message || {})).metadata || {}; }
 function isTeacherParentConversation(message, user) {
@@ -41,7 +42,7 @@ async function resolveClassTeacherParentContext(req, parentUserId) {
        FROM "Students" s
        JOIN "Users" su ON su."id" = s."userId"
        JOIN "StudentParents" sp ON sp."studentId" = s."id"
-       LEFT JOIN "Parents" p ON (p."id" = sp."parentId" OR p."userId" = sp."parentId")
+       JOIN "Parents" p ON p."id" = sp."parentId"
        JOIN "Users" pu ON pu."id" = p."userId"
        LEFT JOIN "Classes" c ON c."id" = s."classId"
       WHERE su."schoolCode" = :schoolCode
@@ -129,22 +130,26 @@ exports.getConversations = async (req, res) => {
 exports.getMessages = async (req, res) => {
     try {
         const { parentId } = req.params;
+        const { limit, before } = getCursorPagination(req.query, { defaultLimit: 50, maxLimit: 100 });
+        const where = {
+            [Op.or]: [
+                { senderId: req.user.id, receiverId: parentId },
+                { senderId: parentId, receiverId: req.user.id }
+            ]
+        };
+        if (before) where.createdAt = { [Op.lt]: new Date(before) };
 
-        const messages = await Message.findAll({
-            where: {
-                [Op.or]: [
-                    { senderId: req.user.id, receiverId: parentId },
-                    { senderId: parentId, receiverId: req.user.id }
-                ]
-            },
+        const rawMessages = await Message.findAll({
+            where,
             include: [
                 { model: User, as: 'Sender', attributes:['id','name','role','profileImage','profilePicture'] },
                 { model: User, as: 'Receiver', attributes:['id','name','role','profileImage','profilePicture'] }
             ],
-            order: [['createdAt', 'ASC']]
+            limit,
+            order: [['createdAt', 'DESC']]
         });
 
-        const scoped = messages.filter(message => isTeacherParentConversation(message, req.user));
+        const scoped = rawMessages.filter(message => isTeacherParentConversation(message, req.user)).reverse();
 
         await Message.update(
             { isRead: true, readAt: new Date() },
@@ -157,7 +162,7 @@ exports.getMessages = async (req, res) => {
             }
         );
 
-        res.json({ success: true, data: scoped });
+        res.json({ success: true, ...buildCursorResponse({ rows: scoped, limit, cursorPosition: 'first' }) });
     } catch (error) {
         console.error('Get messages error:', error);
         res.status(500).json({ success: false, message: error.message });

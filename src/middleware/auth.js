@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const { User, School, Teacher, Student, Parent, Admin } = require('../models');
 const { computeSchoolAccess } = require('../services/schoolAccessEngine');
 const { setTenantUser } = require('./requestContext');
+const { normalizeRole, safeAdditionalRoles, canUseEffectiveRole, loadSafeAdditionalRoles } = require('../services/roleAccessService');
 
 
 async function findSchoolByAnyCode(code) {
@@ -66,7 +67,7 @@ const protect = async (req, res, next) => {
         await User.update({ schoolCode: resolvedSchoolCode }, { where: { id: user.id } }).catch(() => null);
       }
     }
-    const primaryRole=user.role;const additionalRoles=Array.isArray(user.preferences?.additionalRoles)?user.preferences.additionalRoles:[];const requestedEffectiveRole=decoded.effectiveRole||decoded.role||primaryRole;const effectiveRole=requestedEffectiveRole===primaryRole||additionalRoles.includes(requestedEffectiveRole)?requestedEffectiveRole:primaryRole;user.setDataValue('primaryRole',primaryRole);user.setDataValue('role',effectiveRole);req.user=user;req.primaryRole=primaryRole;req.effectiveRole=effectiveRole;setTenantUser(user);
+    const primaryRole=normalizeRole(user.role);await loadSafeAdditionalRoles(user);const financeMeta=user.getDataValue?.('financeAssignment')||user.financeAssignment||null;if(financeMeta){user.financeTitle=financeMeta.title||user.financeTitle;user.financePermissions=Array.isArray(financeMeta.permissions)?financeMeta.permissions:user.financePermissions;}const requestedEffectiveRole=normalizeRole(decoded.effectiveRole||decoded.role||primaryRole);const effectiveRole=canUseEffectiveRole(user,requestedEffectiveRole)?requestedEffectiveRole:primaryRole;user.setDataValue('primaryRole',primaryRole);user.setDataValue('role',effectiveRole);req.user=user;req.primaryRole=primaryRole;req.effectiveRole=effectiveRole;setTenantUser(user);
     if (user.role !== 'super_admin' && !user.schoolCode) {
       return res.status(403).json({ success: false, code: 'SCHOOL_SCOPE_REQUIRED', message: 'User is not attached to a school tenant' });
     }
@@ -117,11 +118,10 @@ const protect = async (req, res, next) => {
   }
 };
 
-const normalizeRole = (value) => String(value || '').toLowerCase().replace(/-/g, '_');
 const authorize = (...roles) => (req, res, next) => {
   const allowed = roles.map(normalizeRole);
   const candidates = [req.user?.role, req.effectiveRole, req.primaryRole, req.user?.primaryRole].map(normalizeRole).filter(Boolean);
-  const extra = Array.isArray(req.user?.preferences?.additionalRoles) ? req.user.preferences.additionalRoles.map(normalizeRole) : [];
+  const extra = safeAdditionalRoles(req.user).map(normalizeRole);
   if (!candidates.concat(extra).some(role => allowed.includes(role))) {
     return res.status(403).json({ success: false, message: 'Forbidden' });
   }

@@ -1,5 +1,6 @@
 const { Class, Teacher, User, School } = require('../models');
 const { Op } = require('sequelize');
+const cache = require('../services/cacheService');
 
 // @desc    Get all classes in school
 // @route   GET /api/admin/classes
@@ -7,19 +8,24 @@ const { Op } = require('sequelize');
 // src/controllers/classController.js
 exports.getClasses = async (req, res) => {
   try {
+    const cacheKey = cache.getCacheKey(['school', req.user.schoolCode, 'classes-active']);
+    const cached = cache.get(cacheKey);
+    if (cached) return res.json({ success: true, cached: true, data: cached });
+
     const classes = await Class.findAll({
-      where: { 
+      where: {
         schoolCode: req.user.schoolCode,
         isActive: true
       },
+      attributes: ['id','name','grade','stream','schoolCode','teacherId','academicYear','isActive','settings','subjectTeachers','createdAt','updatedAt'],
       include: [{
         model: Teacher,
+        attributes: ['id','userId','employeeId','department','classId'],
         include: [{ model: User, attributes: ['id', 'name', 'email'] }]
       }],
       order: [['grade', 'ASC'], ['name', 'ASC']]
     });
-    
-    // Map to include subjectTeachers
+
     const classesWithData = classes.map(cls => ({
       id: cls.id,
       name: cls.name,
@@ -32,11 +38,12 @@ exports.getClasses = async (req, res) => {
       settings: cls.settings,
       createdAt: cls.createdAt,
       updatedAt: cls.updatedAt,
-      subjectTeachers: cls.subjectTeachers || [],  // ← ADD THIS LINE
+      subjectTeachers: cls.subjectTeachers || [],
       Teacher: cls.Teacher
     }));
-    
-    res.json({ success: true, data: classesWithData });
+
+    cache.set(cacheKey, classesWithData, 300);
+    res.json({ success: true, cached: false, data: classesWithData });
   } catch (error) {
     console.error('Get classes error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -72,6 +79,7 @@ exports.createClass = async (req, res) => {
       schoolCode: req.user.schoolCode,
       isActive: true
     });
+    cache.flushSchoolCache(req.user.schoolCode);
     
     res.status(201).json({ 
       success: true, 
@@ -104,6 +112,7 @@ exports.updateClass = async (req, res) => {
     }
     
     await classItem.update({ name, grade, stream });
+    cache.flushSchoolCache(req.user.schoolCode);
     
     res.json({ 
       success: true, 
@@ -136,6 +145,7 @@ exports.deleteClass = async (req, res) => {
     
     // Soft delete
     await classItem.update({ isActive: false });
+    cache.flushSchoolCache(req.user.schoolCode);
     
     res.json({ 
       success: true, 
@@ -208,6 +218,7 @@ exports.assignTeacherToClass = async (req, res) => {
     
     // Also update the teacher's classTeacher field
     await teacher.update({ classTeacher: classItem.name });
+    cache.flushSchoolCache(req.user.schoolCode);
     
     res.json({ 
       success: true, 
@@ -239,6 +250,7 @@ exports.removeTeacherFromClass = async (req, res) => {
     }
     
     await classItem.update({ teacherId: null });
+    cache.flushSchoolCache(req.user.schoolCode);
     
     res.json({ 
       success: true, 

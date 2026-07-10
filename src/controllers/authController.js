@@ -5,9 +5,10 @@ const jwt = require('jsonwebtoken');
 const sequelize = require('../config/database');
 const { computeSchoolAccess } = require('../services/schoolAccessEngine');
 const { getSchoolFeatures } = require('../services/schoolFeatureService');
+const { normalizeRole, canUseEffectiveRoleAsync } = require('../services/roleAccessService');
 const curriculumEngine = require('../services/curriculumStructureEngine');
 const classGeneration = require('../services/classGenerationService');
-function additionalRoles(user){return Array.isArray(user?.preferences?.additionalRoles)?user.preferences.additionalRoles.map(String):[];}function canLoginAs(user,requestedRole){const requested=String(requestedRole||user?.role||'').toLowerCase().replace('-','_');return requested===user?.role||additionalRoles(user).includes(requested);}function publicProfileForRole(user,effectiveRole){const payload=user.getPublicProfile(effectiveRole);payload.primaryRole=user.getDataValue?.('primaryRole')||user.primaryRole||user.role;payload.role=effectiveRole;payload.financeTitle=user.preferences?.finance?.title||null;payload.financePermissions=user.preferences?.finance?.permissions||[];return payload;}
+async function canLoginAs(user, requestedRole) { return canUseEffectiveRoleAsync(user, requestedRole); }function publicProfileForRole(user,effectiveRole){const payload=user.getPublicProfile(effectiveRole);payload.primaryRole=user.getDataValue?.('primaryRole')||user.primaryRole||user.role;payload.role=normalizeRole(effectiveRole || user.role);const financeMeta=user.getDataValue?.('financeAssignment')||user.financeAssignment||user.preferences?.finance||{};payload.financeTitle=financeMeta.title||null;payload.financePermissions=Array.isArray(financeMeta.permissions)?financeMeta.permissions:[];return payload;}
 
 function smallSessionMedia(value) {
   const raw = String(value || '').trim();
@@ -525,7 +526,7 @@ const authController = {
     try {
       const { email, password, role } = req.body;
 
-      const requestedRole=String(role||'').toLowerCase().replace('-','_');const user=await User.findOne({where:{[Op.or]:[{email:email},{phone:email}]}});if(!user||!canLoginAs(user,requestedRole)||!(await user.comparePassword(password)))return res.status(401).json({success:false,message:'Invalid credentials'});
+      const requestedRole=normalizeRole(role||'');const user=await User.findOne({where:{[Op.or]:[{email:email},{phone:email}]}});if(!user||!(await canLoginAs(user,requestedRole))||!(await user.comparePassword(password)))return res.status(401).json({success:false,message:'Invalid credentials'});
 
       if (!user.isActive) {
         return res.status(403).json({ success: false, message: 'Account is deactivated' });
@@ -580,7 +581,7 @@ const authController = {
         return res.status(401).json({ success: false, message: 'Invalid refresh token' });
       }
 
-      const requestedRole=decoded.effectiveRole||decoded.role||user.role;const effectiveRole=canLoginAs(user,requestedRole)?requestedRole:user.role;const newToken=user.generateAuthToken(effectiveRole);
+      const requestedRole=decoded.effectiveRole||decoded.role||user.role;const effectiveRole=(await canLoginAs(user,requestedRole))?requestedRole:user.role;const newToken=user.generateAuthToken(effectiveRole);
       
       res.json({ success: true, token: newToken });
     } catch (error) {

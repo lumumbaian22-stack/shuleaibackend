@@ -115,9 +115,8 @@ exports.updateAdminPaymentSettings = async (req, res) => {
 
 exports.testAdminPaymentConnection = async (req, res) => {
   try {
-    const data = await paymentEngine.getSettings({ scope: 'school', schoolCode: getSchoolCode(req) });
-    if (!data.activeProvider) return res.status(400).json({ success: false, message: 'No active school payment provider is configured.' });
-    res.json({ success: true, message: `School payment provider lock is active: ${data.activeProvider}. Disabled providers cannot receive school fees.`, data: { activeProvider: data.activeProvider, enabledProviders: data.enabledProviders, methods: data.publicMethods || data.methods || [] } });
+    const result = await paymentEngine.testProviderConnection({ scope: 'school', schoolCode: getSchoolCode(req), user: req.user });
+    res.json({ success: true, message: result.message, data: result });
   } catch (error) { errorJson(res, error); }
 };
 
@@ -133,6 +132,14 @@ exports.updatePlatformPaymentSettings = async (req, res) => {
     const data = await paymentEngine.savePlatformProviderSettings({ user: req.user, body: providerBodyFromLegacyRequest(req, 'manual') });
     await writeAudit(req, { schoolCode: 'platform', module: 'payments', action: 'platform_payment_provider_saved_exclusive', entityType: 'PlatformPaymentSetting', entityId: String(data.id || 'platform-provider'), after: data });
     res.json({ success: true, message: 'Platform payment provider saved. Only the selected active provider can receive platform payments.', data });
+  } catch (error) { errorJson(res, error); }
+};
+
+
+exports.testPlatformPaymentConnection = async (req, res) => {
+  try {
+    const result = await paymentEngine.testProviderConnection({ scope: 'platform', user: req.user });
+    res.json({ success: true, message: result.message, data: result });
   } catch (error) { errorJson(res, error); }
 };
 
@@ -308,7 +315,7 @@ exports.getAdminPaymentRecords = async (req, res) => {
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(20, Number.parseInt(req.query.limit, 10) || 100));
     const offset = (page - 1) * limit;
-    const where = { schoolCode: req.user.schoolCode, paymentType: 'fee', paidTo: 'school' };
+    const where = { schoolCode: req.user.schoolCode, paymentType: { [Op.in]: ['fee', 'school_fee'] }, paidTo: 'school' };
     const { count, rows } = await Payment.findAndCountAll({
       where,
       attributes: ['id','studentId','parentId','feeId','amount','status','method','paymentGateway','reference','mpesaReceiptNumber','payerPhone','paymentDate','transactionDate','createdAt','notes','metadata'],
@@ -335,7 +342,7 @@ exports.getAdminPaymentRecords = async (req, res) => {
 exports.getManualVerificationQueue = async (req, res) => {
   try {
     const rows = await Payment.findAll({
-      where: { schoolCode: req.user.schoolCode, paymentType: 'fee', paidTo: 'school', status: 'pending' },
+      where: { schoolCode: req.user.schoolCode, paymentType: { [Op.in]: ['fee', 'school_fee'] }, paidTo: 'school', status: { [Op.in]: ['pending', 'pending_verification'] } },
       include: [
         { model: Student, include: [{ model: User, attributes: ['id','name','schoolCode'] }, { model: Class, required:false }] },
         { model: Parent, include: [{model:User, attributes:['id','name','phone','email']}], required:false },
@@ -474,7 +481,7 @@ function v2003ManualProviderQueueWhere(extra = {}) {
 
 exports.darajaCallback = async (req, res) => {
   try {
-    await paymentEngine.handleWebhook({ provider: 'mpesa', payload: req.body || {}, headers: req.headers || {} });
+    await paymentEngine.handleWebhook({ provider: 'mpesa', payload: req.body || {}, headers: req.headers || {}, rawBody: req.rawBody, sourceIp: req.ip });
     res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
   } catch (error) {
     console.error('Locked M-Pesa callback error:', error.message);
@@ -488,7 +495,7 @@ exports.parentFeeManual = async (req, res) => startLockedPayment(req, res, {
   paymentMethod: req.body?.paymentMethod || req.body?.method || 'manual',
   reference: req.body?.reference || req.body?.mpesaCode || req.body?.transactionCode || undefined,
   purpose: 'school_fee_manual_reference'
-}, 'School fee reference submitted using the active school provider rule.');
+}, 'School fee reference submitted to the backend verification queue. It is not marked paid until finance approves it.');
 
 exports.parentSubscriptionManual = async (req, res) => startLockedPayment(req, res, {
   ...req.body,
@@ -499,7 +506,7 @@ exports.parentSubscriptionManual = async (req, res) => startLockedPayment(req, r
   paymentMethod: req.body?.paymentMethod || req.body?.method || 'mobile_money',
   reference: req.body?.reference || req.body?.mpesaCode || req.body?.transactionCode || undefined,
   billingCycle: req.body?.billingCycle || req.body?.billingPeriod || 'monthly'
-}, 'Child subscription reference submitted using the active platform provider rule.');
+}, 'Child subscription reference submitted to the backend platform approval queue. It is not active until Super Admin approves it.');
 
 exports.adminNameChangePaymentSTK = async (req, res) => startLockedPayment(req, res, {
   ...req.body,

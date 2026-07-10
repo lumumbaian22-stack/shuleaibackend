@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { User } = require('../models');
+const { normalizeRole, canUseEffectiveRole, loadSafeAdditionalRoles } = require('../services/roleAccessService');
 
 module.exports = async function socketAuthMiddleware(socket, next) {
   try {
@@ -9,7 +10,7 @@ module.exports = async function socketAuthMiddleware(socket, next) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findByPk(decoded.id, { attributes: ['id','name','role','schoolCode','isActive','preferences'] });
     if (!user || !user.isActive) return next(new Error('Authentication error: Invalid user'));
-    const additionalRoles=Array.isArray(user.preferences?.additionalRoles)?user.preferences.additionalRoles:[];const effectiveRole=(decoded.effectiveRole===user.role||additionalRoles.includes(decoded.effectiveRole))?decoded.effectiveRole:user.role;socket.user={...user.toJSON(),role:effectiveRole,primaryRole:user.role};socket.userId=user.id;socket.userRole=effectiveRole;
+    await loadSafeAdditionalRoles(user);const financeMeta=user.getDataValue?.('financeAssignment')||user.financeAssignment||null;const requestedEffectiveRole=normalizeRole(decoded.effectiveRole||decoded.role||user.role);const effectiveRole=canUseEffectiveRole(user,requestedEffectiveRole)?requestedEffectiveRole:normalizeRole(user.role);socket.user={...user.toJSON(),role:effectiveRole,primaryRole:normalizeRole(user.role),safeAdditionalRoles:user.getDataValue?.('safeAdditionalRoles')||user.safeAdditionalRoles||[],financeTitle:financeMeta?.title||null,financePermissions:Array.isArray(financeMeta?.permissions)?financeMeta.permissions:[]};socket.userId=user.id;socket.userRole=effectiveRole;
     socket.schoolCode = user.schoolCode;
     next();
   } catch (_) {
