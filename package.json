@@ -10,7 +10,6 @@
     "migrate": "node runMigrations.js",
     "worker": "node src/workers/jobWorker.js",
     "seed:demo": "node scripts/seedDemoSchool.js",
-    "load:test": "node scripts/loadTest.js",
     "render:build": "npm ci --omit=dev",
     "render:predeploy": "npm run migrate"
   },
