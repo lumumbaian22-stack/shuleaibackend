@@ -10,6 +10,20 @@ const curriculumEngine = require('../services/curriculumStructureEngine');
 const classGeneration = require('../services/classGenerationService');
 async function canLoginAs(user, requestedRole) { return canUseEffectiveRoleAsync(user, requestedRole); }function publicProfileForRole(user,effectiveRole){const payload=user.getPublicProfile(effectiveRole);payload.primaryRole=user.getDataValue?.('primaryRole')||user.primaryRole||user.role;payload.role=normalizeRole(effectiveRole || user.role);const financeMeta=user.getDataValue?.('financeAssignment')||user.financeAssignment||user.preferences?.finance||{};payload.financeTitle=financeMeta.title||null;payload.financePermissions=Array.isArray(financeMeta.permissions)?financeMeta.permissions:[];return payload;}
 
+function getRefreshSecret() { return process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET; }
+function generateRefreshToken(user, effectiveRole = null) {
+  const role = normalizeRole(effectiveRole || user.role);
+  return jwt.sign(
+    { id: user.id, role, effectiveRole: role, primaryRole: normalizeRole(user.role), schoolCode: user.schoolCode, type: 'refresh' },
+    getRefreshSecret(),
+    { expiresIn: process.env.JWT_REFRESH_EXPIRE || '30d' }
+  );
+}
+function isSuperAdminSecretConfigured() {
+  const secret = String(process.env.SUPER_ADMIN_SECRET || '').trim();
+  return secret && !/^SUPER_SECRET_2024_CHANGE_THIS$/i.test(secret);
+}
+
 function smallSessionMedia(value) {
   const raw = String(value || '').trim();
   if (!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return '';
@@ -110,8 +124,11 @@ const authController = {
     try {
       const { email, password, secretKey } = req.body;
       
-      // Verify secret key matches env
-      if (secretKey !== process.env.SUPER_ADMIN_SECRET) {
+      // Verify secret key matches env. Do not allow missing/default production secrets to behave as a valid secret.
+      if (!isSuperAdminSecretConfigured()) {
+        return res.status(503).json({ success: false, message: 'Super admin secret is not configured.' });
+      }
+      if (!secretKey || String(secretKey) !== String(process.env.SUPER_ADMIN_SECRET)) {
         return res.status(401).json({ success: false, message: 'Invalid secret key' });
       }
 
@@ -135,7 +152,7 @@ const authController = {
 
       res.json({
         success: true,
-        data: { token, user: user.getPublicProfile() }
+        data: { token, refreshToken: generateRefreshToken(user, 'super_admin'), user: user.getPublicProfile() }
       });
     } catch (error) {
       console.error('Super admin login error:', error);
@@ -513,7 +530,7 @@ const authController = {
 
       res.json({
         success: true,
-        data: { token, user: user.getPublicProfile(), student }
+        data: { token, refreshToken: generateRefreshToken(user, 'student'), user: user.getPublicProfile(), student }
       });
     } catch (error) {
       console.error('Student login error:', error);
@@ -557,7 +574,7 @@ const authController = {
 
       res.json({
         success: true,
-        data: { token, user: publicProfileForRole(user,effectiveRole), profile, school: schoolPayload }
+        data: { token, refreshToken: generateRefreshToken(user, effectiveRole), user: publicProfileForRole(user,effectiveRole), profile, school: schoolPayload }
       });
     } catch (error) {
       console.error('Login error:', error);
@@ -574,7 +591,10 @@ const authController = {
         return res.status(401).json({ success: false, message: 'Refresh token required' });
       }
 
-      const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET);
+      const decoded = jwt.verify(refreshToken, getRefreshSecret());
+      if (decoded.type !== 'refresh') {
+        return res.status(401).json({ success: false, message: 'Invalid refresh token' });
+      }
       const user = await User.findByPk(decoded.id);
       
       if (!user || !user.isActive) {
@@ -583,7 +603,7 @@ const authController = {
 
       const requestedRole=decoded.effectiveRole||decoded.role||user.role;const effectiveRole=(await canLoginAs(user,requestedRole))?requestedRole:user.role;const newToken=user.generateAuthToken(effectiveRole);
       
-      res.json({ success: true, token: newToken });
+      res.json({ success: true, token: newToken, refreshToken: generateRefreshToken(user, effectiveRole) });
     } catch (error) {
       console.error('Refresh token error:', error);
       res.status(401).json({ success: false, message: 'Invalid refresh token' });
@@ -689,27 +709,43 @@ const authController = {
     }
   },
 
-    // Set first password for student (new students)
+    // Set first password for student after authenticated first login.
+  // Security rule: this endpoint never accepts another learner's Elimu ID as authority.
+  // The JWT user is the authority, so a student can only complete their own first-login password setup.
   setFirstPassword: async (req, res) => {
     try {
       const { elimuid, newPassword } = req.body;
-      
-      const student = await Student.findOne({ 
-        where: { elimuid },
+      if (!req.user || normalizeRole(req.user.role) !== 'student') {
+        return res.status(403).json({ success: false, message: 'Only the logged-in student can set a first password.' });
+      }
+      if (!newPassword || String(newPassword).length < 8) {
+        return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
+      }
+
+      const student = await Student.findOne({
+        where: { userId: req.user.id },
         include: [{ model: User }]
       });
-      
-      if (!student) {
-        return res.status(404).json({ success: false, message: 'Student not found' });
+
+      if (!student || !student.User) {
+        return res.status(404).json({ success: false, message: 'Student profile not found for this account.' });
       }
-      
+      if (elimuid && String(elimuid).trim() !== String(student.elimuid || '').trim()) {
+        return res.status(403).json({ success: false, message: 'This Elimu ID does not belong to the logged-in student.' });
+      }
+
       const user = student.User;
-      user.password = newPassword;
-      // If you have a firstLogin field, uncomment this:
+      if (user.firstLogin === false && user.mustChangePassword !== true) {
+        return res.status(409).json({ success: false, message: 'First password has already been set. Use Change Password instead.' });
+      }
+
+      user.password = String(newPassword);
       user.firstLogin = false;
+      user.mustChangePassword = false;
+      user.passwordIssuedAt = new Date();
       await user.save();
-      
-      res.json({ success: true, message: 'Password set successfully' });
+
+      res.json({ success: true, message: 'Password set successfully', data: { user: user.getPublicProfile('student') } });
     } catch (error) {
       console.error('Set first password error:', error);
       res.status(500).json({ success: false, message: error.message });

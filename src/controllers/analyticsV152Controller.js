@@ -467,10 +467,82 @@ async function buildPlatformAnalytics(req) {
   response.exportSections=exportSectionsFor(response);return response;
 }
 
+const EXPORT_SECTION_LABELS = {
+  kpis: 'KPI Summary',
+  'chart:attendanceTrend': 'Attendance Trend',
+  'chart:attendancePattern': 'Attendance Pattern',
+  'chart:attendanceHeatmap': 'Attendance Heatmap',
+  'chart:classPerformance': 'Class Performance',
+  'chart:subjectPerformance': 'Subject Performance',
+  'chart:performanceTrend': 'Performance Trend',
+  'chart:assessmentBreakdown': 'Assessment Breakdown',
+  'chart:teacherPerformance': 'Teacher Performance',
+  'chart:reportStatus': 'Report Status',
+  'chart:collectionTrend': 'Collection Trend',
+  'chart:paymentMethods': 'Payment Methods',
+  'chart:feeSplit': 'Paid vs Outstanding',
+  'chart:expenseCategories': 'Expense Categories',
+  'chart:growth': 'Growth Overview',
+  'chart:planDistribution': 'Plan Distribution',
+  'chart:revenueTrend': 'Revenue Trend',
+  'chart:geographic': 'Region Distribution',
+  'chart:strengthsSplit': 'Strengths vs Support Areas',
+  'chart:homeworkSplit': 'Homework Completion',
+  'list:defaulters': 'Defaulters List',
+  'list:classFeePerformance': 'Fee Performance by Class',
+  'list:bursarySummary': 'Bursary / Credit Summary',
+  'list:reconciliation': 'Reconciliation Status',
+  'list:topClasses': 'Top Classes',
+  'list:atRiskClasses': 'At-Risk Classes',
+  'list:topTeachers': 'Top Teachers',
+  'list:topSubjects': 'Top Subjects',
+  'list:topStudents': 'Top Students',
+  'list:riskStudents': 'Risk Students',
+  'list:streamPerformance': 'Stream Performance',
+  'list:subjectPerformance': 'Subject Performance',
+  'list:recentAssessments': 'Recent Assessments',
+  'list:recommendations': 'Recommendations',
+  'list:tasks': 'Tasks',
+  'list:badges': 'Badges',
+  'list:achievements': 'Achievements',
+  'list:leaderboard': 'Leaderboard',
+  'list:assessmentPerformance': 'Assessment Performance',
+  'list:operational': 'Operational Notes',
+  'list:alerts': 'Alerts & Insights',
+  'list:recentAlerts': 'Recent Alerts',
+  'list:actionableInsights': 'Actionable Insights',
+  'list:timetable': 'Timetable Summary',
+  'list:topSchools': 'Top Performing Schools',
+  'list:atRiskSchools': 'At-Risk Schools',
+  'list:usage': 'Platform Usage',
+  'list:approvals': 'Approval Summary',
+  'list:insights': 'Platform Insights',
+  'list:schoolComparison': 'School Comparison'
+};
+const EXPORT_SECTION_CATEGORIES = {
+  kpis: 'overview',
+  'chart:attendanceTrend':'attendance','chart:attendancePattern':'attendance','chart:attendanceHeatmap':'attendance',
+  'chart:collectionTrend':'finance','chart:paymentMethods':'finance','chart:feeSplit':'finance','chart:expenseCategories':'finance','chart:revenueTrend':'finance','chart:planDistribution':'finance',
+  'list:defaulters':'finance','list:classFeePerformance':'finance','list:bursarySummary':'finance','list:reconciliation':'finance',
+  'chart:teacherPerformance':'teachers','list:topTeachers':'teachers',
+  'chart:reportStatus':'reports','list:timetable':'reports',
+  'chart:classPerformance':'academic','chart:subjectPerformance':'academic','chart:performanceTrend':'academic','chart:assessmentBreakdown':'academic','chart:strengthsSplit':'academic','chart:homeworkSplit':'academic',
+  'list:topClasses':'academic','list:atRiskClasses':'academic','list:topSubjects':'academic','list:topStudents':'academic','list:riskStudents':'academic','list:streamPerformance':'academic','list:subjectPerformance':'academic','list:recentAssessments':'academic','list:recommendations':'academic','list:tasks':'academic','list:badges':'academic','list:achievements':'academic','list:leaderboard':'academic','list:assessmentPerformance':'academic',
+  'chart:growth':'overview','chart:geographic':'overview','list:operational':'overview','list:alerts':'overview','list:recentAlerts':'overview','list:actionableInsights':'overview','list:topSchools':'overview','list:atRiskSchools':'overview','list:usage':'overview','list:approvals':'overview','list:insights':'overview','list:schoolComparison':'overview'
+};
+function sectionLabel(key) { return EXPORT_SECTION_LABELS[key] || key.replace(/^(chart:|list:)/,'').replace(/([A-Z])/g,' $1').replace(/^./,m=>m.toUpperCase()); }
+function sectionCategory(key) { return EXPORT_SECTION_CATEGORIES[key] || 'overview'; }
 function exportSectionsFor(data) {
-  const sections = [{ key:'kpis', label:'KPI Summary', count:(data.kpis||[]).length }];
-  Object.entries(data.charts || {}).forEach(([key,value]) => { if (value && ((value.labels||[]).length || (value.weeks||[]).length)) sections.push({key:`chart:${key}`,label:key.replace(/([A-Z])/g,' $1').replace(/^./,m=>m.toUpperCase()),count:(value.labels||value.weeks||[]).length}); });
-  Object.entries(data.lists || {}).forEach(([key,value]) => { if (Array.isArray(value) && value.length) sections.push({key:`list:${key}`,label:key.replace(/([A-Z])/g,' $1').replace(/^./,m=>m.toUpperCase()),count:value.length}); else if (value && typeof value==='object') sections.push({key:`list:${key}`,label:key.replace(/([A-Z])/g,' $1').replace(/^./,m=>m.toUpperCase()),count:Object.keys(value).length}); });
+  const sections = [{ key:'kpis', label:sectionLabel('kpis'), category:'overview', count:(data.kpis||[]).length }];
+  Object.entries(data.charts || {}).forEach(([key,value]) => {
+    const sectionKey = `chart:${key}`;
+    if (value && ((value.labels||[]).length || (value.weeks||[]).length)) sections.push({key:sectionKey,label:sectionLabel(sectionKey),category:sectionCategory(sectionKey),count:(value.labels||value.weeks||[]).length});
+  });
+  Object.entries(data.lists || {}).forEach(([key,value]) => {
+    const sectionKey = `list:${key}`;
+    if (Array.isArray(value) && value.length) sections.push({key:sectionKey,label:sectionLabel(sectionKey),category:sectionCategory(sectionKey),count:value.length});
+    else if (value && typeof value==='object') sections.push({key:sectionKey,label:sectionLabel(sectionKey),category:sectionCategory(sectionKey),count:Object.keys(value).length});
+  });
   return sections;
 }
 async function dataForRequest(req) {
@@ -482,10 +554,19 @@ async function dataForRequest(req) {
   throw Object.assign(new Error('Analytics are not available for this role.'), { status: 403 });
 }
 
-function selectedSections(data, include) {
+function selectedSections(data, include, analyticsType = 'overview') {
   const allowed = new Set((data.exportSections || []).map(s=>s.key));
-  const requested = Array.isArray(include) && include.length ? include.filter(x=>allowed.has(x)) : [...allowed];
-  return requested.length ? requested : ['kpis'];
+  const requestedRaw = Array.isArray(include) ? include.map(String).filter(Boolean) : null;
+  if (requestedRaw && !requestedRaw.length) throw Object.assign(new Error('Select at least one analytics section to export.'), { status: 400 });
+  if (requestedRaw) {
+    const invalid = requestedRaw.filter(x => !allowed.has(x));
+    if (invalid.length) throw Object.assign(new Error(`Invalid or unavailable analytics section: ${invalid[0]}`), { status: 400 });
+    return [...new Set(requestedRaw)];
+  }
+  const type = text(analyticsType, 'overview').toLowerCase();
+  const keys = (data.exportSections || []).filter(s => type === 'overview' || s.key === 'kpis' || sectionCategory(s.key) === type).map(s=>s.key);
+  if (!keys.length) throw Object.assign(new Error('No exportable analytics sections are available for this selection.'), { status: 400 });
+  return [...new Set(keys)];
 }
 function rowsForSection(data, key) {
   if (key === 'kpis') return (data.kpis || []).map(x=>({Metric:x.label,Value:x.value,Note:x.hint||''}));
@@ -493,27 +574,57 @@ function rowsForSection(data, key) {
   if (key.startsWith('list:')) { const value=data.lists?.[key.slice(5)]; if (Array.isArray(value)) return value.map(item=>typeof item==='object'?item:{Value:item}); if (value&&typeof value==='object') return Object.entries(value).map(([Metric,Value])=>({Metric,Value})); }
   return [];
 }
-function humanSection(key) { return key.replace(/^(chart:|list:)/,'').replace(/([A-Z])/g,' $1').replace(/^./,m=>m.toUpperCase()); }
+function humanSection(key) { return sectionLabel(key); }
 function csvEscape(value) { const s = value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; }
+function normalizeRows(rows = []) {
+  return rows.map(row => (row && typeof row === 'object' && !Array.isArray(row)) ? row : { Value: row });
+}
+function rowColumns(rows = []) {
+  const cols = [...new Set(normalizeRows(rows).flatMap(r => Object.keys(r)))];
+  return cols.length ? cols : ['Status'];
+}
 function buildCsv(data, sections) {
-  const lines = [['Scope','Section','Row','Field','Value'].map(csvEscape).join(',')];
   const scopeLabel = data.scope?.label || data.tenantScoped || data.variant || 'Analytics';
+  if (sections.length === 1) {
+    const key = sections[0], rows = normalizeRows(rowsForSection(data, key));
+    const cols = rowColumns(rows.length ? rows : [{ Status: 'No data available' }]);
+    const lines = [cols.map(csvEscape).join(',')];
+    (rows.length ? rows : [{ Status: 'No data available' }]).forEach(row => lines.push(cols.map(c => csvEscape(row[c])).join(',')));
+    return lines.join('\n');
+  }
+  const lines = [];
+  lines.push(['Shule AI Analytics Export'].map(csvEscape).join(','));
+  lines.push(['Scope', scopeLabel, 'Generated', new Date().toISOString()].map(csvEscape).join(','));
+  lines.push([]);
   sections.forEach(key => {
-    const rows = rowsForSection(data, key);
-    const section = humanSection(key);
-    if (!rows.length) { lines.push([scopeLabel, section, 1, 'Status', 'No data available'].map(csvEscape).join(',')); return; }
-    rows.forEach((row, index) => {
-      const entries = Object.entries(row && typeof row === 'object' ? row : { Value: row });
-      entries.forEach(([field, value]) => lines.push([scopeLabel, section, index + 1, field, value].map(csvEscape).join(',')));
-    });
+    const rows = normalizeRows(rowsForSection(data, key));
+    const cols = rowColumns(rows.length ? rows : [{ Status: 'No data available' }]);
+    lines.push([humanSection(key)].map(csvEscape).join(','));
+    lines.push(cols.map(csvEscape).join(','));
+    (rows.length ? rows : [{ Status: 'No data available' }]).forEach(row => lines.push(cols.map(c => csvEscape(row[c])).join(',')));
+    lines.push([]);
   });
   return lines.join('\n');
 }
 function htmlEscape(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function buildPrintHtml(data, sections){const blocks=sections.map(key=>{const rows=rowsForSection(data,key);const cols=rows.length?[...new Set(rows.flatMap(r=>Object.keys(r)))]:[];return `<section><h2>${htmlEscape(humanSection(key))}</h2>${rows.length?`<table><thead><tr>${cols.map(c=>`<th>${htmlEscape(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${htmlEscape(typeof r[c]==='object'?JSON.stringify(r[c]):r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`:'<p>No data available.</p>'}</section>`;}).join('');return `<!doctype html><html><head><meta charset="utf-8"><title>${htmlEscape(data.title)}</title><style>body{font-family:Arial,sans-serif;color:#0f172a;margin:32px}header{border-bottom:3px solid #11B5B1;padding-bottom:16px;margin-bottom:22px}h1{margin:0;color:#083A85}small{color:#64748b}section{page-break-inside:avoid;margin:22px 0}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #dbe4ee;padding:7px;text-align:left}th{background:#083A85;color:white}@media print{button{display:none}}</style></head><body><header><h1>${htmlEscape(data.title)}</h1><p>${htmlEscape(data.subtitle||'')}</p><small>Scope: ${htmlEscape(data.scope?.label||data.tenantScoped)} · Generated ${new Date().toLocaleString()}</small></header>${blocks}<button onclick="window.print()">Print</button></body></html>`;}
-async function buildWorkbook(data, sections){const workbook=new ExcelJS.Workbook();workbook.creator='Shule AI';workbook.created=new Date();for(const key of sections){const rows=rowsForSection(data,key);const sheet=workbook.addWorksheet(humanSection(key).slice(0,31));if(!rows.length){sheet.addRow(['No data available']);continue;}const cols=[...new Set(rows.flatMap(r=>Object.keys(r)))];sheet.columns=cols.map(c=>({header:c,key:c,width:Math.min(45,Math.max(14,c.length+4))}));rows.forEach(row=>sheet.addRow(row));sheet.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};sheet.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF083A85'}};sheet.views=[{state:'frozen',ySplit:1}];sheet.autoFilter={from:{row:1,column:1},to:{row:Math.max(1,sheet.rowCount),column:cols.length}};}return workbook.xlsx.writeBuffer();}
-function writePdfTable(doc,title,rows){doc.moveDown(.8).fontSize(15).fillColor('#083A85').text(title);doc.moveDown(.4);if(!rows.length){doc.fontSize(10).fillColor('#64748b').text('No data available.');return;}const cols=[...new Set(rows.flatMap(r=>Object.keys(r)))].slice(0,6);doc.fontSize(8).fillColor('#ffffff');const widths=cols.map(()=>Math.max(70,Math.floor(500/cols.length)));let y=doc.y;doc.rect(50,y,500,20).fill('#083A85');let x=50;cols.forEach((c,i)=>{doc.fillColor('#ffffff').text(c,x+4,y+6,{width:widths[i]-8,height:12});x+=widths[i];});y+=20;rows.slice(0,35).forEach((row,index)=>{if(y>740){doc.addPage();y=50;}doc.rect(50,y,500,20).fill(index%2?'#F8FAFC':'#FFFFFF');x=50;cols.forEach((c,i)=>{const value=typeof row[c]==='object'?JSON.stringify(row[c]):row[c];doc.fillColor('#0F172A').text(text(value,'—').slice(0,80),x+4,y+6,{width:widths[i]-8,height:12});x+=widths[i];});y+=20;});doc.y=y;}
-function buildPdf(data,sections){return new Promise((resolve,reject)=>{const doc=new PDFDocument({size:'A4',margin:50,bufferPages:true});const chunks=[];doc.on('data',c=>chunks.push(c));doc.on('end',()=>resolve(Buffer.concat(chunks)));doc.on('error',reject);doc.rect(0,0,595,92).fill('#083A85');doc.fillColor('#FFFFFF').fontSize(23).text(data.title||'Analytics Report',50,28);doc.fontSize(10).text(`${data.subtitle||''}\nScope: ${data.scope?.label||data.tenantScoped||''}`,50,56);doc.fillColor('#0F172A').fontSize(9).text(`Generated: ${new Date().toLocaleString()} | Year: ${data.filters?.year||'All'} | Term: ${data.filters?.term||'All'}`,50,108);doc.y=126;sections.forEach(key=>writePdfTable(doc,humanSection(key),rowsForSection(data,key)));const range=doc.bufferedPageRange();for(let i=0;i<range.count;i++){doc.switchToPage(i);doc.fontSize(8).fillColor('#64748b').text(`Shule AI analytics · Page ${i+1} of ${range.count}`,50,810,{align:'center',width:495});}doc.end();});}
+function buildPrintHtml(data, sections){
+  const kpiCards=(data.kpis||[]).slice(0,8).map(k=>`<article><small>${htmlEscape(k.label)}</small><strong>${htmlEscape(k.value)}</strong><em>${htmlEscape(k.hint||'')}</em></article>`).join('');
+  const blocks=sections.map(key=>{const rows=normalizeRows(rowsForSection(data,key));const display=rows.length?rows:[{Status:'No data available'}];const cols=rowColumns(display);return `<section><h2>${htmlEscape(humanSection(key))}</h2><table><thead><tr>${cols.map(c=>`<th>${htmlEscape(c)}</th>`).join('')}</tr></thead><tbody>${display.map(r=>`<tr>${cols.map(c=>`<td>${htmlEscape(typeof r[c]==='object'?JSON.stringify(r[c]):r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></section>`;}).join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${htmlEscape(data.title||'Analytics Report')}</title><style>body{font-family:Inter,Arial,sans-serif;color:#0f172a;margin:0;background:#f8fafc}header{background:linear-gradient(135deg,#083A85,#11B5B1);color:white;padding:32px 42px}h1{margin:0;font-size:28px}header p{margin:8px 0 0;opacity:.9}.meta{font-size:12px;margin-top:12px;opacity:.86}.wrap{padding:28px 42px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:26px}.kpis article{background:white;border:1px solid #dbe4ee;border-radius:14px;padding:14px;box-shadow:0 8px 24px rgba(15,23,42,.06)}.kpis small{display:block;color:#64748b;font-weight:800}.kpis strong{display:block;margin-top:5px;font-size:20px;color:#083A85}.kpis em{display:block;margin-top:4px;font-style:normal;color:#11B5B1;font-size:11px}section{background:white;border:1px solid #dbe4ee;border-radius:14px;padding:18px;margin:18px 0;page-break-inside:avoid}h2{margin:0 0 12px;color:#083A85;font-size:18px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #dbe4ee;padding:8px;text-align:left;vertical-align:top}th{background:#083A85;color:white}button{position:fixed;right:24px;bottom:24px;border:0;background:#11B5B1;color:white;border-radius:999px;padding:12px 18px;font-weight:800}@media print{button{display:none}body{background:white}.wrap{padding:18px}.kpis{grid-template-columns:repeat(2,1fr)}}@media(max-width:800px){.kpis{grid-template-columns:1fr}}</style></head><body><header><h1>${htmlEscape(data.title||'Analytics Report')}</h1><p>${htmlEscape(data.subtitle||'')}</p><div class="meta">Scope: ${htmlEscape(data.scope?.label||data.tenantScoped||'Current scope')} · Generated ${new Date().toLocaleString()} · Year: ${htmlEscape(data.filters?.year||'All')} · Term: ${htmlEscape(data.filters?.term||'All')}</div></header><main class="wrap"><div class="kpis">${kpiCards}</div>${blocks}</main><button onclick="window.print()">Print report</button></body></html>`;
+}
+async function buildWorkbook(data, sections){
+  const workbook=new ExcelJS.Workbook();workbook.creator='Shule AI';workbook.created=new Date();
+  const summary=workbook.addWorksheet('Summary');
+  summary.columns=[{width:26},{width:45},{width:22},{width:28}];
+  summary.addRow(['Shule AI Analytics Report']);summary.mergeCells('A1:D1');summary.getCell('A1').font={bold:true,size:18,color:{argb:'FFFFFFFF'}};summary.getCell('A1').fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF083A85'}};
+  summary.addRow(['Title', data.title||'Analytics Report']);summary.addRow(['Scope', data.scope?.label||data.tenantScoped||'Current scope']);summary.addRow(['Generated', new Date().toISOString()]);summary.addRow(['Year', data.filters?.year||'All']);summary.addRow(['Term', data.filters?.term||'All']);summary.addRow([]);summary.addRow(['KPI','Value','Note']);
+  const headerRow=summary.lastRow;headerRow.font={bold:true,color:{argb:'FFFFFFFF'}};headerRow.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF11B5B1'}};
+  (data.kpis||[]).forEach(k=>summary.addRow([k.label,k.value,k.hint||'']));
+  for(const key of sections){const rows=normalizeRows(rowsForSection(data,key));const display=rows.length?rows:[{Status:'No data available'}];const title=humanSection(key).slice(0,31).replace(/[\\/*?:\[\]]/g,' ').trim()||'Analytics';const sheet=workbook.addWorksheet(title);const cols=rowColumns(display);sheet.columns=cols.map(c=>({header:c,key:c,width:Math.min(48,Math.max(14,String(c).length+6))}));display.forEach(row=>sheet.addRow(row));sheet.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};sheet.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF083A85'}};sheet.views=[{state:'frozen',ySplit:1}];sheet.autoFilter={from:{row:1,column:1},to:{row:Math.max(1,sheet.rowCount),column:cols.length}};}
+  return workbook.xlsx.writeBuffer();
+}
+function writePdfTable(doc,title,rows){doc.moveDown(.8).fontSize(15).fillColor('#083A85').text(title);doc.moveDown(.35);const display=normalizeRows(rows.length?rows:[{Status:'No data available'}]);const cols=rowColumns(display).slice(0,6);const widths=cols.map(()=>Math.max(70,Math.floor(500/cols.length)));let y=doc.y;doc.rect(50,y,500,20).fill('#083A85');let x=50;cols.forEach((c,i)=>{doc.fillColor('#ffffff').fontSize(8).text(c,x+4,y+6,{width:widths[i]-8,height:12});x+=widths[i];});y+=20;display.slice(0,45).forEach((row,index)=>{if(y>740){doc.addPage();y=50;}doc.rect(50,y,500,20).fill(index%2?'#F8FAFC':'#FFFFFF');x=50;cols.forEach((c,i)=>{const value=typeof row[c]==='object'?JSON.stringify(row[c]):row[c];doc.fillColor('#0F172A').fontSize(8).text(text(value,'—').slice(0,80),x+4,y+6,{width:widths[i]-8,height:12});x+=widths[i];});y+=20;});doc.y=y;}
+function buildPdf(data,sections){return new Promise((resolve,reject)=>{const doc=new PDFDocument({size:'A4',margin:50,bufferPages:true});const chunks=[];doc.on('data',c=>chunks.push(c));doc.on('end',()=>resolve(Buffer.concat(chunks)));doc.on('error',reject);doc.rect(0,0,595,112).fill('#083A85');doc.fillColor('#FFFFFF').fontSize(24).text(data.title||'Analytics Report',50,28,{width:495});doc.fontSize(10).text(`${data.subtitle||''}\nScope: ${data.scope?.label||data.tenantScoped||''}`,50,62,{width:495});doc.fillColor('#0F172A').fontSize(9).text(`Generated: ${new Date().toLocaleString()} | Year: ${data.filters?.year||'All'} | Term: ${data.filters?.term||'All'}`,50,128);doc.y=150;const kpis=(data.kpis||[]).slice(0,6);if(kpis.length){doc.fontSize(14).fillColor('#083A85').text('Summary');doc.moveDown(.4);let x=50,y=doc.y;kpis.forEach((k,i)=>{if(i&&i%3===0){x=50;y+=56;}doc.roundedRect(x,y,160,44,8).fill('#F8FAFC').stroke('#DBE4EE');doc.fillColor('#64748B').fontSize(7).text(k.label,x+10,y+8,{width:140});doc.fillColor('#083A85').fontSize(12).text(String(k.value),x+10,y+22,{width:140});x+=170;});doc.y=y+66;}sections.forEach(key=>writePdfTable(doc,humanSection(key),rowsForSection(data,key)));const range=doc.bufferedPageRange();for(let i=0;i<range.count;i++){doc.switchToPage(i);doc.fontSize(8).fillColor('#64748b').text(`Shule AI analytics · Page ${i+1} of ${range.count}`,50,810,{align:'center',width:495});}doc.end();});}
 
 exports.getDashboardAnalytics = async (req,res)=>{try{const data=await dataForRequest(req);return res.json({success:true,data});}catch(error){console.error('[v152 analytics]',error);return res.status(error.status||500).json({success:false,message:error.message||'Analytics could not be loaded.'});}};
 
@@ -546,4 +657,32 @@ exports.getAnalyticsTable = async (req, res) => {
   }
 };
 
-exports.exportAnalytics = async (req,res)=>{try{req.query={...(req.query||{}),...(req.body?.filters||{}),scopeType:req.body?.scopeType||req.body?.filters?.scopeType,scopeId:req.body?.scopeId||req.body?.filters?.scopeId,childId:req.body?.childId||req.body?.filters?.childId};const data=await dataForRequest(req);const sections=selectedSections(data,req.body?.include);const format=text(req.body?.format,'pdf').toLowerCase();const base=`shule-ai-${safeName(data.variant)}-${safeName(data.scope?.label||data.tenantScoped)}-${new Date().toISOString().slice(0,10)}`;if(format==='xlsx'||format==='excel'){const buffer=await buildWorkbook(data,sections);res.set({'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':`attachment; filename="${base}.xlsx"`});return res.send(Buffer.from(buffer));}if(format==='csv'){res.set({'Content-Type':'text/csv; charset=utf-8','Content-Disposition':`attachment; filename="${base}.csv"`});return res.send(buildCsv(data,sections));}if(format==='print'||format==='html'){res.set({'Content-Type':'text/html; charset=utf-8','Content-Disposition':`inline; filename="${base}.html"`});return res.send(buildPrintHtml(data,sections));}const pdf=await buildPdf(data,sections);res.set({'Content-Type':'application/pdf','Content-Disposition':`attachment; filename="${base}.pdf"`});return res.send(pdf);}catch(error){console.error('[v152 analytics export]',error);return res.status(error.status||500).json({success:false,message:error.message||'Analytics export failed.'});}};
+exports.exportAnalytics = async (req,res)=>{
+  try{
+    const body = req.body || {};
+    req.query={...(req.query||{}),...(body.filters||{}),scopeType:body.scopeType||body.filters?.scopeType,scopeId:body.scopeId||body.filters?.scopeId,childId:body.childId||body.filters?.childId,analyticsType:body.analyticsType||body.filters?.analyticsType};
+    const data=await dataForRequest(req);
+    const sections=selectedSections(data,body.include,body.analyticsType||body.filters?.analyticsType||data.filters?.analyticsType);
+    const format=text(body.format,'pdf').toLowerCase();
+    const base=`shule-ai-${safeName(data.variant)}-${safeName(data.scope?.label||data.tenantScoped)}-${new Date().toISOString().slice(0,10)}`;
+    if(format==='xlsx'||format==='excel'){
+      const buffer=await buildWorkbook(data,sections);
+      res.set({'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':`attachment; filename="${base}.xlsx"`});
+      return res.send(Buffer.from(buffer));
+    }
+    if(format==='csv'){
+      res.set({'Content-Type':'text/csv; charset=utf-8','Content-Disposition':`attachment; filename="${base}.csv"`});
+      return res.send(buildCsv(data,sections));
+    }
+    if(format==='print'||format==='html'){
+      res.set({'Content-Type':'text/html; charset=utf-8','Content-Disposition':`inline; filename="${base}.html"`});
+      return res.send(buildPrintHtml(data,sections));
+    }
+    const pdf=await buildPdf(data,sections);
+    res.set({'Content-Type':'application/pdf','Content-Disposition':`attachment; filename="${base}.pdf"`});
+    return res.send(pdf);
+  }catch(error){
+    console.error('[v152 analytics export]',error);
+    return res.status(error.status||500).json({success:false,message:error.message||'Analytics export failed.'});
+  }
+};

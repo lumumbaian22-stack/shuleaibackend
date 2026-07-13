@@ -1010,7 +1010,7 @@ exports.getAssessmentSettings = async (req, res) => {
     const school = await v102GetSchool(req.user.schoolCode);
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
     const cfg = curriculumEngine.getCurriculumConfig(school);
-    res.json({ success:true, data:{ assessmentSettings: cfg.assessmentSettings, config: cfg } });
+    res.json({ success:true, data:{ assessmentSettings: cfg.assessmentSettings, config: cfg, reportCardSettings: school.settings?.reportCardSettings || school.reportCardSettings || {} } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };
 
@@ -1040,10 +1040,62 @@ exports.updateAssessmentSettings = async (req, res) => {
         isActive: row.isActive !== false
       };
     }).filter(x => x.label && x.isActive !== false);
+    const existingReportSettings = school.settings?.reportCardSettings || school.reportCardSettings || {};
+    const incomingReportSettings = req.body && typeof req.body.reportCardSettings === 'object' && !Array.isArray(req.body.reportCardSettings) ? req.body.reportCardSettings : {};
+    const bool = (value, fallback=true) => value === undefined ? fallback : value === true || value === 'true' || value === 'on' || value === 1 || value === '1';
+    const cleanText = (value, max=240) => String(value || '').trim().slice(0, max);
+    const allowedLogoFallback = ['school_initials','shuleai_logo'];
+    const allowedWatermark = ['school_logo','school_initials','school_name','shuleai_logo','none'];
+    const reportCardSettings = {
+      ...existingReportSettings,
+      logoFallback: allowedLogoFallback.includes(incomingReportSettings.logoFallback) ? incomingReportSettings.logoFallback : (existingReportSettings.logoFallback || 'school_initials'),
+      headerLogoSource: allowedLogoFallback.includes(incomingReportSettings.headerLogoSource) ? incomingReportSettings.headerLogoSource : (existingReportSettings.headerLogoSource || 'school_initials'),
+      watermarkType: allowedWatermark.includes(incomingReportSettings.watermarkType) ? incomingReportSettings.watermarkType : (existingReportSettings.watermarkType || 'school_logo'),
+      motto: cleanText(incomingReportSettings.motto ?? existingReportSettings.motto, 180),
+      registrationNumber: cleanText(incomingReportSettings.registrationNumber ?? existingReportSettings.registrationNumber, 80),
+      postalAddress: cleanText(incomingReportSettings.postalAddress ?? existingReportSettings.postalAddress, 180),
+      physicalAddress: cleanText(incomingReportSettings.physicalAddress ?? existingReportSettings.physicalAddress, 180),
+      county: cleanText(incomingReportSettings.county ?? existingReportSettings.county, 80),
+      phone: cleanText(incomingReportSettings.phone ?? existingReportSettings.phone, 60),
+      email: cleanText(incomingReportSettings.email ?? existingReportSettings.email, 120),
+      website: cleanText(incomingReportSettings.website ?? existingReportSettings.website, 160),
+      curriculumLabel: cleanText(incomingReportSettings.curriculumLabel ?? existingReportSettings.curriculumLabel, 80),
+      reportTypeLabel: cleanText(incomingReportSettings.reportTypeLabel ?? existingReportSettings.reportTypeLabel, 80) || 'End Term Report',
+      verifyUrl: cleanText(incomingReportSettings.verifyUrl ?? existingReportSettings.verifyUrl, 160) || 'verify.shuleai.com',
+      defaultPromotionStatus: cleanText(incomingReportSettings.defaultPromotionStatus ?? existingReportSettings.defaultPromotionStatus, 120),
+      closingDate: cleanText(incomingReportSettings.closingDate ?? existingReportSettings.closingDate, 80),
+      opensNextTerm: cleanText(incomingReportSettings.opensNextTerm ?? existingReportSettings.opensNextTerm, 80),
+      feeBalance: cleanText(incomingReportSettings.feeBalance ?? existingReportSettings.feeBalance, 80),
+      showMotto: bool(incomingReportSettings.showMotto, existingReportSettings.showMotto !== false),
+      showRegistrationNumber: bool(incomingReportSettings.showRegistrationNumber, existingReportSettings.showRegistrationNumber !== false),
+      showPostalAddress: bool(incomingReportSettings.showPostalAddress, existingReportSettings.showPostalAddress !== false),
+      showPhysicalAddress: bool(incomingReportSettings.showPhysicalAddress, existingReportSettings.showPhysicalAddress !== false),
+      showPhone: bool(incomingReportSettings.showPhone, existingReportSettings.showPhone !== false),
+      showEmail: bool(incomingReportSettings.showEmail, existingReportSettings.showEmail !== false),
+      showWebsite: bool(incomingReportSettings.showWebsite, existingReportSettings.showWebsite === true),
+      showCurriculum: bool(incomingReportSettings.showCurriculum, existingReportSettings.showCurriculum !== false),
+      showStudentPhoto: bool(incomingReportSettings.showStudentPhoto, existingReportSettings.showStudentPhoto !== false),
+      showPromotionStatus: bool(incomingReportSettings.showPromotionStatus, existingReportSettings.showPromotionStatus !== false),
+      showAttendance: bool(incomingReportSettings.showAttendance, existingReportSettings.showAttendance !== false),
+      showCoreValues: bool(incomingReportSettings.showCoreValues, existingReportSettings.showCoreValues !== false),
+      showTeacherFeedback: bool(incomingReportSettings.showTeacherFeedback, existingReportSettings.showTeacherFeedback !== false),
+      showTermInformation: bool(incomingReportSettings.showTermInformation, existingReportSettings.showTermInformation !== false),
+      showBehaviour: bool(incomingReportSettings.showBehaviour, existingReportSettings.showBehaviour !== false),
+      showAIInsights: bool(incomingReportSettings.showAIInsights, existingReportSettings.showAIInsights !== false),
+      showTeacherComment: bool(incomingReportSettings.showTeacherComment, existingReportSettings.showTeacherComment !== false),
+      showHeadteacherComment: bool(incomingReportSettings.showHeadteacherComment, existingReportSettings.showHeadteacherComment !== false),
+      showSignatures: bool(incomingReportSettings.showSignatures, existingReportSettings.showSignatures !== false),
+      showStamp: bool(incomingReportSettings.showStamp, existingReportSettings.showStamp !== false),
+      showVerificationCode: bool(incomingReportSettings.showVerificationCode, existingReportSettings.showVerificationCode !== false),
+      showClassPosition: bool(incomingReportSettings.showClassPosition, existingReportSettings.showClassPosition === true),
+      showStreamPosition: bool(incomingReportSettings.showStreamPosition, existingReportSettings.showStreamPosition === true)
+    };
     const settings = v102BuildCurriculumSettings(school, { assessmentSettings: sanitized.length ? sanitized : defaults });
+    settings.reportCardSettings = reportCardSettings;
     school.settings = settings;
+    school.reportCardSettings = reportCardSettings;
     await school.save();
-    res.json({ success:true, message:'Assessment/report settings saved', data:{ assessmentSettings: settings.curriculumEngine.assessmentSettings } });
+    res.json({ success:true, message:'Assessment/report settings saved', data:{ assessmentSettings: settings.curriculumEngine.assessmentSettings, reportCardSettings } });
   } catch(error) { console.error('V130 assessment settings error:', error); res.status(500).json({ success:false, message:error.message }); }
 };
 

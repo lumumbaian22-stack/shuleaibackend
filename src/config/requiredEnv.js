@@ -1,17 +1,35 @@
 const REQUIRED_PRODUCTION = [
   'JWT_SECRET',
+  'JWT_EXPIRE',
+  'SUPER_ADMIN_SECRET',
   'PAYMENT_VAULT_KEY',
   'DATABASE_URL',
   'PUBLIC_API_BASE_URL'
 ];
 
+const RECOMMENDED_PRODUCTION = [
+  'JWT_REFRESH_SECRET',
+  'JWT_REFRESH_EXPIRE',
+  'CORS_ORIGINS'
+];
+
 function assertRequiredEnv() {
   const missing = REQUIRED_PRODUCTION.filter(key => !process.env[key]);
+  const missingRecommended = RECOMMENDED_PRODUCTION.filter(key => !process.env[key]);
   if (process.env.NODE_ENV === 'production' && missing.length) {
     throw new Error(`Missing required production environment variables: ${missing.join(', ')}`);
   }
   if (missing.length) {
-    console.warn(`[env-check] Missing recommended environment variables: ${missing.join(', ')}. Production will refuse to boot without them.`);
+    console.warn(`[env-check] Missing required production environment variables: ${missing.join(', ')}. Production will refuse to boot without them.`);
+  }
+  if (missingRecommended.length) {
+    console.warn(`[env-check] Missing recommended production environment variables: ${missingRecommended.join(', ')}.`);
+  }
+  if (process.env.NODE_ENV === 'production' && /^SUPER_SECRET_2024_CHANGE_THIS$/i.test(String(process.env.SUPER_ADMIN_SECRET || ''))) {
+    throw new Error('SUPER_ADMIN_SECRET must be changed from the default placeholder in production.');
+  }
+  if (process.env.NODE_ENV === 'production' && String(process.env.JWT_SECRET || '').length < 32) {
+    throw new Error('JWT_SECRET must be at least 32 characters in production.');
   }
   const publicBase = process.env.PUBLIC_API_BASE_URL || process.env.BACKEND_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '';
   if (process.env.NODE_ENV === 'production' && publicBase && !/^https:\/\//i.test(publicBase)) {

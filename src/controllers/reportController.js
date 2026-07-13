@@ -158,7 +158,7 @@ async function buildSnapshot({ studentId, schoolCode:code, term, year, assessmen
   attendance.rate = attendance.total ? Math.round((attendance.present / attendance.total) * 1000) / 10 : 0;
   const snapshot = {
     student:{ id:student.id, userId:student.userId, name:student.User?.name, photo:student.User?.profileImage || student.profileImage || null, dateOfBirth:student.dateOfBirth, elimuid:student.elimuid, grade:student.grade, className:cls?.name || student.grade },
-    school:{ name:school?.name || 'School', logo:logoForSchool(school), watermarkLogo:logoForSchool(school), branding:school?.settings?.branding || {}, usesFallbackLogo:!logoForSchool(school) || logoForSchool(school) === defaultReportLogo() },
+    school:{ name:school?.name || 'School', logo:logoForSchool(school), watermarkLogo:logoForSchool(school), branding:school?.settings?.branding || {}, reportCardSettings: school?.settings?.reportCardSettings || school?.reportCardSettings || {}, usesFallbackLogo:!logoForSchool(school) || logoForSchool(school) === defaultReportLogo() },
     class:cls ? { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream, levelCode:cls.levelCode } : null,
     term, year:Number(year), curriculum:school?.system || student.curriculum || null,
     assessmentType:assessmentType || null, assessmentName:assessmentName || null, assessmentSettings, countedAssessments:countedSettings,

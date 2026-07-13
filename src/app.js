@@ -190,7 +190,7 @@ function healthPayload(req, extra = {}) {
   return {
     success: true,
     version: require('../package.json').version,
-    build: 'v2017-health-cors-stability',
+    build: 'v2022-cbc-report-card-docx-template-lock',
     instanceId: req.app.locals.shuleAiInstanceId || loadBalancingConfig.instanceId,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),

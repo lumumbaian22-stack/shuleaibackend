@@ -1,8 +1,13 @@
-// migrations/20240330000000-create-tasks-table.js
+// migrations/20240330000001-create-tasks-table.js
 'use strict';
 
 module.exports = {
   up: async (queryInterface, Sequelize) => {
+    try {
+      await queryInterface.describeTable('Tasks');
+      console.log('[migration-safe] Tasks table already exists; skipping createTable');
+      return;
+    } catch (_) {}
     await queryInterface.createTable('Tasks', {
       id: {
         type: Sequelize.INTEGER,
@@ -59,6 +64,11 @@ module.exports = {
   },
 
   down: async (queryInterface, Sequelize) => {
-    await queryInterface.dropTable('Tasks');
+    try {
+      await queryInterface.describeTable('Tasks');
+      await queryInterface.dropTable('Tasks');
+    } catch (_) {
+      console.log('[migration-safe] Tasks table missing; skipping dropTable');
+    }
   }
 };

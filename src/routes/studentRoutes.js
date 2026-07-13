@@ -7,9 +7,10 @@ const analyticsController = require('../controllers/analyticsController');
 const subjectSelectionController = require('../controllers/subjectSelectionController');
 const { MoodCheckin } = require('../models');
 
-router.post('/set-first-password', authController.setFirstPassword);
-
 router.use(protect, authorize('student'));
+
+// First-time password setup is protected. A student can only change their own first-login password after logging in with the temporary password issued by the school.
+router.post('/set-first-password', authController.setFirstPassword);
 
 router.get('/dashboard', studentController.getDashboard);
 router.get('/materials', studentController.getMaterials);
