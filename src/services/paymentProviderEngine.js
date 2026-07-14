@@ -284,13 +284,45 @@ function providerSupportsMethod(provider, method, config = {}) {
   return sanitizeMethods(config.methods, provider).includes(method);
 }
 
+
+function hasAny(config = {}, fields = []) {
+  return fields.some(field => config[field] || config[field.replace(/[A-Z]/g, m => '_' + m.toLowerCase())]);
+}
+
+function providerReadiness(provider, config = {}, active = '') {
+  const enabled = provider === active && config?.enabled !== false;
+  if (!enabled) return { status: 'disabled', ready: false, visibleToParent: false, message: 'Provider is not active for this scope.' };
+  if (['manual','bank','cash','card'].includes(provider)) return { status: 'ready', ready: true, visibleToParent: true, message: `${providerLabel(provider)} is ready for finance verification.` };
+  if (provider === 'mpesa') {
+    const missing = [];
+    if (!hasAny(config, ['consumerKey'])) missing.push('consumerKey');
+    if (!hasAny(config, ['consumerSecret'])) missing.push('consumerSecret');
+    if (!hasAny(config, ['shortcode','businessShortCode'])) missing.push('shortcode');
+    if (!hasAny(config, ['passkey'])) missing.push('passkey');
+    return missing.length ? { status: 'not_configured', ready: false, visibleToParent: false, message: `Missing M-Pesa ${missing.join(', ')}.` } : { status: 'ready', ready: true, visibleToParent: true, message: 'M-Pesa credentials are present. Confirm callback/webhook with a test transaction.' };
+  }
+  if (provider === 'pesapal') {
+    const missing = [];
+    if (!hasAny(config, ['consumerKey'])) missing.push('consumerKey');
+    if (!hasAny(config, ['consumerSecret'])) missing.push('consumerSecret');
+    if (!hasAny(config, ['ipnId','notificationId']) && !config.checkoutUrl) missing.push('ipnId/notificationId');
+    return missing.length ? { status: 'not_configured', ready: false, visibleToParent: false, message: `Missing PesaPal ${missing.join(', ')}.` } : { status: 'ready', ready: true, visibleToParent: true, message: 'PesaPal settings are present.' };
+  }
+  if (provider === 'paystack') return hasAny(config, ['secretKey']) ? { status: 'ready', ready: true, visibleToParent: true, message: 'Paystack secret key is present.' } : { status: 'not_configured', ready: false, visibleToParent: false, message: 'Missing Paystack secret key.' };
+  if (provider === 'flutterwave') return hasAny(config, ['secretKey']) ? { status: 'ready', ready: true, visibleToParent: true, message: 'Flutterwave secret key is present.' } : { status: 'not_configured', ready: false, visibleToParent: false, message: 'Missing Flutterwave secret key.' };
+  if (provider === 'stripe') return hasAny(config, ['secretKey']) ? { status: 'ready', ready: true, visibleToParent: true, message: 'Stripe secret key is present.' } : { status: 'not_configured', ready: false, visibleToParent: false, message: 'Missing Stripe secret key.' };
+  return { status: enabled ? 'ready' : 'disabled', ready: enabled, visibleToParent: enabled, message: enabled ? `${providerLabel(provider)} is ready.` : `${providerLabel(provider)} is disabled.` };
+}
+
 function publicProviders(row) {
   const active = activeProviderFromRow(row);
   const map = providerMap(row);
-  return Object.fromEntries(Object.entries(map).map(([k, v]) => {
-    const provider = normalizeProviderIfPossible(k) || k;
-    return [provider, { ...vault.publicProvider(v), provider, enabled: provider === active }];
-  }).filter(Boolean));
+  const providers = [...new Set([...PROVIDERS, ...Object.keys(map).map(k => normalizeProviderIfPossible(k) || k)])];
+  return Object.fromEntries(providers.map((provider) => {
+    const cfg = providerConfigFromMap(map, provider) || {};
+    const readiness = providerReadiness(provider, cfg, active);
+    return [provider, { ...vault.publicProvider(cfg), provider, enabled: provider === active, readiness: readiness.status, ready: readiness.ready, visibleToParent: readiness.visibleToParent, statusMessage: readiness.message }];
+  }));
 }
 
 function providerLabel(p) {
@@ -333,7 +365,9 @@ function serializeSettings(row) {
     paymentMode: row.paymentMode,
     providerSelectionRule: 'one_active_provider_per_scope',
     providers: publicProviders(row),
-    publicMethods: methods,
+    providerStatuses: Object.values(publicProviders(row)).map(p => ({ provider:p.provider, label:providerLabel(p.provider), status:p.readiness, ready:p.ready, enabled:p.enabled, message:p.statusMessage, visibleToParent:p.visibleToParent })),
+    readyProviders: Object.values(publicProviders(row)).filter(p => p.ready && p.enabled).map(p => p.provider),
+    publicMethods: methods.filter(m => (publicProviders(row)[m.provider] || {}).ready !== false),
     methods,
     linkingRule: row.metadata?.linkingRule || row.accountReferenceFormat || 'elimuid',
     matchingRules: row.metadata?.matchingRules || { autoMatchElimuId: true, autoMatchInvoiceNumber: true, requireExactAmount: true },
@@ -1106,5 +1140,6 @@ module.exports = {
   queryPesapalTransactionStatus,
   normalizeProvider,
   normalizePaymentType,
-  normalizePaymentMethod
+  normalizePaymentMethod,
+  providerReadiness
 };

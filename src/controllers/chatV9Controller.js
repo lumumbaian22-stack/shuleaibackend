@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
+const { saveUploadAsset } = require('../services/mediaAssetService');
 const realtime = require('../services/realtimeService');
 const schoolLinkageService = require('../services/schoolLinkageService');
 const {
@@ -1106,9 +1107,6 @@ exports.pinThreadReply = async (req,res)=>{
 
 exports.uploadAttachment = async (req, res) => {
   try {
-    const uploadRoot = path.join(__dirname, '../../uploads/chat');
-    if (!fs.existsSync(uploadRoot)) fs.mkdirSync(uploadRoot, { recursive: true });
-
     let file = req.file || null;
     if (!file && req.files) {
       file = req.files.file || req.files.attachment || req.files.upload || null;
@@ -1118,39 +1116,34 @@ exports.uploadAttachment = async (req, res) => {
     if (!file) return res.status(400).json({ success: false, message: 'No file uploaded' });
 
     const originalName = file.originalname || file.name || file.filename || 'attachment';
-    const safeExt = path.extname(originalName).toLowerCase().replace(/[^.a-z0-9]/g, '') || '';
-    const safeBase = path.basename(originalName, safeExt).replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40) || 'attachment';
-    const filename = `chat-${req.user.id}-${Date.now()}-${Math.round(Math.random() * 1e9)}-${safeBase}${safeExt}`;
-    const dest = path.join(uploadRoot, filename);
+    const saved = await saveUploadAsset({
+      file,
+      schoolCode: schoolCodeOf(req),
+      ownerUserId: req.user.id,
+      kind: 'chat_attachment',
+      maxBytes: Number(process.env.CHAT_ATTACHMENT_MAX_BYTES || 25 * 1024 * 1024),
+      allowAnyMime: true,
+      deactivatePrevious: false,
+      metadata: { uploadedBy: req.user.id, role: req.user.role, module: 'chat' }
+    });
 
-    if (file.mv) {
-      await file.mv(dest);
-    } else if (file.path && fs.existsSync(file.path)) {
-      fs.copyFileSync(file.path, dest);
-    } else if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
-      fs.copyFileSync(file.tempFilePath, dest);
-    } else if (file.buffer) {
-      fs.writeFileSync(dest, file.buffer);
-    } else {
-      return res.status(400).json({ success: false, message: 'Attachment file could not be read' });
-    }
-
-    const relativeUrl = `/uploads/chat/${filename}`;
     const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
     const safeProto = req.get('host')?.includes('onrender.com') ? 'https' : proto;
+    const absoluteUrl = /^https?:\/\//i.test(saved.url) ? saved.url : `${safeProto}://${req.get('host')}${saved.url}`;
     res.status(201).json({ success: true, data: {
-      url: relativeUrl,
-      secureUrl: `${safeProto}://${req.get('host')}${relativeUrl}`,
+      url: saved.url,
+      secureUrl: absoluteUrl,
       name: originalName,
-      mimeType: file.mimetype || file.type || 'application/octet-stream',
-      size: file.size || (fs.statSync(dest).size || 0)
+      mimeType: saved.mimeType || file.mimetype || file.type || 'application/octet-stream',
+      size: saved.byteSize || file.size || 0,
+      storageProvider: saved.storageProvider,
+      durable: true
     } });
   } catch (error) {
     console.error('uploadAttachment error:', error);
-    res.status(500).json({ success: false, message: error.message || 'Attachment upload failed' });
+    res.status(error.status || 500).json({ success: false, message: error.message || 'Attachment upload failed' });
   }
 };
-
 exports.myAchievements = async (req, res) => {
   try {
     const events = await AchievementEvent.findAll({

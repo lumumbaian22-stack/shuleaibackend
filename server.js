@@ -155,7 +155,11 @@ async function start() {
   try {
     await sequelize.authenticate();
     console.log('✅ Database connection test SUCCESSFUL');
-    await ensureRuntimeSchema();
+    if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR === 'true' || process.env.NODE_ENV !== 'production') {
+      await ensureRuntimeSchema();
+    } else {
+      console.log('✅ Runtime schema repair disabled; production startup relies on completed migrations.');
+    }
     if (process.env.NODE_ENV === 'development') {
       await sequelize.sync({ alter: true });
       console.log('✅ Database models synchronized');

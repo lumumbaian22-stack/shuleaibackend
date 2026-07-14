@@ -8,9 +8,19 @@ module.exports = (sequelize, DataTypes) => {
     originalName: { type: DataTypes.STRING(255), allowNull: true },
     byteSize: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     checksum: { type: DataTypes.STRING(64), allowNull: false },
-    data: { type: DataTypes.BLOB('long'), allowNull: false },
+    data: { type: DataTypes.BLOB('long'), allowNull: true },
+    storageProvider: { type: DataTypes.STRING(40), allowNull: false, defaultValue: 'database' },
+    externalUrl: { type: DataTypes.TEXT, allowNull: true },
     metadata: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
     isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }
-  }, { tableName:'MediaAssets', indexes:[{unique:true,fields:['token']},{fields:['schoolCode','kind']},{fields:['ownerUserId','kind','isActive']}] });
+  }, {
+    tableName: 'MediaAssets',
+    indexes: [
+      { unique: true, fields: ['token'] },
+      { fields: ['schoolCode', 'kind'] },
+      { fields: ['ownerUserId', 'kind', 'isActive'] },
+      { fields: ['storageProvider'] }
+    ]
+  });
   return MediaAsset;
 };

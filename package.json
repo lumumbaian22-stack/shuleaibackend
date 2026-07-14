@@ -1,6 +1,6 @@
 {
   "name": "shuleai-backend",
-  "version": "2.1.517",
+  "version": "2.1.520",
   "description": "Complete School Intelligence System with PostgreSQL",
   "main": "server.js",
   "scripts": {
@@ -11,7 +11,11 @@
     "worker": "node src/workers/jobWorker.js",
     "seed:demo": "node scripts/seedDemoSchool.js",
     "render:build": "npm ci --omit=dev",
-    "render:predeploy": "npm run migrate"
+    "render:predeploy": "npm run migrate",
+    "prestart": "node scripts/prestartMigrate.js",
+    "test": "node --test tests/critical/*.test.js",
+    "test:critical": "node --test tests/critical/*.test.js",
+    "audit:routes": "node scripts/checkRouteWiring.js"
   },
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",

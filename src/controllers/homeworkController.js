@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
+const { saveUploadAsset } = require('../services/mediaAssetService');
 const { HomeTask, HomeTaskAssignment, Student, Teacher, Class, User, TeacherSubjectAssignment, ClassroomThread } = require('../models');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
@@ -378,34 +379,29 @@ async function saveHomeworkUploadedFile(req, options = {}) {
   if (!file) return null;
 
   const originalName = file.originalname || file.name || file.filename || `${kind}-file`;
-  const safeExt = path.extname(originalName).toLowerCase().replace(/[^.a-z0-9]/g, '') || '';
-  const safeBase = path.basename(originalName, safeExt).replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60) || `${kind}-file`;
-  const filename = `${prefix}-${req.user.id}-${Date.now()}-${Math.round(Math.random() * 1e9)}-${safeBase}${safeExt}`;
-  const dest = path.join(uploadRoot, filename);
-
-  if (file.mv) await file.mv(dest);
-  else if (file.path && fs.existsSync(file.path)) fs.copyFileSync(file.path, dest);
-  else if (file.tempFilePath && fs.existsSync(file.tempFilePath)) fs.copyFileSync(file.tempFilePath, dest);
-  else if (file.buffer) fs.writeFileSync(dest, file.buffer);
-  else throw new Error(`${kind} file could not be read`);
-
-  const relativeUrl = `/uploads/homework/${filename}`;
-  const actualSize = file.size || (fs.statSync(dest).size || 0);
-  const maxDbBytes = Number(process.env.HOMEWORK_DB_FILE_MAX_BYTES || 10 * 1024 * 1024);
-  const payload = {
-    url: relativeUrl,
-    secureUrl: homeTaskAttachmentUrl(req, relativeUrl),
-    viewUrl: homeTaskAttachmentUrl(req, `/homework-files/${filename}`),
-    downloadUrl: homeTaskAttachmentUrl(req, `/homework-files/${filename}`),
-    filename,
-    name: originalName,
-    mimeType: file.mimetype || file.type || 'application/octet-stream',
-    size: actualSize,
+  const saved = await saveUploadAsset({
+    file,
+    schoolCode: req.user.schoolCode,
+    ownerUserId: req.user.id,
     kind,
-    storedInDb: actualSize <= maxDbBytes
+    maxBytes: Number(process.env.HOMEWORK_FILE_MAX_BYTES || 25 * 1024 * 1024),
+    allowAnyMime: true,
+    deactivatePrevious: false,
+    metadata: { uploadedBy: req.user.id, role: req.user.role, module: 'homework', prefix }
+  });
+  return {
+    url: saved.url,
+    secureUrl: homeTaskAttachmentUrl(req, saved.url),
+    viewUrl: homeTaskAttachmentUrl(req, saved.url),
+    downloadUrl: homeTaskAttachmentUrl(req, saved.url),
+    filename: saved.token || originalName,
+    name: originalName,
+    mimeType: saved.mimeType || file.mimetype || file.type || 'application/octet-stream',
+    size: saved.byteSize || file.size || 0,
+    kind,
+    storageProvider: saved.storageProvider,
+    durable: true
   };
-  if (payload.storedInDb) payload.dataBase64 = fs.readFileSync(dest).toString('base64');
-  return payload;
 }
 
 exports.uploadHomeworkAttachment = async (req, res) => {

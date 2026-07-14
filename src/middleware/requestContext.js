@@ -1,5 +1,6 @@
 const { randomUUID } = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
+const { captureException } = require('../services/errorMonitorService');
 
 const requestStore = new AsyncLocalStorage();
 
@@ -65,6 +66,7 @@ function productionErrorHandler(err, req, res, next) {
     ? 'Internal server error'
     : (err.message || 'Internal server error');
   console.error(`[${req.requestId || 'no-request-id'}]`, err.stack || err);
+  captureException(err, { requestId: req.requestId, request: { method: req.method, url: req.originalUrl || req.url, headers: req.headers }, user: req.user, tags: { status } });
   if (res.headersSent) return next(err);
   res.status(status).json({ success: false, message: safeMessage, requestId: req.requestId });
 }

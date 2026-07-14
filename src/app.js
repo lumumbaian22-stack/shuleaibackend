@@ -56,6 +56,7 @@ const reportHistoryRoutes = require('./routes/reportHistoryRoutes');
 const studentLifecycleRoutes = require('./routes/studentLifecycleRoutes');
 const advancedAnalyticsRoutes = require('./routes/advancedAnalyticsRoutes');
 const birthdayRoutes = require('./routes/birthdayRoutes');
+const monitoringRoutes = require('./routes/monitoringRoutes');
 const { routeAwareApiLimiter } = require('./middleware/productionRateLimits');
 const { requestContext, productionErrorHandler } = require('./middleware/requestContext');
 const { ensureRuntimeSchema } = require('./utils/schemaSafety');
@@ -63,6 +64,8 @@ const { accessSchemaMiddleware, ensureSchoolAccessSchema } = require('./utils/ac
 const { requireFeature } = require('./middleware/featureGate');
 const { protect } = require('./middleware/auth');
 const { applyLoadBalancingMiddleware, loadBalancingConfig } = require('./config/loadBalancing');
+const { getStorageHealth } = require('./services/objectStorageService');
+const { getMonitoringHealth } = require('./services/errorMonitorService');
 
 assertRequiredEnv();
 
@@ -190,7 +193,7 @@ function healthPayload(req, extra = {}) {
   return {
     success: true,
     version: require('../package.json').version,
-    build: 'v2022-cbc-report-card-docx-template-lock',
+    build: 'v2025-canonical-analytics-data-cleanup-lock',
     instanceId: req.app.locals.shuleAiInstanceId || loadBalancingConfig.instanceId,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
@@ -252,10 +255,14 @@ app.get('/api/health/detailed', async (req, res) => {
     };
   } catch (e) { checks.aiTutor = { ok: false, error: e.message }; }
   try {
+    const storageHealth = getStorageHealth();
     const tmp = path.join(uploadDir, `.health-${Date.now()}.tmp`);
     fs.writeFileSync(tmp, 'ok'); fs.unlinkSync(tmp);
-    checks.storage = { ok: true, uploadDir };
-  } catch (e) { checks.storage = { ok: false, error: e.message, uploadDir }; }
+    checks.storage = { ok: storageHealth.durable, uploadDir, ...storageHealth };
+  } catch (e) { checks.storage = { ok: false, error: e.message, uploadDir, ...getStorageHealth() }; }
+  try {
+    checks.monitoring = { ok: true, ...getMonitoringHealth() };
+  } catch (e) { checks.monitoring = { ok: false, error: e.message }; }
   const ok = Object.values(checks).every(x => x.ok);
   res.status(ok ? 200 : 503).json({ success: ok, status: ok ? 'ready' : 'degraded', uptime: process.uptime(), latencyMs: Date.now() - started, timestamp: new Date().toISOString(), checks });
 });
@@ -415,6 +422,7 @@ app.use('/api/report-cards', reportHistoryRoutes);
 app.use('/api/lifecycle/birthdays', birthdayRoutes);
 app.use('/api/lifecycle', studentLifecycleRoutes);
 app.use('/api/analytics/advanced', advancedAnalyticsRoutes);
+app.use('/api/monitoring', monitoringRoutes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {

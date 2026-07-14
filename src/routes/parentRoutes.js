@@ -3,7 +3,8 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const parentController = require('../controllers/parentController');
 const parentMessageController = require('../controllers/parentMessageController');
-const analyticsController = require('../controllers/analyticsController'); // Add import
+const analyticsController = require('../controllers/analyticsController');
+const analyticsV152Controller = require('../controllers/analyticsV152Controller'); // Add import
 const subjectSelectionController = require('../controllers/subjectSelectionController');
 
 router.use(protect, authorize('parent'));
@@ -32,6 +33,6 @@ router.get('/payments', parentController.getPayments);
 router.post('/payment-confirm', parentController.confirmPayment);
 
 // Analytics (NEW)
-router.get('/analytics', analyticsController.getParentAnalytics);
+router.get('/analytics', analyticsV152Controller.getDashboardAnalytics);
 
 module.exports = router;

@@ -6,7 +6,8 @@ const teacherSignupController = require('../controllers/teacherSignupController'
 const dutyController = require('../controllers/dutyController');
 const adminController = require('../controllers/adminController');
 const classController = require('../controllers/classController');
-const analyticsController = require('../controllers/analyticsController'); // Add import
+const analyticsController = require('../controllers/analyticsController');
+const analyticsV152Controller = require('../controllers/analyticsV152Controller'); // Add import
 const parentMessageController = require('../controllers/parentMessageController');
 const subjectSelectionController = require('../controllers/subjectSelectionController');
 
@@ -104,6 +105,6 @@ router.get('/messages/:parentId', parentMessageController.getAdminMessages);
 router.post('/reply-parent', parentMessageController.adminReplyToParent);
 
 // Analytics (NEW)
-router.get('/analytics', analyticsController.getAdminAnalytics);
+router.get('/analytics', analyticsV152Controller.getDashboardAnalytics);
 
 module.exports = router;

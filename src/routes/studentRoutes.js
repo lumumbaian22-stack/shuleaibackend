@@ -4,6 +4,7 @@ const { protect, authorize } = require('../middleware/auth');
 const studentController = require('../controllers/studentController');
 const authController = require('../controllers/authController');
 const analyticsController = require('../controllers/analyticsController');
+const analyticsV152Controller = require('../controllers/analyticsV152Controller');
 const subjectSelectionController = require('../controllers/subjectSelectionController');
 const { MoodCheckin } = require('../models');
 
@@ -28,7 +29,7 @@ router.post('/group-message', studentController.sendGroupMessage);
 router.get('/group-messages', studentController.getGroupMessages);
 
 // Analytics (NEW)
-router.get('/analytics', analyticsController.getStudentAnalytics);
+router.get('/analytics', analyticsV152Controller.getDashboardAnalytics);
 router.get('/subject-selection', subjectSelectionController.getStudentOwnSelection);
 router.put('/subject-selection', subjectSelectionController.saveStudentOwnSelection);
 

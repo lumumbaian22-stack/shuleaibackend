@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const superAdminController = require('../controllers/superAdminController');
-const analyticsController = require('../controllers/analyticsController'); // Add this import
+const analyticsController = require('../controllers/analyticsController');
+const analyticsV152Controller = require('../controllers/analyticsV152Controller'); // Add this import
 
 router.use(protect, authorize('super_admin'));
 
@@ -65,6 +66,6 @@ router.get('/growth-data', superAdminController.getGrowthData);
 router.get('/school-distribution', superAdminController.getSchoolDistribution);
 
 // Analytics (NEW)
-router.get('/analytics', analyticsController.getSuperAdminAnalytics);
+router.get('/analytics', analyticsV152Controller.getDashboardAnalytics);
 
 module.exports = router;

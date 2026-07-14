@@ -5,7 +5,8 @@ const teacherController = require('../controllers/teacherController');
 const teacherMessageController = require('../controllers/teacherMessageController');
 const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
-const analyticsController = require('../controllers/analyticsController'); // Add import
+const analyticsController = require('../controllers/analyticsController');
+const analyticsV152Controller = require('../controllers/analyticsV152Controller'); // Add import
 const subjectSelectionController = require('../controllers/subjectSelectionController');
 const classTeacherOnly=require('../middleware/classTeacherOnly');
 
@@ -75,6 +76,6 @@ router.post('/tasks/:taskId/complete', taskController.completeTask);
 router.get('/attendance/:date', teacherController.getAttendanceForDate);
 
 // Analytics (NEW)
-router.get('/analytics', analyticsController.getTeacherAnalytics);
+router.get('/analytics', analyticsV152Controller.getDashboardAnalytics);
 
 module.exports = router;
