@@ -1,4 +1,4 @@
-# ShuleAI Production Rollout Runbook — v2023
+# ShuleAI Production Rollout Runbook
 
 ## Deployment order
 1. Add/check Render environment variables using `.env.example`.

@@ -1,4 +1,4 @@
-const { School, User, Admin, SchoolNameRequest, Student, Teacher, Parent, ApprovalRequest } = require('../models');
+const { School, User, Admin, SchoolNameRequest, Student, Teacher, Parent, ApprovalRequest, Alert, SubscriptionPlan } = require('../models');
 const { createAlert } = require('../services/notificationService');
 // Removed self-import bug
 const { Op } = require('sequelize');

@@ -101,7 +101,10 @@ async function getSchoolStudents(schoolCode) {
 }
 async function getSchoolOptions(schoolCode) {
   const [classes, students, teachers, subjectRows] = await Promise.all([
-    safeQuery(`SELECT id, name, grade, stream, "teacherId", curriculum, "curriculumLevel" WHERE "schoolCode"=:schoolCode AND COALESCE("isActive",true)=true ORDER BY grade,name,stream`, { schoolCode }),
+    safeQuery(`SELECT id, name, grade, stream, "teacherId", curriculum, "curriculumLevel"
+               FROM "Classes"
+               WHERE "schoolCode"=:schoolCode AND COALESCE("isActive",true)=true
+               ORDER BY grade,name,stream`, { schoolCode }),
     getSchoolStudents(schoolCode),
     safeQuery(`SELECT t.id AS "teacherId", u.id AS "userId", u.name, u.email, t.department, t.subjects FROM "Teachers" t JOIN "Users" u ON u.id=t."userId" WHERE u."schoolCode"=:schoolCode AND u.role='teacher' AND COALESCE(u."isActive",true)=true ORDER BY u.name`, { schoolCode }),
     safeQuery(`SELECT subject FROM "AcademicRecords" WHERE "schoolCode"=:schoolCode AND NULLIF(TRIM(subject),'') IS NOT NULL UNION SELECT subject FROM "TeacherSubjectAssignments" tsa JOIN "Teachers" t ON t.id=tsa."teacherId" JOIN "Users" u ON u.id=t."userId" WHERE u."schoolCode"=:schoolCode ORDER BY subject`, { schoolCode })
@@ -150,22 +153,57 @@ async function resolveSchoolScope(req, options, filters) {
 
   if (scopeType === 'stream') {
     const matched = options.classes.filter(c => text(c.stream).toLowerCase() === text(scopeId).toLowerCase());
-    if (!matched.length) throw Object.assign(new Error('Selected stream is not available in your school.'), { status: 404 });
-    classIds = matched.map(c => Number(c.id));
-    studentIds = options.students.filter(s => classIds.includes(Number(s.classId))).map(s => Number(s.id));
-    label = `Stream ${matched[0].stream}`;
+    if (!matched.length) {
+      // Recover from stale browser filters without crossing tenant boundaries.
+      scopeType = role === 'teacher' ? 'class' : 'school';
+      scopeId = role === 'teacher' && classIds.length ? String(classIds[0]) : '';
+      label = role === 'teacher' ? 'Assigned Classes' : 'Whole School';
+    } else {
+      classIds = matched.map(c => Number(c.id));
+      studentIds = options.students.filter(s => classIds.includes(Number(s.classId))).map(s => Number(s.id));
+      label = `Stream ${matched[0].stream}`;
+    }
   } else if (scopeType === 'class') {
-    const selected = options.classes.find(c => Number(c.id) === Number(scopeId));
-    if (!selected || (role === 'teacher' && !classIds.includes(Number(selected.id)))) throw Object.assign(new Error('Selected class is outside your authorized scope.'), { status: 403 });
-    classIds = [Number(selected.id)];
-    studentIds = options.students.filter(s => Number(s.classId) === Number(selected.id)).map(s => Number(s.id));
-    label = selected.name;
+    let selected = options.classes.find(c => Number(c.id) === Number(scopeId));
+    if (!selected || (role === 'teacher' && !classIds.includes(Number(selected.id)))) {
+      if (role === 'teacher' && classIds.length) selected = options.classes.find(c => Number(c.id) === Number(classIds[0]));
+      if (selected) {
+        scopeId = String(selected.id);
+      } else {
+        scopeType = role === 'teacher' ? 'class' : 'school';
+        scopeId = '';
+        label = role === 'teacher' ? 'Assigned Classes' : 'Whole School';
+        if (role !== 'teacher') {
+          classIds = options.classes.map(c => Number(c.id));
+          studentIds = options.students.map(s => Number(s.id));
+        }
+      }
+    }
+    if (selected) {
+      classIds = [Number(selected.id)];
+      studentIds = options.students.filter(s => Number(s.classId) === Number(selected.id)).map(s => Number(s.id));
+      label = selected.name;
+    }
   } else if (scopeType === 'student') {
-    const selected = options.students.find(s => Number(s.id) === Number(scopeId));
-    if (!selected || (role === 'teacher' && !studentIds.includes(Number(selected.id)))) throw Object.assign(new Error('Selected student is outside your authorized scope.'), { status: 403 });
-    studentIds = [Number(selected.id)];
-    classIds = selected.classId ? [Number(selected.classId)] : [];
-    label = `${selected.name} (${selected.elimuid || 'Student'})`;
+    let selected = options.students.find(s => Number(s.id) === Number(scopeId));
+    if (!selected || (role === 'teacher' && !studentIds.includes(Number(selected.id)))) {
+      selected = role === 'teacher' ? options.students.find(s => studentIds.includes(Number(s.id))) : null;
+      if (!selected) {
+        scopeType = role === 'teacher' ? 'class' : 'school';
+        scopeId = '';
+        label = role === 'teacher' ? 'Assigned Classes' : 'Whole School';
+        if (role !== 'teacher') {
+          classIds = options.classes.map(c => Number(c.id));
+          studentIds = options.students.map(s => Number(s.id));
+        }
+      }
+    }
+    if (selected) {
+      studentIds = [Number(selected.id)];
+      classIds = selected.classId ? [Number(selected.classId)] : [];
+      scopeId = String(selected.id);
+      label = `${selected.name} (${selected.elimuid || 'Student'})`;
+    }
   } else if (scopeType === 'teacher') {
     if (role !== 'admin') throw Object.assign(new Error('Teacher analytics scope is available to school administrators only.'), { status: 403 });
     const selected = options.teachers.find(t => Number(t.id) === Number(scopeId));
@@ -440,7 +478,9 @@ async function buildChildStudentAnalytics(req) {
   const schoolCode = student.User?.schoolCode || req.user.schoolCode;
   if (schoolCode !== req.user.schoolCode) throw Object.assign(new Error('Student is outside your school account.'), { status: 403 });
   const cls = await linkage.resolveStudentClass(student, schoolCode).catch(() => null);
+  const [school, options] = await Promise.all([getSchool(schoolCode), getSchoolOptions(schoolCode)]);
   const scope = { schoolCode, studentIds: [Number(student.id)], classIds: cls ? [Number(cls.id)] : [], scopeType: 'student', scopeId: String(student.id), label: student.User?.name || 'Student', subject: filters.scopeType === 'subject' ? filters.scopeId : null, teacherId: null };
+  const academicContext = resolveCurriculumContext(school, { classIds: cls?.id ? [cls.id] : [], studentIds: [student.id] }, options);
   const [records, attendance, tasks, reports, badges, achievements, alerts, timetableRows] = await Promise.all([
     academicRecords(scope, filters, true), attendanceRecords(scope, filters), taskRows(scope), reportRows(scope, filters),
     safeQuery(`SELECT sb."awardedAt", b.name, b.description, b.icon FROM "StudentBadges" sb JOIN "Badges" b ON b.id=sb."badgeId" WHERE sb."studentId"=:studentId ORDER BY sb."awardedAt" DESC`, { studentId: student.id }),
@@ -459,7 +499,6 @@ async function buildChildStudentAnalytics(req) {
   const timetable = timetableRows[0];
   const rawSlots = Array.isArray(timetable?.slots) ? timetable.slots : [];
   const className = cls?.name || student.grade;
-  const academicContext = resolveCurriculumContext(school, { classIds: cls?.id ? [cls.id] : [], studentIds: [student.id] }, options);
   const slots = rawSlots.filter(slot => Number(slot.classId) === Number(cls?.id) || text(slot.className || slot.class).toLowerCase() === text(className).toLowerCase()).slice(0,12);
   const lastReport = [...reports].filter(r=>r.status==='published').sort((a,b)=>new Date(b.publishedAt||0)-new Date(a.publishedAt||0))[0] || null;
   const avg = average(records.map(r=>r.score));

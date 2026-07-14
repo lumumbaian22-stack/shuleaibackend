@@ -193,7 +193,7 @@ function healthPayload(req, extra = {}) {
   return {
     success: true,
     version: require('../package.json').version,
-    build: 'v2025-canonical-analytics-data-cleanup-lock',
+    build: 'v2027-runtime-integrity-defined-symbols-lock',
     instanceId: req.app.locals.shuleAiInstanceId || loadBalancingConfig.instanceId,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),

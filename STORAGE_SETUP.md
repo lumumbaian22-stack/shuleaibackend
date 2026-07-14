@@ -1,6 +1,6 @@
 # Durable Upload Storage Setup
 
-v2023 stops new user-facing uploads from depending on Render local disk.
+This build keeps new user-facing uploads from depending on Render local disk.
 
 ## Recommended: Cloudinary
 Set these in Render:
@@ -25,4 +25,4 @@ When Cloudinary is configured, new school logos, profile photos, signatures, hom
 Without Cloudinary, ShuleAI stores uploaded assets in the `MediaAssets` table. This is persistent across Render redeploys, unlike `/uploads`, but large files can grow the database. Cloudinary is better for rollout.
 
 ## Legacy local files
-Old `/uploads/...` links may still work until Render deletes local disk. Re-upload important logos/signatures/photos once v2023 is deployed so they become durable.
+Old `/uploads/...` links may still work until Render deletes local disk. Re-upload important logos/signatures/photos after deployment so they become durable.

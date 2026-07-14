@@ -1,27 +1,25 @@
-# V2025 Integration Check Report
+# V2027 Integration Check Report
 
-Build: 2025-canonical-analytics-data-cleanup-lock
+Build: 2027-runtime-integrity-defined-symbols-lock
 
-## Checks performed
-- Parsed backend route declarations from `backend/src/routes`.
-- Parsed frontend `apiRequest()` calls from `frontend/js`.
-- Patched role analytics API helpers to use `/api/analytics/dashboard`.
-- Patched role analytics routes to use the canonical analytics dashboard controller.
-- Removed stale version-lock markdown notes from the deployment package.
-- Removed unused `frontend/js/final-locked-overrides.js`.
+## Confirmed checks
+- JavaScript syntax check passed across backend and frontend source files.
+- ESLint `no-undef` check passed for backend source.
+- ESLint `no-undef` check passed for frontend source after adding canonical runtime guards.
+- Backend local require/import path scan found no missing local files.
+- Backend route wiring script loaded all route files successfully.
+- Static frontend API manifest matched all parsed frontend API calls to backend route declarations.
 
 ## Route/API counts
-- Backend route declarations parsed: 583
-- Frontend API calls parsed: 494
-- Backend analytics route declarations parsed: 20
-- Frontend analytics API calls parsed: 14
+- Backend mounted route declarations parsed: 603
+- Frontend API calls parsed: 513
+- Frontend API calls statically matched to backend routes: 513
+- Unmatched frontend API calls: 0
 
-## Analytics canonical route
-The active analytics dashboard route is:
+## Runtime defined-symbol fixes
+- Added missing backend model imports in `superAdminController`: `Alert` and `SubscriptionPlan`.
+- Added `frontend/js/runtime-integrity-guards.js` and loaded it immediately after `api.js`.
+- Guarded legacy dashboard helper names that could previously crash when a section called an unloaded helper.
 
-`GET /api/analytics/dashboard`
-
-The role-specific analytics endpoints now delegate to the same canonical controller, so dashboards do not split between old/fallback analytics and the refined analytics system.
-
-## Notes
-This static parser checks wiring patterns; it does not replace live database testing. Final rollout should still test each role with real school data after deployment.
+## Important limitation
+This is a static/code-level audit. It proves the package has no detected syntax errors, missing local imports, missing controller exports in route loading, or parsed frontend API calls without backend routes. It cannot prove live database data quality or provider credentials without the Render production database and provider sandbox/live tests.
