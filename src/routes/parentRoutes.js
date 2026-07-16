@@ -17,6 +17,7 @@ router.get('/child/:studentId/report-card-details', parentController.getChildRep
 router.post('/report-absence', parentController.reportAbsence);
 router.get('/fees/:studentId', parentController.getFees);
 router.post('/fees/pay', parentController.addPayment);
+router.get('/message-targets', parentMessageController.getMessageTargets);
 router.get('/conversations', parentMessageController.getConversations);
 router.get('/messages/:otherUserId', parentMessageController.getMessages);
 router.post('/message', parentMessageController.sendMessage);

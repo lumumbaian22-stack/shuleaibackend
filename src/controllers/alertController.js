@@ -197,14 +197,16 @@ exports.suggestParentAlert = async (req, res) => {
       schoolName: school?.name || schoolCode || 'the school',
       extraContext
     });
-    await incrementAiSuggestionUsage({ schoolCode, month, provider: suggestion.provider, model: suggestion.model });
+    if (!suggestion.localFallback) {
+      await incrementAiSuggestionUsage({ schoolCode, month, provider: suggestion.provider, model: suggestion.model });
+    }
     res.json({
       success: true,
       data: {
         ...suggestion,
-        sourceType: 'ai_generated',
-        aiLabel: 'AI-generated message suggestion',
-        usage: { used: used + 1, limit, month }
+        sourceType: suggestion.localFallback ? 'system_template' : 'ai_generated',
+        aiLabel: suggestion.localFallback ? 'Smart local template suggestion' : 'AI-generated message suggestion',
+        usage: { used: used + (suggestion.localFallback ? 0 : 1), limit, month }
       }
     });
   } catch (error) {

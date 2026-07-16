@@ -334,6 +334,56 @@ function consecutiveAttendanceStreak(rows) {
   return streak;
 }
 
+
+function profileValue(obj, ...keys) {
+  for (const key of keys) {
+    const v = key.split('.').reduce((acc, part) => acc && acc[part], obj);
+    if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+  }
+  return '';
+}
+function buildKemisReadiness({ school, options, attendance, academicContext }) {
+  const students = options.students || [];
+  const classes = options.classes || [];
+  const count = students.length || 0;
+  const missingUpi = students.filter(s => !text(s.upi || s.UPI || s.elimuid)).length;
+  const missingGender = students.filter(s => !text(s.gender)).length;
+  const missingClass = students.filter(s => !s.classId && !text(s.className || s.grade)).length;
+  const byGender = students.reduce((map, s) => { const key=text(s.gender,'Unspecified'); map.set(key, num(map.get(key))+1); return map; }, new Map());
+  const byClass = students.reduce((map, s) => { const key=text(s.className || s.grade,'Unassigned'); map.set(key, num(map.get(key))+1); return map; }, new Map());
+  const sneRows = students.filter(s => s.sneStatus || s.specialNeeds || s.specialNeedsStatus);
+  const schoolProfileMissing = [];
+  if (!profileValue(school, 'registrationNumber', 'settings.registrationNumber', 'settings.reportCardSettings.registrationNumber')) schoolProfileMissing.push('School registration number');
+  if (!profileValue(school, 'address.county', 'settings.county', 'county')) schoolProfileMissing.push('County');
+  if (!profileValue(school, 'system', 'settings.curriculum', 'settings.curriculumType')) schoolProfileMissing.push('Curriculum');
+  if (!profileValue(school, 'settings.capitationAccount', 'settings.bankAccount', 'bankAccount')) schoolProfileMissing.push('Capitation/bank details');
+  const checks = [
+    { key:'upi', label:'UPI / learner identifier coverage', passed: count - missingUpi, total: count, missing: missingUpi },
+    { key:'gender', label:'Gender completeness', passed: count - missingGender, total: count, missing: missingGender },
+    { key:'class', label:'Class placement completeness', passed: count - missingClass, total: count, missing: missingClass },
+    { key:'schoolProfile', label:'School profile completeness', passed: Math.max(0, 4 - schoolProfileMissing.length), total: 4, missing: schoolProfileMissing.length }
+  ];
+  const score = checks.length ? Math.round(checks.reduce((sum, c) => sum + pct(c.passed, c.total || 1), 0) / checks.length) : 0;
+  return {
+    score,
+    status: score >= 85 ? 'Ready for review' : score >= 65 ? 'Needs cleanup' : 'Incomplete',
+    missing: [
+      ...(missingUpi ? [`${missingUpi} learner(s) missing UPI/identifier`] : []),
+      ...(missingGender ? [`${missingGender} learner(s) missing gender`] : []),
+      ...(missingClass ? [`${missingClass} learner(s) missing class placement`] : []),
+      ...schoolProfileMissing.map(x => `${x} missing`)
+    ],
+    enrollmentByGender: [...byGender.entries()].map(([name,value]) => ({ name, value })),
+    enrollmentByClass: [...byClass.entries()].map(([name,value]) => ({ name, value })),
+    sneCount: sneRows.length,
+    capitationEligible: Math.max(0, count - missingUpi - missingClass),
+    attendanceSupported: attendanceRate(attendance) >= 1 ? Math.max(0, count - missingUpi - missingClass) : 0,
+    curriculum: academicContext?.curriculum || 'cbc',
+    expectedSubjects: academicContext?.expectedSubjects || [],
+    checks
+  };
+}
+
 async function buildSchoolAnalytics(req) {
   const filters = filtersFrom(req);
   const schoolCode = req.user.schoolCode;
@@ -385,6 +435,7 @@ async function buildSchoolAnalytics(req) {
     if (rows.length && rate < 75 && !atRiskStudents.some(r => Number(r.id) === Number(s.id))) atRiskStudents.push({ id: s.id, name: s.name, student: s.name, average: studentPerformance.find(p => p.name === s.name)?.average || 0, attendance: rate });
   });
   const attendanceClassIds = activeClasses ? populatedClassIds : scope.classIds;
+  const kemisReadiness = buildKemisReadiness({ school, options, attendance, academicContext });
   const operational = [
     { label: 'Average Class Size', value: activeClasses ? round(scope.studentIds.length / activeClasses, 1) : 0 },
     { label: 'Student–Teacher Ratio', value: options.teachers.length ? round(scope.studentIds.length / options.teachers.length, 1) : 0 },
@@ -427,7 +478,17 @@ async function buildSchoolAnalytics(req) {
       topStudents: studentPerformance.slice(0, 8), riskStudents: atRiskStudents.slice(0, 10), topTeachers: teacherPerformance.slice(0, 8), topSubjects: subjectPerformance.slice(0, 8),
       assessmentPerformance: assessmentPerformance.slice(0, 10), streamPerformance, operational, classFeePerformance, expenseCategories:[...expenseCategories.entries()].map(([name,value])=>({name,value})), reconciliation:[{name:'Verified / completed payments',value:payments.filter(p=>statusComplete(p.status)).length},{name:'Pending payments',value:payments.filter(p=>text(p.status).toLowerCase()==='pending').length},{name:'Failed / reversed payments',value:payments.filter(p=>['failed','reversed','cancelled'].includes(text(p.status).toLowerCase())).length}], bursarySummary:[{name:'Credits / bursaries applied',value:fee.credits},{name:'Students with credit',value:new Set(feesRows.filter(f=>num(f.creditAmount)>0).map(f=>Number(f.studentId))).size}],
       alerts: (req.user.role === 'finance_officer' ? alerts.filter(analyticsFinanceAlertOnly) : alerts).map(alertInsightRow),
-      defaulters: feesRows.filter(f => num(f.totalAmount) - Math.max(num(f.parentPaidAmount), num(f.paidAmount)) - num(f.creditAmount) > 0).map(f => { const student = studentById.get(Number(f.studentId)); return { student: student?.name || `Student ${f.studentId}`, className: student?.className || student?.grade || 'Unassigned', outstanding: Math.max(0, num(f.totalAmount) - Math.max(num(f.parentPaidAmount), num(f.paidAmount)) - num(f.creditAmount)), dueDate: f.dueDate }; }).sort((a, b) => b.outstanding - a.outstanding).slice(0, 20)
+      defaulters: feesRows.filter(f => num(f.totalAmount) - Math.max(num(f.parentPaidAmount), num(f.paidAmount)) - num(f.creditAmount) > 0).map(f => { const student = studentById.get(Number(f.studentId)); return { student: student?.name || `Student ${f.studentId}`, className: student?.className || student?.grade || 'Unassigned', outstanding: Math.max(0, num(f.totalAmount) - Math.max(num(f.parentPaidAmount), num(f.paidAmount)) - num(f.creditAmount)), dueDate: f.dueDate }; }).sort((a, b) => b.outstanding - a.outstanding).slice(0, 20),
+      kemisReadiness: [
+        { name:'KEMIS readiness score', value:`${kemisReadiness.score}%`, status:kemisReadiness.status },
+        { name:'Learners missing UPI/identifier', value:kemisReadiness.missing.filter(x=>x.toLowerCase().includes('upi')).length ? kemisReadiness.missing.find(x=>x.toLowerCase().includes('upi')) : '0' },
+        { name:'Capitation eligible learners', value:kemisReadiness.capitationEligible },
+        { name:'SNE learners', value:kemisReadiness.sneCount },
+        { name:'Curriculum', value:kemisReadiness.curriculum }
+      ],
+      enrollmentByGender: kemisReadiness.enrollmentByGender,
+      enrollmentByClass: kemisReadiness.enrollmentByClass,
+      complianceMissing: kemisReadiness.missing.map(x => ({ title:'Compliance missing data', message:x, tone:'warning', icon:'triangle-alert' }))
     },
     finance: fee, taskSummary: task, updatedAt: new Date().toISOString(), realData: true, tenantScoped: schoolCode
   };
@@ -590,7 +651,11 @@ const EXPORT_SECTION_LABELS = {
   'list:insights': 'Platform Insights',
   'list:schoolComparison': 'School Comparison',
   'list:dataQualityWarnings': 'Data Quality Warnings',
-  'list:recommendedActions': 'Recommended Actions'
+  'list:recommendedActions': 'Recommended Actions',
+  'list:kemisReadiness': 'KEMIS Readiness',
+  'list:enrollmentByGender': 'Enrollment by Gender',
+  'list:enrollmentByClass': 'Enrollment by Class',
+  'list:complianceMissing': 'Compliance Missing Data'
 };
 const EXPORT_SECTION_CATEGORIES = {
   kpis: 'overview',
@@ -601,7 +666,7 @@ const EXPORT_SECTION_CATEGORIES = {
   'chart:reportStatus':'reports','list:timetable':'reports',
   'chart:classPerformance':'academic','chart:subjectPerformance':'academic','chart:performanceTrend':'academic','chart:assessmentBreakdown':'academic','chart:strengthsSplit':'academic','chart:homeworkSplit':'academic',
   'list:topClasses':'academic','list:atRiskClasses':'academic','list:topSubjects':'academic','list:topStudents':'academic','list:riskStudents':'academic','list:streamPerformance':'academic','list:subjectPerformance':'academic','list:recentAssessments':'academic','list:recommendations':'academic','list:tasks':'academic','list:badges':'academic','list:achievements':'academic','list:leaderboard':'academic','list:assessmentPerformance':'academic',
-  'chart:growth':'overview','chart:geographic':'overview','list:operational':'overview','list:alerts':'overview','list:recentAlerts':'overview','list:actionableInsights':'overview','list:topSchools':'overview','list:atRiskSchools':'overview','list:usage':'overview','list:approvals':'overview','list:insights':'overview','list:schoolComparison':'overview','list:dataQualityWarnings':'overview','list:recommendedActions':'overview'
+  'chart:growth':'overview','chart:geographic':'overview','list:operational':'overview','list:alerts':'overview','list:recentAlerts':'overview','list:actionableInsights':'overview','list:topSchools':'overview','list:atRiskSchools':'overview','list:usage':'overview','list:approvals':'overview','list:insights':'overview','list:schoolComparison':'overview','list:dataQualityWarnings':'overview','list:recommendedActions':'overview','list:kemisReadiness':'compliance','list:enrollmentByGender':'compliance','list:enrollmentByClass':'compliance','list:complianceMissing':'compliance'
 };
 function sectionLabel(key) { return EXPORT_SECTION_LABELS[key] || key.replace(/^(chart:|list:)/,'').replace(/([A-Z])/g,' $1').replace(/^./,m=>m.toUpperCase()); }
 function sectionCategory(key) { return EXPORT_SECTION_CATEGORIES[key] || 'overview'; }
@@ -700,9 +765,11 @@ function enrichAnalyticsData(data) {
   const warnings = buildDataQualityWarnings(data);
   const actions = buildRecommendedActions(data, warnings);
   data.lists = data.lists || {};
-  data.lists.dataQualityWarnings = warnings;
-  data.lists.recommendedActions = actions;
-  data.intelligence = buildExecutiveSummary(data, warnings, actions);
+  const variant = String(data.variant || '').toLowerCase();
+  data.lists.dataQualityWarnings = ['platform','school'].includes(variant) ? warnings : [];
+  data.lists.recommendedActions = ['platform','school'].includes(variant) ? actions : [];
+  data.intelligence = ['platform','school'].includes(variant) ? buildExecutiveSummary(data, warnings, actions) : null;
+  data.showIntelligencePanel = ['platform','school'].includes(variant);
   data.subtitle = data.subtitle || 'Analytics intelligence from live school data';
   data.exportSections = exportSectionsFor(data);
   return data;

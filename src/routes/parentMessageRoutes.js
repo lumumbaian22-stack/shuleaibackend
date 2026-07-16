@@ -5,6 +5,7 @@ const parentMessageController = require('../controllers/parentMessageController'
 
 // Parent routes
 router.post('/message', protect, authorize('parent'), parentMessageController.sendMessage);
+router.get('/message-targets', parentMessageController.getMessageTargets);
 router.get('/conversations', protect, authorize('parent'), parentMessageController.getConversations);
 router.get('/messages/:otherUserId', protect, authorize('parent'), parentMessageController.getMessages);
 

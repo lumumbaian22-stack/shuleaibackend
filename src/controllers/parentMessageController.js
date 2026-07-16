@@ -56,39 +56,27 @@ async function findStudentForParent({ parent, studentId, schoolCode, user }) {
 }
 
 async function findClassTeacherForStudent(student, schoolCode) {
+  // Strict linkage only: parent -> own child -> child.classId -> class teacher.
+  // No grade/name fallback is allowed because it can route messages to the wrong teacher.
+  const classId = Number(student?.classId || 0);
+  if (!classId) return null;
   const rows = await sequelize.query(
     `SELECT t."id" AS "teacherId", u."id" AS "userId", u."name", u."email", c."id" AS "classId", c."name" AS "className", c."grade"
        FROM "Classes" c
-       LEFT JOIN "TeacherSubjectAssignments" tsa ON tsa."classId" = c."id" AND tsa."isClassTeacher" = true
+       LEFT JOIN "TeacherSubjectAssignments" tsa ON tsa."classId" = c."id" AND COALESCE(tsa."isClassTeacher", false) = true
        JOIN "Teachers" t ON (t."id" = c."teacherId" OR t."classId" = c."id" OR t."id" = tsa."teacherId")
        JOIN "Users" u ON u."id" = t."userId"
       WHERE c."schoolCode" = :schoolCode
+        AND c."id" = :classId
+        AND COALESCE(c."isActive", true) = true
         AND u."schoolCode" = :schoolCode
         AND u."role" = 'teacher'
-        AND u."isActive" = true
-        AND (:classId::integer IS NULL OR c."id" = :classId)
+        AND COALESCE(u."isActive", true) = true
       ORDER BY CASE WHEN t."id" = c."teacherId" THEN 0 WHEN t."id" = tsa."teacherId" THEN 1 ELSE 2 END
       LIMIT 1`,
-    { replacements: { schoolCode, classId: student.classId || null }, type: sequelize.QueryTypes.SELECT }
+    { replacements: { schoolCode, classId }, type: sequelize.QueryTypes.SELECT }
   ).catch(() => []);
-  if (rows.length) return rows[0];
-  if (!student.grade && !student.className) return null;
-  const fallbackRows = await sequelize.query(
-    `SELECT t."id" AS "teacherId", u."id" AS "userId", u."name", u."email", c."id" AS "classId", c."name" AS "className", c."grade"
-       FROM "Classes" c
-       LEFT JOIN "TeacherSubjectAssignments" tsa ON tsa."classId" = c."id" AND tsa."isClassTeacher" = true
-       JOIN "Teachers" t ON (t."id" = c."teacherId" OR t."classId" = c."id" OR t."id" = tsa."teacherId")
-       JOIN "Users" u ON u."id" = t."userId"
-      WHERE c."schoolCode" = :schoolCode
-        AND u."schoolCode" = :schoolCode
-        AND u."role" = 'teacher'
-        AND u."isActive" = true
-        AND (LOWER(COALESCE(c."grade",'')) = LOWER(:grade) OR LOWER(COALESCE(c."name",'')) = LOWER(:className))
-      ORDER BY CASE WHEN t."id" = c."teacherId" THEN 0 WHEN t."id" = tsa."teacherId" THEN 1 ELSE 2 END
-      LIMIT 1`,
-    { replacements: { schoolCode, grade: student.grade || '', className: student.className || student.grade || '' }, type: sequelize.QueryTypes.SELECT }
-  ).catch(() => []);
-  return fallbackRows[0] || null;
+  return rows[0] || null;
 }
 
 async function findSchoolAdmin(schoolCode) {
@@ -96,8 +84,51 @@ async function findSchoolAdmin(schoolCode) {
 }
 
 function buildConversationKey({ type, schoolCode, parentUserId, studentId, classId, receiverId }) {
-  return [schoolCode, type, parentUserId, studentId || 'student', classId || 'class', receiverId].join(':');
+  // Canonical parent messaging conversation key. It is intentionally tied to the
+  // actual child + actual resolved recipient so a parent cannot message a random teacher.
+  return [type || 'parent_message', schoolCode || 'school', studentId || 'student', parentUserId || 'parent', receiverId || 'receiver'].join(':');
 }
+
+function classTeacherPayload(row) {
+  if (!row?.userId) return { available: false, reason: 'This child’s class does not have an assigned class teacher yet.' };
+  return {
+    available: true,
+    teacherUserId: Number(row.userId),
+    userId: Number(row.userId),
+    teacherId: row.teacherId ? Number(row.teacherId) : null,
+    name: row.name || 'Class Teacher',
+    email: row.email || null,
+    classId: row.classId ? Number(row.classId) : null,
+    className: row.className || row.grade || 'Class',
+    relationship: 'class_teacher_of_child'
+  };
+}
+
+
+exports.getMessageTargets = async (req, res) => {
+  try {
+    const studentId = req.query.studentId || req.query.childId;
+    if (!studentId) return res.status(400).json({ success: false, message: 'studentId is required' });
+    const parent = await getParentProfile(req.user.id);
+    if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
+    const student = await findStudentForParent({ parent, studentId, schoolCode: req.user.schoolCode, user: req.user });
+    if (!student) return res.status(403).json({ success: false, message: 'This child is not linked to your parent account.' });
+    const classTeacher = await findClassTeacherForStudent(student, req.user.schoolCode);
+    const admin = await findSchoolAdmin(req.user.schoolCode);
+    const payload = {
+      studentId: student.id,
+      studentName: student.User?.name || student.name || 'Student',
+      classId: student.classId || null,
+      className: student.className || student.grade || null,
+      classTeacher: classTeacherPayload(classTeacher),
+      admin: admin ? { available: true, userId: admin.id, name: admin.name || 'School Administrator', relationship: 'school_admin' } : { available: false, reason: 'School administrator is not available right now.' }
+    };
+    return res.json({ success: true, data: payload });
+  } catch (error) {
+    console.error('Get parent message targets error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Message targets could not be loaded.' });
+  }
+};
 
 exports.sendMessage = async (req, res) => {
   try {

@@ -315,7 +315,7 @@ exports.getParentConversations = async (req, res) => {
     });
 
     const conversations = {};
-    const keyFor = (parentUserId, studentId, classId) => `${req.user.schoolCode}:parent_class_teacher:${parentUserId}:${studentId || 'student'}:${classId || 'class'}:${req.user.id}`;
+    const keyFor = (parentUserId, studentId, classId) => `parent_class_teacher:${req.user.schoolCode}:${studentId || 'student'}:${parentUserId}:${req.user.id}`;
 
     // First list all parents linked to students in this class teacher's actual class.
     const parentRows = await sequelize.query(

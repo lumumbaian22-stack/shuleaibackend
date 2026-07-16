@@ -38,26 +38,48 @@ exports.savePlatformProviderSettings = async (req, res) => {
   } catch (error) { res.status(400).json({ success: false, message: error.message }); }
 };
 
+function paymentResponse(payment) {
+  const data = {
+    paymentId: payment.id,
+    reference: payment.reference,
+    paymentType: payment.paymentType,
+    destination: payment.paidTo || payment.paymentDestination,
+    provider: payment.paymentGateway,
+    status: payment.status,
+    promptStatus: payment.promptStatus,
+    promptType: payment.promptType,
+    checkoutUrl: payment.checkoutUrl,
+    amount: payment.amount,
+    currency: payment.currency,
+    message: payment.metadata?.promptMessage || (payment.status === 'pending_provider_error' ? payment.notes : 'Payment created. Complete the prompt/checkout; balances update only after provider confirmation.')
+  };
+  return data;
+}
+
 exports.initiatePayment = async (req, res) => {
   try {
     const payment = await engine.initiatePayment({ user: req.user, body: req.body });
-    const data = {
-      paymentId: payment.id,
-      reference: payment.reference,
-      paymentType: payment.paymentType,
-      destination: payment.paidTo || payment.paymentDestination,
-      provider: payment.paymentGateway,
-      status: payment.status,
-      promptStatus: payment.promptStatus,
-      promptType: payment.promptType,
-      checkoutUrl: payment.checkoutUrl,
-      amount: payment.amount,
-      currency: payment.currency,
-      message: payment.metadata?.promptMessage || (payment.status === 'pending_provider_error' ? payment.notes : 'Payment created. Complete the prompt/checkout; balances update only after provider confirmation.')
-    };
+    const data = paymentResponse(payment);
     const code = payment.status === 'pending_provider_error' ? 202 : 200;
     res.status(code).json({ success: true, message: data.message, data });
-  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+  } catch (error) { res.status(error.statusCode || 400).json({ success: false, message: error.message, data: error.data || undefined }); }
+};
+
+exports.initiateParentFeePayment = async (req, res) => {
+  try {
+    const payment = await engine.initiatePayment({
+      user: req.user,
+      body: {
+        ...req.body,
+        paymentType: 'school_fee',
+        purpose: req.body?.purpose || 'school_fee',
+        paymentMethod: req.body?.paymentMethod || req.body?.method || 'mobile_money'
+      }
+    });
+    const data = paymentResponse(payment);
+    const code = payment.status === 'pending_provider_error' ? 202 : 200;
+    res.status(code).json({ success: true, message: data.message, data });
+  } catch (error) { res.status(error.statusCode || 400).json({ success: false, message: error.message, data: error.data || undefined }); }
 };
 
 exports.webhook = async (req, res) => {
@@ -82,9 +104,25 @@ exports.reconcilePayment = async (req, res) => {
   catch (error) { res.status(404).json({ success: false, message: error.message }); }
 };
 
+exports.setupSchoolProviderNotifications = async (req, res) => {
+  try {
+    const provider = req.params.provider || req.body?.provider;
+    const result = await engine.setupProviderNotifications({ scope: 'school', schoolCode: schoolCode(req), provider, user: req.user });
+    res.json({ success: true, message: result.message, data: result });
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+};
+
+exports.setupPlatformProviderNotifications = async (req, res) => {
+  try {
+    const provider = req.params.provider || req.body?.provider;
+    const result = await engine.setupProviderNotifications({ scope: 'platform', provider, user: req.user });
+    res.json({ success: true, message: result.message, data: result });
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+};
+
 exports.getParentPaymentMethods = async (req, res) => {
   try {
-    const data = await engine.getSettings({ scope: 'school', schoolCode: req.user.schoolCode });
-    res.json({ success: true, data: { defaultProvider: data.defaultProvider, enabledProviders: data.enabledProviders, methods: data.publicMethods } });
+    const data = await engine.getParentAvailableMethods({ user: req.user, studentId: req.query.studentId || req.query.childId || null });
+    res.json({ success: true, data });
   } catch (error) { res.status(400).json({ success: false, message: error.message }); }
 };

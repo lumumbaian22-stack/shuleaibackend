@@ -8,6 +8,7 @@ const selectionsService = require('../services/studentSubjectSelectionService');
 const snapshotService = require('../services/reportSnapshotService');
 const schoolLinkageService = require('../services/schoolLinkageService');
 const { getGradeFromScore } = require('../utils/curriculumHelper');
+const reportComments = require('./reportCommentsController');
 
 function schoolCode(req) { return req.user?.schoolCode; }
 function numberOrNull(value) { const n = Number(value); return Number.isFinite(n) ? n : null; }
@@ -156,7 +157,7 @@ async function buildSnapshot({ studentId, schoolCode:code, term, year, assessmen
   const attendance = { present:0, absent:0, late:0, total:attendanceRows.length, rate:0 };
   attendanceRows.forEach(row => { if(Object.prototype.hasOwnProperty.call(attendance,row.status))attendance[row.status]++; });
   attendance.rate = attendance.total ? Math.round((attendance.present / attendance.total) * 1000) / 10 : 0;
-  const snapshot = {
+  let snapshot = {
     student:{ id:student.id, userId:student.userId, name:student.User?.name, photo:student.User?.profileImage || student.profileImage || null, dateOfBirth:student.dateOfBirth, elimuid:student.elimuid, grade:student.grade, className:cls?.name || student.grade },
     school:{ name:school?.name || 'School', logo:logoForSchool(school), watermarkLogo:logoForSchool(school), branding:school?.settings?.branding || {}, reportCardSettings: school?.settings?.reportCardSettings || school?.reportCardSettings || {}, usesFallbackLogo:!logoForSchool(school) || logoForSchool(school) === defaultReportLogo() },
     class:cls ? { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream, levelCode:cls.levelCode } : null,
@@ -170,6 +171,7 @@ async function buildSnapshot({ studentId, schoolCode:code, term, year, assessmen
     generatedAt:new Date().toISOString(),
     calculationRule:'Only valid completed subjects the learner is taking are counted. Pending, exempted and Not Taken subjects remain visible but are excluded from the mean.'
   };
+  snapshot = await reportComments.mergeDraftCommentsIntoSnapshot({ schoolCode: code, studentId: student.id, term, year:Number(year), snapshot }).catch(() => snapshot);
   return { student, school, cls, records, snapshot };
 }
 

@@ -12,16 +12,25 @@ router.get('/providers', protect, locked.getAllowedProviders);
 router.get('/admin/providers', protect, authorize('admin', 'finance_officer'), financePermission('settings'), locked.getSchoolProviderSettings);
 router.put('/admin/providers', protect, authorize('admin', 'finance_officer'), financePermission('settings'), locked.saveSchoolProviderSettings);
 router.post('/admin/providers/test-connection', protect, authorize('admin', 'finance_officer'), financePermission('settings'), ctrl.testAdminPaymentConnection);
+router.post('/admin/providers/:provider/setup-notifications', protect, authorize('admin', 'finance_officer'), financePermission('settings'), locked.setupSchoolProviderNotifications);
 router.get('/superadmin/providers', protect, authorize('super_admin'), locked.getPlatformProviderSettings);
 router.put('/superadmin/providers', protect, authorize('super_admin'), locked.savePlatformProviderSettings);
 router.post('/superadmin/providers/test-connection', protect, authorize('super_admin'), ctrl.testPlatformPaymentConnection);
+router.post('/superadmin/providers/:provider/setup-notifications', protect, authorize('super_admin'), locked.setupPlatformProviderNotifications);
+router.get('/providers/available', protect, authorize('parent'), locked.getParentPaymentMethods);
 router.get('/parent/methods', protect, authorize('parent'), locked.getParentPaymentMethods);
+router.post('/parent/initiate', protect, authorize('parent'), locked.initiateParentFeePayment);
 router.post('/initiate', protect, locked.initiatePayment);
 router.get('/:reference/status', protect, locked.getPaymentStatus);
 router.post('/reconcile/:reference', protect, locked.reconcilePayment);
 router.get('/webhook/:provider', locked.webhook);
 router.post('/webhook/:provider', locked.webhook);
 
+
+router.post('/mpesa/validation', ctrl.darajaCallback);
+router.post('/mpesa/confirmation', ctrl.darajaCallback);
+router.get('/mpesa/validation', (req, res) => res.json({ ResultCode: 0, ResultDesc: 'Accepted' }));
+router.get('/mpesa/confirmation', (req, res) => res.json({ ResultCode: 0, ResultDesc: 'Accepted' }));
 router.post('/mpesa/callback', ctrl.darajaCallback);
 router.post('/daraja/callback', ctrl.darajaCallback);
 router.post('/callback', ctrl.darajaCallback);

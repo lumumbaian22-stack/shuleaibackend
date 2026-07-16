@@ -1,3020 +1,2951 @@
 {
-  "build": "2027-runtime-integrity-defined-symbols-lock",
+  "build": "2031-student-ai-chatbot-onboarding-project-learning-assistant-lock",
+  "count": 589,
   "routes": [
     {
-      "method": "POST",
-      "path": "/api/auth/super-admin/login",
-      "file": "backend/src/routes/authRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/admin/signup",
-      "file": "backend/src/routes/authRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/teacher/signup",
-      "file": "backend/src/routes/authRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/parent/signup",
-      "file": "backend/src/routes/authRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/student/login",
-      "file": "backend/src/routes/authRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/login",
-      "file": "backend/src/routes/authRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/verify-school",
-      "file": "backend/src/routes/authRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/refresh-token",
-      "file": "backend/src/routes/authRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/auth/me",
-      "file": "backend/src/routes/authRoutes.js"
+      "path": "/settings"
     },
     {
-      "method": "POST",
-      "path": "/api/auth/logout",
-      "file": "backend/src/routes/authRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/change-password",
-      "file": "backend/src/routes/authRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/settings",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/dashboard"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/dashboard",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/students"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/students",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/students/:studentId"
     },
     {
-      "method": "GET",
-      "path": "/api/admin/students/:studentId",
-      "file": "backend/src/routes/adminRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/students/:studentId/suspend",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/students/:studentId/suspend"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/students/:studentId/reactivate",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/students/:studentId/reactivate"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "PUT",
-      "path": "/api/admin/students/:studentId",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/students/:studentId"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "DELETE",
-      "path": "/api/admin/students/:studentId",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/students/:studentId"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/teachers",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/teachers"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "PUT",
-      "path": "/api/admin/teachers/:teacherId",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/teachers/:teacherId"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "DELETE",
-      "path": "/api/admin/teachers/:teacherId",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/teachers/:teacherId"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/classes/subject-assign-batch",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes/subject-assign-batch"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/parents",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/parents"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/finance-staff",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/finance-staff"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/finance-staff",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/finance-staff"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "PATCH",
-      "path": "/api/admin/finance-staff/:userId",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/finance-staff/:userId"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/approvals/pending",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/approvals/pending"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/teachers/:teacherId/approve",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/teachers/:teacherId/approve"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/classes",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/classes/:id/students",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes/:id/students"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/classes/:id",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes/:id"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/classes",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "PUT",
-      "path": "/api/admin/classes/:id",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes/:id"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "DELETE",
-      "path": "/api/admin/classes/:id",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes/:id"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/available-teachers",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/available-teachers"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/classes/:id/assign-teacher",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes/:id/assign-teacher"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/classes/:id/remove-teacher",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes/:id/remove-teacher"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/classes/:classId/subjects",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes/:classId/subjects"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/classes/subject-assign",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes/subject-assign"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "DELETE",
-      "path": "/api/admin/classes/subject-assign/:assignmentId",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/classes/subject-assign/:assignmentId"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/grades/stats",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/grades/stats"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/attendance/stats",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/attendance/stats"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/duty/generate",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/duty/generate"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/duty/stats",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/duty/stats"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/duty/fairness-report",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/duty/fairness-report"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/duty/understaffed",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/duty/understaffed"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/duty/teacher-workload",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/duty/teacher-workload"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/duty/adjust",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/duty/adjust"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "PUT",
-      "path": "/api/admin/settings",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/settings"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/curriculum/setup",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/setup"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "PUT",
-      "path": "/api/admin/curriculum/setup",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/setup"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/curriculum/levels",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/levels"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/curriculum/subject-bank",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/subject-bank"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/curriculum/school-subjects",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/school-subjects"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "PUT",
-      "path": "/api/admin/curriculum/school-subjects",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/school-subjects"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/curriculum/custom-subjects",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/custom-subjects"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/curriculum/custom-subjects",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/custom-subjects"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "DELETE",
-      "path": "/api/admin/curriculum/custom-subjects/:subjectId",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/custom-subjects/:subjectId"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/assessment-settings",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/assessment-settings"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "PUT",
-      "path": "/api/admin/assessment-settings",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/assessment-settings"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/curriculum/classes/generation-preview",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/classes/generation-preview"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/curriculum/classes/generate",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/classes/generate"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/curriculum/classes/sync",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/classes/sync"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/curriculum/classes/:classId/subjects",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/curriculum/classes/:classId/subjects"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/students/:studentId/subject-selection",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/students/:studentId/subject-selection"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "PUT",
-      "path": "/api/admin/students/:studentId/subject-selection",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/students/:studentId/subject-selection"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/students/:studentId/subject-selection/verify",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/students/:studentId/subject-selection/verify"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/billing/payment-confirmation",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/billing/payment-confirmation"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/parent-conversations",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/parent-conversations"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/messages/:parentId",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/messages/:parentId"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "POST",
-      "path": "/api/admin/reply-parent",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/reply-parent"
     },
     {
+      "file": "backend/src/routes/adminRoutes.js",
       "method": "GET",
-      "path": "/api/admin/analytics",
-      "file": "backend/src/routes/adminRoutes.js"
+      "path": "/analytics"
     },
     {
-      "method": "POST",
-      "path": "/api/duty/generate",
-      "file": "backend/src/routes/dutyRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/advancedAnalyticsRoutes.js",
       "method": "GET",
-      "path": "/api/duty/stats",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/summary"
     },
     {
+      "file": "backend/src/routes/advancedAnalyticsRoutes.js",
       "method": "GET",
-      "path": "/api/duty/today",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/export.csv"
     },
     {
+      "file": "backend/src/routes/advancedAnalyticsRoutes.js",
       "method": "GET",
-      "path": "/api/duty/week",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/export.xlsx"
     },
     {
+      "file": "backend/src/routes/advancedAnalyticsRoutes.js",
       "method": "GET",
-      "path": "/api/duty/verification-config",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/export.pdf"
     },
     {
+      "file": "backend/src/routes/alertRoutes.js",
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/alertRoutes.js",
       "method": "PUT",
-      "path": "/api/duty/verification-config",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/read-all"
     },
     {
+      "file": "backend/src/routes/alertRoutes.js",
       "method": "POST",
-      "path": "/api/duty/check-in/verified",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/suggest-parent-message"
     },
     {
+      "file": "backend/src/routes/alertRoutes.js",
       "method": "POST",
-      "path": "/api/duty/check-out/verified",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/suggest-announcement"
     },
     {
-      "method": "GET",
-      "path": "/api/duty/compliance-report",
-      "file": "backend/src/routes/dutyRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/duty/late-arrivals",
-      "file": "backend/src/routes/dutyRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/alertRoutes.js",
       "method": "POST",
-      "path": "/api/duty/check-in",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/"
     },
     {
-      "method": "POST",
-      "path": "/api/duty/check-out",
-      "file": "backend/src/routes/dutyRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/alertRoutes.js",
       "method": "PUT",
-      "path": "/api/duty/preferences",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/:id/read"
     },
     {
+      "file": "backend/src/routes/analyticsRoutes.js",
+      "method": "GET",
+      "path": "/dashboard"
+    },
+    {
+      "file": "backend/src/routes/analyticsRoutes.js",
+      "method": "GET",
+      "path": "/tables"
+    },
+    {
+      "file": "backend/src/routes/analyticsRoutes.js",
+      "method": "GET",
+      "path": "/tables/:section"
+    },
+    {
+      "file": "backend/src/routes/analyticsRoutes.js",
       "method": "POST",
-      "path": "/api/duty/request-swap",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/export"
     },
     {
+      "file": "backend/src/routes/analyticsRoutes.js",
       "method": "GET",
-      "path": "/api/duty/available-swaps",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/student/:studentId"
     },
     {
+      "file": "backend/src/routes/analyticsRoutes.js",
       "method": "GET",
-      "path": "/api/duty/points",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/class/:classId"
     },
     {
+      "file": "backend/src/routes/analyticsRoutes.js",
       "method": "GET",
-      "path": "/api/duty/fairness-report",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/school"
     },
     {
+      "file": "backend/src/routes/analyticsRoutes.js",
+      "method": "GET",
+      "path": "/compare/:studentId"
+    },
+    {
+      "file": "backend/src/routes/attendanceLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/duty/adjust",
-      "file": "backend/src/routes/dutyRoutes.js"
+      "path": "/sessions"
     },
     {
-      "method": "GET",
-      "path": "/api/duty/understaffed",
-      "file": "backend/src/routes/dutyRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/duty/teacher-workload",
-      "file": "backend/src/routes/dutyRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/public/duty/today",
-      "file": "backend/src/routes/publicRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/public/duty/week",
-      "file": "backend/src/routes/publicRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/public/school/:schoolId",
-      "file": "backend/src/routes/publicRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/overview",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/schools",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/pending-schools",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/suspended-schools",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/schools",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/schools/:id/approve",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/schools/:id/reject",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/schools/:id/suspend",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/schools/:id/reactivate",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/attendanceLifecycleRoutes.js",
       "method": "PUT",
-      "path": "/api/super-admin/schools/:id",
-      "file": "backend/src/routes/superAdminRoutes.js"
+      "path": "/sessions/:sessionId/draft"
     },
     {
-      "method": "DELETE",
-      "path": "/api/super-admin/schools/:id",
-      "file": "backend/src/routes/superAdminRoutes.js"
+      "file": "backend/src/routes/attendanceLifecycleRoutes.js",
+      "method": "POST",
+      "path": "/sessions/:sessionId/lock"
     },
     {
+      "file": "backend/src/routes/attendanceLifecycleRoutes.js",
+      "method": "POST",
+      "path": "/sessions/:sessionId/corrections"
+    },
+    {
+      "file": "backend/src/routes/attendanceLifecycleRoutes.js",
       "method": "GET",
-      "path": "/api/super-admin/schools/:schoolId/detail",
-      "file": "backend/src/routes/superAdminRoutes.js"
+      "path": "/sessions/:sessionId/corrections"
     },
     {
+      "file": "backend/src/routes/attendanceLifecycleRoutes.js",
+      "method": "POST",
+      "path": "/sessions/:sessionId/release"
+    },
+    {
+      "file": "backend/src/routes/attendanceLifecycleRoutes.js",
+      "method": "GET",
+      "path": "/sessions/:classId/:date"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "POST",
+      "path": "/super-admin/login"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "POST",
+      "path": "/admin/signup"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "POST",
+      "path": "/teacher/signup"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "POST",
+      "path": "/parent/signup"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "POST",
+      "path": "/student/login"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "POST",
+      "path": "/verify-school"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "POST",
+      "path": "/refresh-token"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "GET",
+      "path": "/me"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "POST",
+      "path": "/logout"
+    },
+    {
+      "file": "backend/src/routes/authRoutes.js",
+      "method": "POST",
+      "path": "/change-password"
+    },
+    {
+      "file": "backend/src/routes/birthdayRoutes.js",
+      "method": "GET",
+      "path": "/upcoming"
+    },
+    {
+      "file": "backend/src/routes/birthdayRoutes.js",
+      "method": "GET",
+      "path": "/settings"
+    },
+    {
+      "file": "backend/src/routes/birthdayRoutes.js",
       "method": "PUT",
-      "path": "/api/super-admin/schools/:schoolId/access-controls",
-      "file": "backend/src/routes/superAdminRoutes.js"
+      "path": "/settings"
     },
     {
-      "method": "GET",
-      "path": "/api/super-admin/payment-requests",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/payment-requests/:requestId/review",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/requests",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/requests/:id/approve",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/requests/:id/reject",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/super-admin/bank-details/:schoolId",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/schools/:schoolId/teachers",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/schools/:schoolId/students",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/schools/:schoolId/parents",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/system/status",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/system/metrics",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/system/events",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/student-parent-links/audit",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/student-parent-links/cleanup",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/platform-settings",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/super-admin/platform-settings",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/settings/reset",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/backup",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/super-admin/cache/clear",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/export",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/growth-data",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/school-distribution",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/analytics",
-      "file": "backend/src/routes/superAdminRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/students",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/students",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/students/:studentId",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/teacher/students/:studentId",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/students/upload",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/class-students",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/my-assignments",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/teacher/marks/:recordId",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/teacher/marks/:recordId",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/marks-template",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/marks",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/marks/bulk",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/upload/marks",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/marks/publish",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/attendance",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/comment",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/dashboard",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/stats",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/my-class",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/my-subjects",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/classes/:classId/students",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/gradebook",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/reports/snapshots",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/students/:studentId/report-card-preview",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/performance",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/subject-selection-requests",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/subject-requests",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/subject-selection-requests/:selectionId/review",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/subject-requests/:selectionId/review",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/parent-conversations",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/conversations",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/messages/:parentId",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/teacher/messages/read/:conversationId",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/reply",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/teacher/messages/:messageId",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/staff-members",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/group-message",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/private-message",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/group-messages",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/private-messages/:otherUserId",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/tasks",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/tasks",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/teacher/tasks/:taskId",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/teacher/tasks/:taskId",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/tasks/:taskId/complete",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/attendance/:date",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/analytics",
-      "file": "backend/src/routes/teacherRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/children",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent/children/link",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/child/:studentId/summary",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/child/:studentId/report-card-details",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent/report-absence",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/fees/:studentId",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent/fees/pay",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/conversations",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/messages/:otherUserId",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent/message",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/child/:studentId/attendance/today",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/child/:studentId/analytics",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/child/:studentId/subject-selection",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/parent/child/:studentId/subject-selection",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/plans",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent/upgrade-plan",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent/pay",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/payments",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent/payment-confirm",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/analytics",
-      "file": "backend/src/routes/parentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/student/set-first-password",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/dashboard",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/materials",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/grades",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/recommendations",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/careers",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/career/interests",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/student/career/interests",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/student/career/insights",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/attendance",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/student/message",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/messages/:otherUserId",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/student/group-message",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/group-messages",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/analytics",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/subject-selection",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/student/subject-selection",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/student/mood",
-      "file": "backend/src/routes/studentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/dashboard",
-      "file": "backend/src/routes/analyticsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/tables",
-      "file": "backend/src/routes/analyticsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/tables/:section",
-      "file": "backend/src/routes/analyticsRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/analytics/export",
-      "file": "backend/src/routes/analyticsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/student/:studentId",
-      "file": "backend/src/routes/analyticsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/class/:classId",
-      "file": "backend/src/routes/analyticsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/school",
-      "file": "backend/src/routes/analyticsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/compare/:studentId",
-      "file": "backend/src/routes/analyticsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/subscription/plans",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/subscription/my-status",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/subscription/child/:studentId/status",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscription/child/request",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscription/upgrade",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscription/initiate-payment",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/subscription/school/status",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/subscription/school/billing-history",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscription/school/request",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscription/expire-now",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/subscriptions/plans",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/subscriptions/my-status",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/subscriptions/child/:studentId/status",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscriptions/child/request",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscriptions/upgrade",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscriptions/initiate-payment",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/subscriptions/school/status",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/subscriptions/school/billing-history",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscriptions/school/request",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscriptions/expire-now",
-      "file": "backend/src/routes/subscriptionRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/upload/template/:type",
-      "file": "backend/src/routes/uploadRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/upload/template/marks",
-      "file": "backend/src/routes/uploadRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/upload/validate",
-      "file": "backend/src/routes/uploadRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/upload/students",
-      "file": "backend/src/routes/uploadRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/upload/marks",
-      "file": "backend/src/routes/uploadRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/upload/attendance",
-      "file": "backend/src/routes/uploadRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/upload/history",
-      "file": "backend/src/routes/uploadRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/school/name-change-request",
-      "file": "backend/src/routes/schoolRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/school/name-change-requests",
-      "file": "backend/src/routes/schoolRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent-messages/message",
-      "file": "backend/src/routes/parentMessageRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent-messages/conversations",
-      "file": "backend/src/routes/parentMessageRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent-messages/messages/:otherUserId",
-      "file": "backend/src/routes/parentMessageRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent-messages/reply",
-      "file": "backend/src/routes/parentMessageRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/help/articles",
-      "file": "backend/src/routes/helpRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/help/search",
-      "file": "backend/src/routes/helpRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/help/articles/:id",
-      "file": "backend/src/routes/helpRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/media/:token",
-      "file": "backend/src/routes/mediaRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/user/alerts",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/user/stats",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/user/profile",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/user/preferences",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/user/preferences",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/user/export",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/user/deactivate",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/user/profile-picture",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/user/signature",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/user/consent/status",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/user/students/:studentId/details",
-      "file": "backend/src/routes/userRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/tasks",
-      "file": "backend/src/routes/taskRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/tasks",
-      "file": "backend/src/routes/taskRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/tasks/:id",
-      "file": "backend/src/routes/taskRoutes.js"
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/tasks/:id",
-      "file": "backend/src/routes/taskRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/tasks/:id/complete",
-      "file": "backend/src/routes/taskRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/alerts",
-      "file": "backend/src/routes/alertRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/alerts/read-all",
-      "file": "backend/src/routes/alertRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/alerts/suggest-parent-message",
-      "file": "backend/src/routes/alertRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/alerts/suggest-announcement",
-      "file": "backend/src/routes/alertRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/alerts",
-      "file": "backend/src/routes/alertRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/alerts/:id/read",
-      "file": "backend/src/routes/alertRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/cbe/competencies",
-      "file": "backend/src/routes/competencyRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/cbe/competencies",
-      "file": "backend/src/routes/competencyRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/cbe/learning-outcomes",
-      "file": "backend/src/routes/competencyRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/cbe/learning-outcomes",
-      "file": "backend/src/routes/competencyRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/cbe/student-progress/:studentId",
-      "file": "backend/src/routes/competencyRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/cbe/student-progress",
-      "file": "backend/src/routes/competencyRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/cbe/class-heatmap",
-      "file": "backend/src/routes/competencyRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/cbe/below-expectation",
-      "file": "backend/src/routes/competencyRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/cbe/auto-insights",
-      "file": "backend/src/routes/competencyRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/cbe/ai-suggestion",
-      "file": "backend/src/routes/competencyRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/home-tasks/today",
-      "file": "backend/src/routes/homeTaskRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/home-tasks/:id/complete",
-      "file": "backend/src/routes/homeTaskRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/consent/status",
-      "file": "backend/src/routes/consentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/consent/accept",
-      "file": "backend/src/routes/consentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/consent/dpa/status",
-      "file": "backend/src/routes/consentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/consent/dpa/accept",
-      "file": "backend/src/routes/consentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/consent/parental-consent",
-      "file": "backend/src/routes/consentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/search",
-      "file": "backend/src/routes/searchRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/reports",
-      "file": "backend/src/routes/reportRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/reports/:id",
-      "file": "backend/src/routes/reportRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/reports/generate",
-      "file": "backend/src/routes/reportRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/sms/config",
-      "file": "backend/src/routes/smsRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/sms/config",
-      "file": "backend/src/routes/smsRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/sms/send",
-      "file": "backend/src/routes/smsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/sms/history",
-      "file": "backend/src/routes/smsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/calendar",
-      "file": "backend/src/routes/calendarRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/calendar",
-      "file": "backend/src/routes/calendarRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/calendar/:id",
-      "file": "backend/src/routes/calendarRoutes.js"
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/calendar/:id",
-      "file": "backend/src/routes/calendarRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/timetable",
-      "file": "backend/src/routes/timetableRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/timetable/classes",
-      "file": "backend/src/routes/timetableRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/timetable/generate",
-      "file": "backend/src/routes/timetableRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/timetable/:id",
-      "file": "backend/src/routes/timetableRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/timetable/:id/publish",
-      "file": "backend/src/routes/timetableRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/timetable/student/me",
-      "file": "backend/src/routes/timetableRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/timetable/parent/child/:studentId",
-      "file": "backend/src/routes/timetableRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/timetable/class/:classId",
-      "file": "backend/src/routes/timetableRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/timetable/teacher/me",
-      "file": "backend/src/routes/timetableRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/timetable/teacher/:teacherId",
-      "file": "backend/src/routes/timetableRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/homework/files/:filename",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/homework/attachments",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/homework/submission-attachments",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/homework/assign",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/homework/teacher",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/homework/teacher/:taskId",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/homework/teacher/:taskId",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/homework/teacher/:taskId/discussion",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/homework/teacher/submissions/:assignmentId/review",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/homework/student",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/homework/submit/:assignmentId",
-      "file": "backend/src/routes/homeworkRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/gamification/leaderboard/:classId",
-      "file": "backend/src/routes/gamificationRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/gamification/badges/:studentId",
-      "file": "backend/src/routes/gamificationRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/gamification/badges",
-      "file": "backend/src/routes/gamificationRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/gamification/award",
-      "file": "backend/src/routes/gamificationRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/gamification/my-summary",
-      "file": "backend/src/routes/gamificationRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/gamification/rewards",
-      "file": "backend/src/routes/gamificationRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/gamification/rewards/redeem",
-      "file": "backend/src/routes/gamificationRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/departments",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/departments/:departmentId/group",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/departments",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/chat-v9/departments/:departmentId",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/chat-v9/departments/:departmentId",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/teachers",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/teacher/class-parents",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/teacher/groups",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/teacher/groups",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/teacher/available-members",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/teacher/groups/:groupId/members",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/chat-v9/teacher/groups/:groupId/members",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/teacher/direct/:userId",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/teacher/direct",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/student/direct/:userId",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/student/direct",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/teacher/groups/:groupId/messages",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/teacher/groups/:groupId/messages",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/classroom/threads",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/classroom/threads",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/chat-v9/classroom/threads/:threadId",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/classroom/threads/:threadId/replies",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/chat-v9/messages/:messageId",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/chat-v9/messages/:messageId",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/chat-v9/classroom/replies/:replyId",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/chat-v9/classroom/replies/:replyId",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/classroom/replies/:replyId/award",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/classroom/replies/:replyId/pin",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/teacher/messages/:messageId/award",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/teacher/messages/:messageId/react",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat-v9/attachments",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/chat-v9/achievements/me",
-      "file": "backend/src/routes/chatV9Routes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/scale/students",
-      "file": "backend/src/routes/scaleRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/scale/teachers",
-      "file": "backend/src/routes/scaleRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/scale/parents",
-      "file": "backend/src/routes/scaleRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/scale/academic-records",
-      "file": "backend/src/routes/scaleRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/scale/attendance",
-      "file": "backend/src/routes/scaleRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/scale/alerts",
-      "file": "backend/src/routes/scaleRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/scale/messages",
-      "file": "backend/src/routes/scaleRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/scale/overview",
-      "file": "backend/src/routes/scaleRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/jobs/csv-import",
-      "file": "backend/src/routes/jobRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/jobs/marks-import",
-      "file": "backend/src/routes/jobRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/jobs/report-cards",
-      "file": "backend/src/routes/jobRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/jobs",
-      "file": "backend/src/routes/jobRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/jobs/:jobId",
-      "file": "backend/src/routes/jobRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/tutor/config",
-      "file": "backend/src/routes/tutorRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/tutor/ask",
-      "file": "backend/src/routes/tutorRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/tutor/progress/:studentId?",
-      "file": "backend/src/routes/tutorRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/tutor/sessions",
-      "file": "backend/src/routes/tutorRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/tutor/sessions",
-      "file": "backend/src/routes/tutorRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/tutor/sessions/:id",
-      "file": "backend/src/routes/tutorRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/tutor/session/:studentId?",
-      "file": "backend/src/routes/tutorRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/tutor/practice/answer",
-      "file": "backend/src/routes/tutorRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/tutor/reports/parent/:parentId?",
-      "file": "backend/src/routes/tutorRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/tutor/reports/teacher/:classId?",
-      "file": "backend/src/routes/tutorRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/auth/register",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/auth/login",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/auth/logout",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/learnfeed/auth/me",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/auth/link-platform-student",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/learnfeed/feed",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/feed/like",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/feed/save",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/feed/follow",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/feed/not-interested",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/videos/upload",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/videos/publish",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/videos/report",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/videos/remix",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/learnfeed/comments",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/comments/add",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/comments/like",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/learnfeed/live/rooms",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/live/start",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/live/end",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/live/chat",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/live/gift",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/learnfeed/sounds",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/sounds/use",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/ai/ask",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/quiz/submit",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/learnfeed/messages/inbox",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/messages/send",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/learnfeed/billing/public-plans",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/billing/user-subscription/checkout",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/learnfeed/billing/status/:reference",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/learnfeed/billing/wallet",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/learnfeed/billing/withdraw",
-      "file": "backend/src/routes/learnFeedRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/providers",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/admin/providers",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/payments/admin/providers",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/admin/providers/test-connection",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/superadmin/providers",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/payments/superadmin/providers",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/superadmin/providers/test-connection",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/parent/methods",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/initiate",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/:reference/status",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/reconcile/:reference",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/webhook/:provider",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/webhook/:provider",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/mpesa/callback",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/daraja/callback",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/callback",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/admin/context",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/admin/school-settings",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/payments/admin/school-settings",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/admin/test-connection",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/admin/manual-queue",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/admin/records",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/parent/school-settings",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/parent/students/:studentId/fee-accounts",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/parent/students/:studentId/history",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/admin/finance-summary",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/admin/students/:studentId/finance",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/admin/students/:studentId/history",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/admin/students/:studentId/manual-payment",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/admin/students/:studentId/bursary",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/admin/transactions/:paymentId/approve",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/admin/transactions/:paymentId/reject",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/admin/manual-queue/:paymentId/approve",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/admin/manual-queue/:paymentId/reject",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/superadmin/platform-settings",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/payments/superadmin/platform-settings",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/superadmin/test-connection",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/superadmin/platform-manual-queue",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/superadmin/platform-manual-queue/:paymentId/review",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/parent/fee/stk",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/parent/fee/manual",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/parent/subscription/stk",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/parent/subscription/manual",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/school/subscription/stk",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/admin/name-change/stk",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/platform/stk",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/payments/stk/:checkoutRequestId/status",
-      "file": "backend/src/routes/paymentRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance/modules",
-      "file": "backend/src/routes/financeRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance/overview",
-      "file": "backend/src/routes/financeRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance/alerts",
-      "file": "backend/src/routes/financeRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance/invoices",
-      "file": "backend/src/routes/financeRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance/analytics",
-      "file": "backend/src/routes/financeRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance/audit-trail",
-      "file": "backend/src/routes/financeRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance/expenses",
-      "file": "backend/src/routes/financeRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/finance/expenses",
-      "file": "backend/src/routes/financeRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/birthdayRoutes.js",
       "method": "PATCH",
-      "path": "/api/finance/expenses/:id",
-      "file": "backend/src/routes/financeRoutes.js"
+      "path": "/students/:studentId/privacy"
     },
     {
+      "file": "backend/src/routes/birthdayRoutes.js",
+      "method": "POST",
+      "path": "/process"
+    },
+    {
+      "file": "backend/src/routes/calendarRoutes.js",
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/calendarRoutes.js",
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/calendarRoutes.js",
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "file": "backend/src/routes/calendarRoutes.js",
       "method": "DELETE",
-      "path": "/api/finance/expenses/:id",
-      "file": "backend/src/routes/financeRoutes.js"
+      "path": "/:id"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "GET",
-      "path": "/api/finance/report",
-      "file": "backend/src/routes/financeRoutes.js"
+      "path": "/departments"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "GET",
-      "path": "/api/finance-system/summary",
-      "file": "backend/src/routes/financialSystemRoutes.js"
+      "path": "/departments/:departmentId/group"
     },
     {
-      "method": "GET",
-      "path": "/api/finance-system/invoices",
-      "file": "backend/src/routes/financialSystemRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance-system/students/:studentId/account",
-      "file": "backend/src/routes/financialSystemRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "POST",
-      "path": "/api/finance-system/students/:studentId/recalculate",
-      "file": "backend/src/routes/financialSystemRoutes.js"
+      "path": "/departments"
     },
     {
-      "method": "GET",
-      "path": "/api/finance-system/transactions",
-      "file": "backend/src/routes/financialSystemRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance-system/reconciliations",
-      "file": "backend/src/routes/financialSystemRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance-system/credential-audits",
-      "file": "backend/src/routes/financialSystemRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance-system/refunds",
-      "file": "backend/src/routes/financialSystemRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/finance-system/transactions/:transactionId/refund",
-      "file": "backend/src/routes/financialSystemRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/finance-system/platform-subscriptions",
-      "file": "backend/src/routes/financialSystemRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/finance-system/backfill-legacy",
-      "file": "backend/src/routes/financialSystemRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/parent/fee/stk",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/parent/subscription/stk",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/admin/name-change/stk",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/payments/platform/stk",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent/pay",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/parent/upgrade-plan",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscription/upgrade",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/subscription/initiate-payment",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/admin/teachers/:teacherId/activate",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/admin/teachers/:teacherId/reactivate",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/admin/teachers/:teacherId/deactivate",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/admin/teachers/:teacherId/suspend",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/admin/classes/:classId/students",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/admin/students/:studentId/expel",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/child/:studentId/marks",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/child/:studentId/class-performance",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/parent/child/:studentId/subject-performance",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/marks/all",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/class-performance",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/subject-performance",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/student/gpa",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/users",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/metrics",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/logs",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/schools/:schoolId/stats",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/super-admin/requests/history",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/school/curriculum",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/teacher/students/:studentId/report-absence",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/teacher/students/:studentId/parent-contact",
-      "file": "backend/src/routes/nationalRolloutRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/owner/analytics/overview",
-      "file": "backend/src/routes/ownerHardeningRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/owner/branding",
-      "file": "backend/src/routes/ownerHardeningRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "PUT",
-      "path": "/api/owner/branding",
-      "file": "backend/src/routes/ownerHardeningRoutes.js"
+      "path": "/departments/:departmentId"
     },
     {
-      "method": "POST",
-      "path": "/api/owner/branding/logo",
-      "file": "backend/src/routes/ownerHardeningRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/owner/agent-toolkit",
-      "file": "backend/src/routes/ownerHardeningRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/owner/health-dashboard",
-      "file": "backend/src/routes/ownerHardeningRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/owner/demo-school/seed",
-      "file": "backend/src/routes/ownerHardeningRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/fee-structures",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/fee-structures",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/fee-structures/student-accounts",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/fee-structures/:id",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/fee-structures/:id",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "DELETE",
-      "path": "/api/fee-structures/:id",
-      "file": "backend/src/routes/feeStructureRoutes.js"
+      "path": "/departments/:departmentId"
     },
     {
-      "method": "POST",
-      "path": "/api/fee-structures/:id/activate",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/fee-structures/:id/lock",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/fee-structures/:id/assign",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/fee-structures/student-accounts/:feeId/adjust",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "GET",
-      "path": "/api/fees/structures",
-      "file": "backend/src/routes/feeStructureRoutes.js"
+      "path": "/teachers"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "GET",
+      "path": "/teacher/class-parents"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "GET",
+      "path": "/teacher/groups"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "POST",
-      "path": "/api/fees/structures",
-      "file": "backend/src/routes/feeStructureRoutes.js"
+      "path": "/teacher/groups"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "GET",
-      "path": "/api/fees/structures/student-accounts",
-      "file": "backend/src/routes/feeStructureRoutes.js"
+      "path": "/teacher/available-members"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "GET",
-      "path": "/api/fees/structures/:id",
-      "file": "backend/src/routes/feeStructureRoutes.js"
+      "path": "/teacher/groups/:groupId/members"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "PUT",
-      "path": "/api/fees/structures/:id",
-      "file": "backend/src/routes/feeStructureRoutes.js"
+      "path": "/teacher/groups/:groupId/members"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "GET",
+      "path": "/teacher/direct/:userId"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "POST",
+      "path": "/teacher/direct"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "GET",
+      "path": "/student/direct/:userId"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "POST",
+      "path": "/student/direct"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "GET",
+      "path": "/teacher/groups/:groupId/messages"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "POST",
+      "path": "/teacher/groups/:groupId/messages"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "GET",
+      "path": "/classroom/threads"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "POST",
+      "path": "/classroom/threads"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "PUT",
+      "path": "/classroom/threads/:threadId"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "POST",
+      "path": "/classroom/threads/:threadId/replies"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "PUT",
+      "path": "/messages/:messageId"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "DELETE",
-      "path": "/api/fees/structures/:id",
-      "file": "backend/src/routes/feeStructureRoutes.js"
+      "path": "/messages/:messageId"
     },
     {
-      "method": "POST",
-      "path": "/api/fees/structures/:id/activate",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/fees/structures/:id/lock",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/fees/structures/:id/assign",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/fees/structures/student-accounts/:feeId/adjust",
-      "file": "backend/src/routes/feeStructureRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/realtime/sync",
-      "file": "backend/src/routes/realtimeRoutes.js"
-    },
-    {
-      "method": "POST",
-      "path": "/api/attendance/sessions",
-      "file": "backend/src/routes/attendanceLifecycleRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "PUT",
-      "path": "/api/attendance/sessions/:sessionId/draft",
-      "file": "backend/src/routes/attendanceLifecycleRoutes.js"
+      "path": "/classroom/replies/:replyId"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
+      "method": "DELETE",
+      "path": "/classroom/replies/:replyId"
+    },
+    {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "POST",
-      "path": "/api/attendance/sessions/:sessionId/lock",
-      "file": "backend/src/routes/attendanceLifecycleRoutes.js"
+      "path": "/classroom/replies/:replyId/award"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "POST",
-      "path": "/api/attendance/sessions/:sessionId/corrections",
-      "file": "backend/src/routes/attendanceLifecycleRoutes.js"
+      "path": "/classroom/replies/:replyId/pin"
     },
     {
-      "method": "GET",
-      "path": "/api/attendance/sessions/:sessionId/corrections",
-      "file": "backend/src/routes/attendanceLifecycleRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "POST",
-      "path": "/api/attendance/sessions/:sessionId/release",
-      "file": "backend/src/routes/attendanceLifecycleRoutes.js"
+      "path": "/teacher/messages/:messageId/award"
     },
     {
-      "method": "GET",
-      "path": "/api/attendance/sessions/:classId/:date",
-      "file": "backend/src/routes/attendanceLifecycleRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/report-cards/shared/:token",
-      "file": "backend/src/routes/reportHistoryRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/report-cards/history",
-      "file": "backend/src/routes/reportHistoryRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/report-cards/latest/:studentId/pdf",
-      "file": "backend/src/routes/reportHistoryRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/report-cards/history/:id/pdf",
-      "file": "backend/src/routes/reportHistoryRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/report-cards/history/:id",
-      "file": "backend/src/routes/reportHistoryRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "POST",
-      "path": "/api/report-cards/history/:id/correct",
-      "file": "backend/src/routes/reportHistoryRoutes.js"
+      "path": "/teacher/messages/:messageId/react"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "POST",
-      "path": "/api/report-cards/history/:id/share",
-      "file": "backend/src/routes/reportHistoryRoutes.js"
+      "path": "/attachments"
     },
     {
+      "file": "backend/src/routes/chatV9Routes.js",
       "method": "GET",
-      "path": "/api/lifecycle/birthdays/upcoming",
-      "file": "backend/src/routes/birthdayRoutes.js"
+      "path": "/achievements/me"
     },
     {
+      "file": "backend/src/routes/competencyRoutes.js",
       "method": "GET",
-      "path": "/api/lifecycle/birthdays/settings",
-      "file": "backend/src/routes/birthdayRoutes.js"
+      "path": "/competencies"
     },
     {
+      "file": "backend/src/routes/competencyRoutes.js",
+      "method": "POST",
+      "path": "/competencies"
+    },
+    {
+      "file": "backend/src/routes/competencyRoutes.js",
+      "method": "GET",
+      "path": "/learning-outcomes"
+    },
+    {
+      "file": "backend/src/routes/competencyRoutes.js",
+      "method": "POST",
+      "path": "/learning-outcomes"
+    },
+    {
+      "file": "backend/src/routes/competencyRoutes.js",
+      "method": "GET",
+      "path": "/student-progress/:studentId"
+    },
+    {
+      "file": "backend/src/routes/competencyRoutes.js",
+      "method": "POST",
+      "path": "/student-progress"
+    },
+    {
+      "file": "backend/src/routes/competencyRoutes.js",
+      "method": "GET",
+      "path": "/class-heatmap"
+    },
+    {
+      "file": "backend/src/routes/competencyRoutes.js",
+      "method": "GET",
+      "path": "/below-expectation"
+    },
+    {
+      "file": "backend/src/routes/competencyRoutes.js",
+      "method": "GET",
+      "path": "/auto-insights"
+    },
+    {
+      "file": "backend/src/routes/competencyRoutes.js",
+      "method": "POST",
+      "path": "/ai-suggestion"
+    },
+    {
+      "file": "backend/src/routes/consentRoutes.js",
+      "method": "GET",
+      "path": "/status"
+    },
+    {
+      "file": "backend/src/routes/consentRoutes.js",
+      "method": "POST",
+      "path": "/accept"
+    },
+    {
+      "file": "backend/src/routes/consentRoutes.js",
+      "method": "GET",
+      "path": "/dpa/status"
+    },
+    {
+      "file": "backend/src/routes/consentRoutes.js",
+      "method": "POST",
+      "path": "/dpa/accept"
+    },
+    {
+      "file": "backend/src/routes/consentRoutes.js",
+      "method": "POST",
+      "path": "/parental-consent"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "POST",
+      "path": "/generate"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/stats"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/today"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/week"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/verification-config"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
       "method": "PUT",
-      "path": "/api/lifecycle/birthdays/settings",
-      "file": "backend/src/routes/birthdayRoutes.js"
+      "path": "/verification-config"
     },
     {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "POST",
+      "path": "/check-in/verified"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "POST",
+      "path": "/check-out/verified"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/compliance-report"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/late-arrivals"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "POST",
+      "path": "/check-in"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "POST",
+      "path": "/check-out"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "PUT",
+      "path": "/preferences"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "POST",
+      "path": "/request-swap"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/available-swaps"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/points"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/fairness-report"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "POST",
+      "path": "/adjust"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/understaffed"
+    },
+    {
+      "file": "backend/src/routes/dutyRoutes.js",
+      "method": "GET",
+      "path": "/teacher-workload"
+    },
+    {
+      "file": "backend/src/routes/feeStructureRoutes.js",
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/feeStructureRoutes.js",
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/feeStructureRoutes.js",
+      "method": "GET",
+      "path": "/student-accounts"
+    },
+    {
+      "file": "backend/src/routes/feeStructureRoutes.js",
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "file": "backend/src/routes/feeStructureRoutes.js",
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "file": "backend/src/routes/feeStructureRoutes.js",
+      "method": "DELETE",
+      "path": "/:id"
+    },
+    {
+      "file": "backend/src/routes/feeStructureRoutes.js",
+      "method": "POST",
+      "path": "/:id/activate"
+    },
+    {
+      "file": "backend/src/routes/feeStructureRoutes.js",
+      "method": "POST",
+      "path": "/:id/lock"
+    },
+    {
+      "file": "backend/src/routes/feeStructureRoutes.js",
+      "method": "POST",
+      "path": "/:id/assign"
+    },
+    {
+      "file": "backend/src/routes/feeStructureRoutes.js",
+      "method": "POST",
+      "path": "/student-accounts/:feeId/adjust"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "GET",
+      "path": "/summary"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "GET",
+      "path": "/invoices"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "GET",
+      "path": "/students/:studentId/account"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "POST",
+      "path": "/students/:studentId/recalculate"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "GET",
+      "path": "/transactions"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "GET",
+      "path": "/reconciliations"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "GET",
+      "path": "/credential-audits"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "GET",
+      "path": "/refunds"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "POST",
+      "path": "/transactions/:transactionId/refund"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "GET",
+      "path": "/platform-subscriptions"
+    },
+    {
+      "file": "backend/src/routes/financialSystemRoutes.js",
+      "method": "POST",
+      "path": "/backfill-legacy"
+    },
+    {
+      "file": "backend/src/routes/gamificationRoutes.js",
+      "method": "GET",
+      "path": "/leaderboard/:classId"
+    },
+    {
+      "file": "backend/src/routes/gamificationRoutes.js",
+      "method": "GET",
+      "path": "/badges/:studentId"
+    },
+    {
+      "file": "backend/src/routes/gamificationRoutes.js",
+      "method": "POST",
+      "path": "/badges"
+    },
+    {
+      "file": "backend/src/routes/gamificationRoutes.js",
+      "method": "POST",
+      "path": "/award"
+    },
+    {
+      "file": "backend/src/routes/gamificationRoutes.js",
+      "method": "GET",
+      "path": "/my-summary"
+    },
+    {
+      "file": "backend/src/routes/gamificationRoutes.js",
+      "method": "GET",
+      "path": "/rewards"
+    },
+    {
+      "file": "backend/src/routes/gamificationRoutes.js",
+      "method": "POST",
+      "path": "/rewards/redeem"
+    },
+    {
+      "file": "backend/src/routes/helpRoutes.js",
+      "method": "GET",
+      "path": "/articles"
+    },
+    {
+      "file": "backend/src/routes/helpRoutes.js",
+      "method": "GET",
+      "path": "/search"
+    },
+    {
+      "file": "backend/src/routes/helpRoutes.js",
+      "method": "GET",
+      "path": "/articles/:id"
+    },
+    {
+      "file": "backend/src/routes/homeTaskRoutes.js",
+      "method": "GET",
+      "path": "/today"
+    },
+    {
+      "file": "backend/src/routes/homeTaskRoutes.js",
+      "method": "POST",
+      "path": "/:id/complete"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "GET",
+      "path": "/files/:filename"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "POST",
+      "path": "/attachments"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "POST",
+      "path": "/submission-attachments"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "POST",
+      "path": "/assign"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "GET",
+      "path": "/teacher"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "GET",
+      "path": "/teacher/:taskId"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "PUT",
+      "path": "/teacher/:taskId"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "POST",
+      "path": "/teacher/:taskId/discussion"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "POST",
+      "path": "/teacher/submissions/:assignmentId/review"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "GET",
+      "path": "/student"
+    },
+    {
+      "file": "backend/src/routes/homeworkRoutes.js",
+      "method": "POST",
+      "path": "/submit/:assignmentId"
+    },
+    {
+      "file": "backend/src/routes/jobRoutes.js",
+      "method": "POST",
+      "path": "/csv-import"
+    },
+    {
+      "file": "backend/src/routes/jobRoutes.js",
+      "method": "POST",
+      "path": "/marks-import"
+    },
+    {
+      "file": "backend/src/routes/jobRoutes.js",
+      "method": "POST",
+      "path": "/report-cards"
+    },
+    {
+      "file": "backend/src/routes/jobRoutes.js",
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/jobRoutes.js",
+      "method": "GET",
+      "path": "/:jobId"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/auth/register"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/auth/login"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/auth/logout"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/auth/link-platform-student"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "GET",
+      "path": "/feed"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/feed/like"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/feed/save"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/feed/follow"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/feed/not-interested"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/videos/upload"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/videos/publish"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/videos/report"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/videos/remix"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "GET",
+      "path": "/comments"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/comments/add"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/comments/like"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "GET",
+      "path": "/live/rooms"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/live/start"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/live/end"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/live/chat"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/live/gift"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "GET",
+      "path": "/sounds"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/sounds/use"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/ai/ask"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/quiz/submit"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "GET",
+      "path": "/messages/inbox"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/messages/send"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "GET",
+      "path": "/billing/public-plans"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/billing/user-subscription/checkout"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "GET",
+      "path": "/billing/status/:reference"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "GET",
+      "path": "/billing/wallet"
+    },
+    {
+      "file": "backend/src/routes/learnFeedRoutes.js",
+      "method": "POST",
+      "path": "/billing/withdraw"
+    },
+    {
+      "file": "backend/src/routes/mediaRoutes.js",
+      "method": "GET",
+      "path": "/:token"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/payments/parent/fee/stk"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/payments/parent/subscription/stk"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/payments/admin/name-change/stk"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/payments/platform/stk"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/parent/pay"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/parent/upgrade-plan"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/subscription/upgrade"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/subscription/initiate-payment"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/admin/teachers/:teacherId/activate"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/admin/teachers/:teacherId/reactivate"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/admin/teachers/:teacherId/deactivate"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/admin/teachers/:teacherId/suspend"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/admin/classes/:classId/students"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/admin/students/:studentId/expel"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/parent/child/:studentId/marks"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/parent/child/:studentId/class-performance"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/parent/child/:studentId/subject-performance"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/student/marks/all"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/student/class-performance"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/student/subject-performance"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/student/gpa"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/super-admin/users"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/super-admin/metrics"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/super-admin/logs"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/super-admin/schools/:schoolId/stats"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/super-admin/requests/history"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/school/curriculum"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "POST",
+      "path": "/teacher/students/:studentId/report-absence"
+    },
+    {
+      "file": "backend/src/routes/nationalRolloutRoutes.js",
+      "method": "GET",
+      "path": "/teacher/students/:studentId/parent-contact"
+    },
+    {
+      "file": "backend/src/routes/ownerHardeningRoutes.js",
+      "method": "GET",
+      "path": "/analytics/overview"
+    },
+    {
+      "file": "backend/src/routes/ownerHardeningRoutes.js",
+      "method": "GET",
+      "path": "/branding"
+    },
+    {
+      "file": "backend/src/routes/ownerHardeningRoutes.js",
+      "method": "PUT",
+      "path": "/branding"
+    },
+    {
+      "file": "backend/src/routes/ownerHardeningRoutes.js",
+      "method": "POST",
+      "path": "/branding/logo"
+    },
+    {
+      "file": "backend/src/routes/ownerHardeningRoutes.js",
+      "method": "GET",
+      "path": "/agent-toolkit"
+    },
+    {
+      "file": "backend/src/routes/ownerHardeningRoutes.js",
+      "method": "GET",
+      "path": "/health-dashboard"
+    },
+    {
+      "file": "backend/src/routes/ownerHardeningRoutes.js",
+      "method": "POST",
+      "path": "/demo-school/seed"
+    },
+    {
+      "file": "backend/src/routes/parentMessageRoutes.js",
+      "method": "POST",
+      "path": "/message"
+    },
+    {
+      "file": "backend/src/routes/parentMessageRoutes.js",
+      "method": "GET",
+      "path": "/message-targets"
+    },
+    {
+      "file": "backend/src/routes/parentMessageRoutes.js",
+      "method": "GET",
+      "path": "/conversations"
+    },
+    {
+      "file": "backend/src/routes/parentMessageRoutes.js",
+      "method": "GET",
+      "path": "/messages/:otherUserId"
+    },
+    {
+      "file": "backend/src/routes/parentMessageRoutes.js",
+      "method": "POST",
+      "path": "/reply"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/children"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "POST",
+      "path": "/children/link"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/child/:studentId/summary"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/child/:studentId/report-card-details"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "POST",
+      "path": "/report-absence"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/fees/:studentId"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "POST",
+      "path": "/fees/pay"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/message-targets"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/conversations"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/messages/:otherUserId"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "POST",
+      "path": "/message"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/child/:studentId/attendance/today"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/child/:studentId/analytics"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/child/:studentId/subject-selection"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "PUT",
+      "path": "/child/:studentId/subject-selection"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/plans"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "POST",
+      "path": "/upgrade-plan"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "POST",
+      "path": "/pay"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/payments"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "POST",
+      "path": "/payment-confirm"
+    },
+    {
+      "file": "backend/src/routes/parentRoutes.js",
+      "method": "GET",
+      "path": "/analytics"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/providers"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/admin/providers"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "PUT",
+      "path": "/admin/providers"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/admin/providers/test-connection"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/admin/providers/:provider/setup-notifications"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/superadmin/providers"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "PUT",
+      "path": "/superadmin/providers"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/superadmin/providers/test-connection"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/superadmin/providers/:provider/setup-notifications"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/providers/available"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/parent/methods"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/parent/initiate"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/initiate"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/:reference/status"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/reconcile/:reference"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/webhook/:provider"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/webhook/:provider"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/mpesa/validation"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/mpesa/confirmation"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/mpesa/validation"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/mpesa/confirmation"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/mpesa/callback"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/daraja/callback"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/callback"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/admin/context"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/admin/school-settings"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "PUT",
+      "path": "/admin/school-settings"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/admin/test-connection"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/admin/manual-queue"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/admin/records"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/parent/school-settings"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/parent/students/:studentId/fee-accounts"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/parent/students/:studentId/history"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/admin/finance-summary"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/admin/students/:studentId/finance"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/admin/students/:studentId/history"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/admin/students/:studentId/manual-payment"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/admin/students/:studentId/bursary"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/admin/transactions/:paymentId/approve"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/admin/transactions/:paymentId/reject"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/admin/manual-queue/:paymentId/approve"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/admin/manual-queue/:paymentId/reject"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/superadmin/platform-settings"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "PUT",
+      "path": "/superadmin/platform-settings"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/superadmin/test-connection"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/superadmin/platform-manual-queue"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/superadmin/platform-manual-queue/:paymentId/review"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/parent/fee/stk"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/parent/fee/manual"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/parent/subscription/stk"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/parent/subscription/manual"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/school/subscription/stk"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/admin/name-change/stk"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "POST",
+      "path": "/platform/stk"
+    },
+    {
+      "file": "backend/src/routes/paymentRoutes.js",
+      "method": "GET",
+      "path": "/stk/:checkoutRequestId/status"
+    },
+    {
+      "file": "backend/src/routes/publicRoutes.js",
+      "method": "GET",
+      "path": "/duty/today"
+    },
+    {
+      "file": "backend/src/routes/publicRoutes.js",
+      "method": "GET",
+      "path": "/duty/week"
+    },
+    {
+      "file": "backend/src/routes/publicRoutes.js",
+      "method": "GET",
+      "path": "/school/:schoolId"
+    },
+    {
+      "file": "backend/src/routes/realtimeRoutes.js",
+      "method": "GET",
+      "path": "/sync"
+    },
+    {
+      "file": "backend/src/routes/reportHistoryRoutes.js",
+      "method": "GET",
+      "path": "/shared/:token"
+    },
+    {
+      "file": "backend/src/routes/reportHistoryRoutes.js",
+      "method": "GET",
+      "path": "/history"
+    },
+    {
+      "file": "backend/src/routes/reportHistoryRoutes.js",
+      "method": "GET",
+      "path": "/latest/:studentId/pdf"
+    },
+    {
+      "file": "backend/src/routes/reportHistoryRoutes.js",
+      "method": "GET",
+      "path": "/history/:id/pdf"
+    },
+    {
+      "file": "backend/src/routes/reportHistoryRoutes.js",
+      "method": "GET",
+      "path": "/history/:id"
+    },
+    {
+      "file": "backend/src/routes/reportHistoryRoutes.js",
+      "method": "POST",
+      "path": "/history/:id/correct"
+    },
+    {
+      "file": "backend/src/routes/reportHistoryRoutes.js",
+      "method": "POST",
+      "path": "/history/:id/share"
+    },
+    {
+      "file": "backend/src/routes/reportRoutes.js",
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/reportRoutes.js",
+      "method": "GET",
+      "path": "/comments"
+    },
+    {
+      "file": "backend/src/routes/reportRoutes.js",
+      "method": "POST",
+      "path": "/comments"
+    },
+    {
+      "file": "backend/src/routes/reportRoutes.js",
+      "method": "PUT",
+      "path": "/comments/:id"
+    },
+    {
+      "file": "backend/src/routes/reportRoutes.js",
+      "method": "POST",
+      "path": "/comments/bulk-save"
+    },
+    {
+      "file": "backend/src/routes/reportRoutes.js",
+      "method": "POST",
+      "path": "/comments/generate"
+    },
+    {
+      "file": "backend/src/routes/reportRoutes.js",
+      "method": "POST",
+      "path": "/comments/headteacher"
+    },
+    {
+      "file": "backend/src/routes/reportRoutes.js",
+      "method": "POST",
+      "path": "/:reportId/headteacher-comment"
+    },
+    {
+      "file": "backend/src/routes/reportRoutes.js",
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "file": "backend/src/routes/reportRoutes.js",
+      "method": "POST",
+      "path": "/generate"
+    },
+    {
+      "file": "backend/src/routes/scaleRoutes.js",
+      "method": "GET",
+      "path": "/students"
+    },
+    {
+      "file": "backend/src/routes/scaleRoutes.js",
+      "method": "GET",
+      "path": "/teachers"
+    },
+    {
+      "file": "backend/src/routes/scaleRoutes.js",
+      "method": "GET",
+      "path": "/parents"
+    },
+    {
+      "file": "backend/src/routes/scaleRoutes.js",
+      "method": "GET",
+      "path": "/academic-records"
+    },
+    {
+      "file": "backend/src/routes/scaleRoutes.js",
+      "method": "GET",
+      "path": "/attendance"
+    },
+    {
+      "file": "backend/src/routes/scaleRoutes.js",
+      "method": "GET",
+      "path": "/alerts"
+    },
+    {
+      "file": "backend/src/routes/scaleRoutes.js",
+      "method": "GET",
+      "path": "/messages"
+    },
+    {
+      "file": "backend/src/routes/scaleRoutes.js",
+      "method": "GET",
+      "path": "/overview"
+    },
+    {
+      "file": "backend/src/routes/schoolRoutes.js",
+      "method": "POST",
+      "path": "/name-change-request"
+    },
+    {
+      "file": "backend/src/routes/schoolRoutes.js",
+      "method": "GET",
+      "path": "/name-change-requests"
+    },
+    {
+      "file": "backend/src/routes/searchRoutes.js",
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/smsRoutes.js",
+      "method": "GET",
+      "path": "/config"
+    },
+    {
+      "file": "backend/src/routes/smsRoutes.js",
+      "method": "PUT",
+      "path": "/config"
+    },
+    {
+      "file": "backend/src/routes/smsRoutes.js",
+      "method": "POST",
+      "path": "/send"
+    },
+    {
+      "file": "backend/src/routes/smsRoutes.js",
+      "method": "GET",
+      "path": "/history"
+    },
+    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
+      "method": "GET",
+      "path": "/promotions"
+    },
+    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
+      "method": "POST",
+      "path": "/promotions/preview"
+    },
+    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
+      "method": "POST",
+      "path": "/promotions/apply-due"
+    },
+    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
+      "method": "GET",
+      "path": "/promotions/:id/export/:format"
+    },
+    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
+      "method": "GET",
+      "path": "/promotions/:id"
+    },
+    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "PATCH",
-      "path": "/api/lifecycle/birthdays/students/:studentId/privacy",
-      "file": "backend/src/routes/birthdayRoutes.js"
+      "path": "/promotions/:id/decisions/:decisionId"
     },
     {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/birthdays/process",
-      "file": "backend/src/routes/birthdayRoutes.js"
+      "path": "/promotions/:id/confirm"
     },
     {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
+      "method": "POST",
+      "path": "/promotions/:id/rollback"
+    },
+    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "GET",
-      "path": "/api/lifecycle/promotions",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/transfer-options"
     },
     {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/promotions/preview",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/transfers/preview"
     },
     {
-      "method": "POST",
-      "path": "/api/lifecycle/promotions/apply-due",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "GET",
-      "path": "/api/lifecycle/promotions/:id/export/:format",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/transfers"
     },
     {
-      "method": "GET",
-      "path": "/api/lifecycle/promotions/:id",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
-    },
-    {
-      "method": "PATCH",
-      "path": "/api/lifecycle/promotions/:id/decisions/:decisionId",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/promotions/:id/confirm",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/transfers"
     },
     {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/promotions/:id/rollback",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/school-transfer-out/preview"
     },
     {
-      "method": "GET",
-      "path": "/api/lifecycle/transfer-options",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/transfers/preview",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/school-transfer-outs"
     },
     {
-      "method": "GET",
-      "path": "/api/lifecycle/transfers",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/transfers",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/transfer-requests"
     },
     {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
+      "method": "GET",
+      "path": "/transfers/:id"
+    },
+    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/school-transfer-out/preview",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/transfers/:id/approve"
     },
     {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/school-transfer-outs",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/transfers/:id/reject"
     },
     {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/transfer-requests",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/transfers/:id/cancel"
     },
     {
-      "method": "GET",
-      "path": "/api/lifecycle/transfers/:id",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/transfers/:id/approve",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/transfers/:id/rollback"
     },
     {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
+      "method": "GET",
+      "path": "/me/enrollments"
+    },
+    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
+      "method": "GET",
+      "path": "/children/:studentId/enrollments"
+    },
+    {
+      "file": "backend/src/routes/studentLifecycleRoutes.js",
+      "method": "GET",
+      "path": "/students/:studentId/enrollments"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/transfers/:id/reject",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/set-first-password"
     },
     {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "GET",
+      "path": "/dashboard"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "GET",
+      "path": "/materials"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "GET",
+      "path": "/grades"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "GET",
+      "path": "/recommendations"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "GET",
+      "path": "/careers"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "GET",
+      "path": "/career/interests"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "PUT",
+      "path": "/career/interests"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/transfers/:id/cancel",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/career/insights"
     },
     {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "GET",
+      "path": "/attendance"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
       "method": "POST",
-      "path": "/api/lifecycle/transfers/:id/rollback",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/message"
     },
     {
+      "file": "backend/src/routes/studentRoutes.js",
       "method": "GET",
-      "path": "/api/lifecycle/me/enrollments",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
+      "path": "/messages/:otherUserId"
     },
     {
-      "method": "GET",
-      "path": "/api/lifecycle/children/:studentId/enrollments",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/lifecycle/students/:studentId/enrollments",
-      "file": "backend/src/routes/studentLifecycleRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/advanced/summary",
-      "file": "backend/src/routes/advancedAnalyticsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/advanced/export.csv",
-      "file": "backend/src/routes/advancedAnalyticsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/advanced/export.xlsx",
-      "file": "backend/src/routes/advancedAnalyticsRoutes.js"
-    },
-    {
-      "method": "GET",
-      "path": "/api/analytics/advanced/export.pdf",
-      "file": "backend/src/routes/advancedAnalyticsRoutes.js"
-    },
-    {
+      "file": "backend/src/routes/studentRoutes.js",
       "method": "POST",
-      "path": "/api/monitoring/frontend-error",
-      "file": "backend/src/routes/monitoringRoutes.js"
+      "path": "/group-message"
     },
     {
+      "file": "backend/src/routes/studentRoutes.js",
       "method": "GET",
-      "path": "/api/monitoring/health",
-      "file": "backend/src/routes/monitoringRoutes.js"
+      "path": "/group-messages"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "GET",
+      "path": "/analytics"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "GET",
+      "path": "/subject-selection"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "PUT",
+      "path": "/subject-selection"
+    },
+    {
+      "file": "backend/src/routes/studentRoutes.js",
+      "method": "POST",
+      "path": "/mood"
+    },
+    {
+      "file": "backend/src/routes/subscriptionRoutes.js",
+      "method": "GET",
+      "path": "/plans"
+    },
+    {
+      "file": "backend/src/routes/subscriptionRoutes.js",
+      "method": "GET",
+      "path": "/my-status"
+    },
+    {
+      "file": "backend/src/routes/subscriptionRoutes.js",
+      "method": "GET",
+      "path": "/child/:studentId/status"
+    },
+    {
+      "file": "backend/src/routes/subscriptionRoutes.js",
+      "method": "POST",
+      "path": "/child/request"
+    },
+    {
+      "file": "backend/src/routes/subscriptionRoutes.js",
+      "method": "POST",
+      "path": "/upgrade"
+    },
+    {
+      "file": "backend/src/routes/subscriptionRoutes.js",
+      "method": "POST",
+      "path": "/initiate-payment"
+    },
+    {
+      "file": "backend/src/routes/subscriptionRoutes.js",
+      "method": "GET",
+      "path": "/school/status"
+    },
+    {
+      "file": "backend/src/routes/subscriptionRoutes.js",
+      "method": "GET",
+      "path": "/school/billing-history"
+    },
+    {
+      "file": "backend/src/routes/subscriptionRoutes.js",
+      "method": "POST",
+      "path": "/school/request"
+    },
+    {
+      "file": "backend/src/routes/subscriptionRoutes.js",
+      "method": "POST",
+      "path": "/expire-now"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/overview"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/schools"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/pending-schools"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/suspended-schools"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/schools"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/schools/:id/approve"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/schools/:id/reject"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/schools/:id/suspend"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/schools/:id/reactivate"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "PUT",
+      "path": "/schools/:id"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "DELETE",
+      "path": "/schools/:id"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/schools/:schoolId/detail"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "PUT",
+      "path": "/schools/:schoolId/access-controls"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/payment-requests"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/payment-requests/:requestId/review"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/requests"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/requests/:id/approve"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/requests/:id/reject"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "PUT",
+      "path": "/bank-details/:schoolId"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/schools/:schoolId/teachers"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/schools/:schoolId/students"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/schools/:schoolId/parents"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/system/status"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/system/metrics"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/system/events"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/student-parent-links/audit"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/student-parent-links/cleanup"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/platform-settings"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "PUT",
+      "path": "/platform-settings"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/settings/reset"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/backup"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "POST",
+      "path": "/cache/clear"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/export"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/growth-data"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/school-distribution"
+    },
+    {
+      "file": "backend/src/routes/superAdminRoutes.js",
+      "method": "GET",
+      "path": "/analytics"
+    },
+    {
+      "file": "backend/src/routes/taskRoutes.js",
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/taskRoutes.js",
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/taskRoutes.js",
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "file": "backend/src/routes/taskRoutes.js",
+      "method": "DELETE",
+      "path": "/:id"
+    },
+    {
+      "file": "backend/src/routes/taskRoutes.js",
+      "method": "POST",
+      "path": "/:id/complete"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/students"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/students"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/students/:studentId"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "DELETE",
+      "path": "/students/:studentId"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/students/upload"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/class-students"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/my-assignments"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "PUT",
+      "path": "/marks/:recordId"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "DELETE",
+      "path": "/marks/:recordId"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/marks-template"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/marks"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/marks/bulk"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/upload/marks"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/marks/publish"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/attendance"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/comment"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/dashboard"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/stats"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/my-class"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/my-subjects"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/classes/:classId/students"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/gradebook"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/reports/snapshots"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/students/:studentId/report-card-preview"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/performance"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/subject-selection-requests"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/subject-requests"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/subject-selection-requests/:selectionId/review"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/subject-requests/:selectionId/review"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/parent-conversations"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/conversations"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/messages/:parentId"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "PUT",
+      "path": "/messages/read/:conversationId"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/reply"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "DELETE",
+      "path": "/messages/:messageId"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/staff-members"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/group-message"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/private-message"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/group-messages"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/private-messages/:otherUserId"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/tasks"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/tasks"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "PUT",
+      "path": "/tasks/:taskId"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "DELETE",
+      "path": "/tasks/:taskId"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "POST",
+      "path": "/tasks/:taskId/complete"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/attendance/:date"
+    },
+    {
+      "file": "backend/src/routes/teacherRoutes.js",
+      "method": "GET",
+      "path": "/analytics"
+    },
+    {
+      "file": "backend/src/routes/timetableRoutes.js",
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "file": "backend/src/routes/timetableRoutes.js",
+      "method": "GET",
+      "path": "/classes"
+    },
+    {
+      "file": "backend/src/routes/timetableRoutes.js",
+      "method": "POST",
+      "path": "/generate"
+    },
+    {
+      "file": "backend/src/routes/timetableRoutes.js",
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "file": "backend/src/routes/timetableRoutes.js",
+      "method": "POST",
+      "path": "/:id/publish"
+    },
+    {
+      "file": "backend/src/routes/timetableRoutes.js",
+      "method": "GET",
+      "path": "/student/me"
+    },
+    {
+      "file": "backend/src/routes/timetableRoutes.js",
+      "method": "GET",
+      "path": "/parent/child/:studentId"
+    },
+    {
+      "file": "backend/src/routes/timetableRoutes.js",
+      "method": "GET",
+      "path": "/class/:classId"
+    },
+    {
+      "file": "backend/src/routes/timetableRoutes.js",
+      "method": "GET",
+      "path": "/teacher/me"
+    },
+    {
+      "file": "backend/src/routes/timetableRoutes.js",
+      "method": "GET",
+      "path": "/teacher/:teacherId"
+    },
+    {
+      "file": "backend/src/routes/tutorRoutes.js",
+      "method": "GET",
+      "path": "/config"
+    },
+    {
+      "file": "backend/src/routes/tutorRoutes.js",
+      "method": "POST",
+      "path": "/ask"
+    },
+    {
+      "file": "backend/src/routes/tutorRoutes.js",
+      "method": "GET",
+      "path": "/progress/:studentId?"
+    },
+    {
+      "file": "backend/src/routes/tutorRoutes.js",
+      "method": "GET",
+      "path": "/sessions"
+    },
+    {
+      "file": "backend/src/routes/tutorRoutes.js",
+      "method": "POST",
+      "path": "/sessions"
+    },
+    {
+      "file": "backend/src/routes/tutorRoutes.js",
+      "method": "GET",
+      "path": "/sessions/:id"
+    },
+    {
+      "file": "backend/src/routes/tutorRoutes.js",
+      "method": "GET",
+      "path": "/session/:studentId?"
+    },
+    {
+      "file": "backend/src/routes/tutorRoutes.js",
+      "method": "POST",
+      "path": "/practice/answer"
+    },
+    {
+      "file": "backend/src/routes/tutorRoutes.js",
+      "method": "GET",
+      "path": "/reports/parent/:parentId?"
+    },
+    {
+      "file": "backend/src/routes/tutorRoutes.js",
+      "method": "GET",
+      "path": "/reports/teacher/:classId?"
+    },
+    {
+      "file": "backend/src/routes/uploadRoutes.js",
+      "method": "GET",
+      "path": "/template/:type"
+    },
+    {
+      "file": "backend/src/routes/uploadRoutes.js",
+      "method": "GET",
+      "path": "/template/marks"
+    },
+    {
+      "file": "backend/src/routes/uploadRoutes.js",
+      "method": "POST",
+      "path": "/validate"
+    },
+    {
+      "file": "backend/src/routes/uploadRoutes.js",
+      "method": "POST",
+      "path": "/students"
+    },
+    {
+      "file": "backend/src/routes/uploadRoutes.js",
+      "method": "POST",
+      "path": "/marks"
+    },
+    {
+      "file": "backend/src/routes/uploadRoutes.js",
+      "method": "POST",
+      "path": "/attendance"
+    },
+    {
+      "file": "backend/src/routes/uploadRoutes.js",
+      "method": "GET",
+      "path": "/history"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "GET",
+      "path": "/alerts"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "GET",
+      "path": "/stats"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "PUT",
+      "path": "/profile"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "GET",
+      "path": "/preferences"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "PUT",
+      "path": "/preferences"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "GET",
+      "path": "/export"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "POST",
+      "path": "/deactivate"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "POST",
+      "path": "/profile-picture"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "POST",
+      "path": "/signature"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "GET",
+      "path": "/consent/status"
+    },
+    {
+      "file": "backend/src/routes/userRoutes.js",
+      "method": "GET",
+      "path": "/students/:studentId/details"
+    },
+    {
+      "file": "backend/src/routes/monitoringRoutes.js",
+      "method": "POST",
+      "path": "/frontend-error"
+    },
+    {
+      "file": "backend/src/routes/monitoringRoutes.js",
+      "method": "GET",
+      "path": "/health"
     }
   ]
 }

@@ -81,6 +81,28 @@ function publicUrl(path) {
   return full;
 }
 
+function providerNotificationUrl(provider) {
+  provider = normalizeProvider(provider);
+  if (provider === 'mpesa') return publicUrl('/api/payments/mpesa/callback');
+  return publicUrl(`/api/payments/webhook/${provider}`);
+}
+
+function providerValidationUrl(provider) {
+  provider = normalizeProvider(provider);
+  if (provider === 'mpesa') return publicUrl('/api/payments/mpesa/validation');
+  return providerNotificationUrl(provider);
+}
+
+function providerConfirmationUrl(provider) {
+  provider = normalizeProvider(provider);
+  if (provider === 'mpesa') return publicUrl('/api/payments/mpesa/confirmation');
+  return providerNotificationUrl(provider);
+}
+
+function providerConfigIdFor({ scope = 'school', schoolCode = 'platform', provider = 'manual' } = {}) {
+  return `${scope}:${schoolCode || 'platform'}:${normalizeProvider(provider, { allowEmpty: true }) || 'manual'}`;
+}
+
 function pesapalEndpoint(config = {}) {
   const explicit = config.apiBaseUrl || config.baseUrl || config.endpoint || '';
   if (explicit) {
@@ -111,10 +133,34 @@ async function getPesapalToken(config = {}) {
   return { token, endpoint, tokenData };
 }
 
+async function listPesapalIpns(config = {}) {
+  const { token, endpoint } = await getPesapalToken(config);
+  const data = await requestJson({ method: 'GET', hostname: endpoint.hostname, path: endpoint.pathBase + '/URLSetup/GetIpnList', headers: { Accept: 'application/json', Authorization: 'Bearer ' + token } });
+  const list = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : (Array.isArray(data?.ipn_list) ? data.ipn_list : []));
+  return { list, gatewayResponse: data };
+}
+
+function ipnUrlFromRow(row = {}) {
+  return row.url || row.ipn_url || row.notification_url || row.ipnUrl || row.notificationUrl || row.IPNURL || row.Url || row.URL || '';
+}
+
+function ipnIdFromRow(row = {}) {
+  return row.ipn_id || row.notification_id || row.id || row.ipnId || row.notificationId || row.IPNID || row.NotificationId || '';
+}
+
 async function registerPesapalIpn(config = {}) {
   const { token, endpoint } = await getPesapalToken(config);
-  const ipnUrl = config.ipnUrl || config.notificationUrl || config.webhookUrl || config.callbackUrl || process.env.PESAPAL_IPN_URL || publicUrl('/api/payments/webhook/pesapal');
+  const ipnUrl = config.ipnUrl || config.notificationUrl || config.webhookUrl || process.env.PESAPAL_IPN_URL || providerNotificationUrl('pesapal');
   if (!ipnUrl || !/^https:\/\//i.test(String(ipnUrl))) throw new Error('Pesapal IPN URL must be a public HTTPS URL');
+
+  // First check if the exact URL was already registered in this Pesapal account.
+  try {
+    const existing = await listPesapalIpns(config);
+    const match = existing.list.find(row => String(ipnUrlFromRow(row)).replace(/\/$/, '') === String(ipnUrl).replace(/\/$/, ''));
+    const existingId = match ? ipnIdFromRow(match) : '';
+    if (existingId) return { notificationId: existingId, ipnUrl, alreadyRegistered: true, gatewayResponse: existing.gatewayResponse };
+  } catch (_) {}
+
   const registerPayload = {
     url: ipnUrl,
     ipn_notification_type: config.ipnNotificationType || config.notificationType || 'GET'
@@ -122,7 +168,7 @@ async function registerPesapalIpn(config = {}) {
   const data = await requestJson({ hostname: endpoint.hostname, path: endpoint.pathBase + '/URLSetup/RegisterIPN', headers: { Accept: 'application/json', Authorization: 'Bearer ' + token }, body: registerPayload });
   const notificationId = data?.ipn_id || data?.notification_id || data?.id || data?.data?.ipn_id || data?.data?.notification_id;
   if (!notificationId) throw new Error(data?.error?.message || data?.message || 'Pesapal registered/replied but did not return an IPN ID');
-  return { notificationId, ipnUrl, gatewayResponse: data };
+  return { notificationId, ipnUrl, alreadyRegistered: false, gatewayResponse: data };
 }
 
 async function createPesapalCheckout({ payment, phone, email, name, config }) {
@@ -215,6 +261,25 @@ function requestJson({ method = 'POST', hostname, path, headers = {}, body = {} 
   });
 }
 
+function requestFormUrlEncoded({ method = 'POST', hostname, path, headers = {}, body = new URLSearchParams() }) {
+  return new Promise((resolve, reject) => {
+    const payload = body instanceof URLSearchParams ? body.toString() : String(body || '');
+    const req = https.request({ method, hostname, path, headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(payload), ...headers } }, res => {
+      let raw = '';
+      res.on('data', chunk => raw += chunk);
+      res.on('end', () => {
+        let data = {};
+        try { data = raw ? JSON.parse(raw) : {}; } catch (_) { data = { raw }; }
+        if (res.statusCode >= 400) return reject(new Error(data?.error?.message || data?.message || raw));
+        resolve(data);
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
 function decryptProvider(provider = {}) {
   const out = { ...provider };
   Object.keys(out).forEach(k => {
@@ -291,27 +356,47 @@ function hasAny(config = {}, fields = []) {
 
 function providerReadiness(provider, config = {}, active = '') {
   const enabled = provider === active && config?.enabled !== false;
-  if (!enabled) return { status: 'disabled', ready: false, visibleToParent: false, message: 'Provider is not active for this scope.' };
-  if (['manual','bank','cash','card'].includes(provider)) return { status: 'ready', ready: true, visibleToParent: true, message: `${providerLabel(provider)} is ready for finance verification.` };
+  const notificationStatus = config.notificationStatus || config.status || '';
+  if (!enabled) return { status: 'disabled', ready: false, visibleToParent: false, notificationStatus, message: 'Provider is not active for this scope.' };
+  if (['manual','bank','cash','card'].includes(provider)) return { status: 'ready', ready: true, visibleToParent: true, notificationStatus: 'not_required', message: `${providerLabel(provider)} is ready for finance verification.` };
+  if (notificationStatus === 'error') return { status: 'error', ready: false, visibleToParent: false, notificationStatus, message: config.lastError || `${providerLabel(provider)} notification setup has an error.` };
   if (provider === 'mpesa') {
     const missing = [];
     if (!hasAny(config, ['consumerKey'])) missing.push('consumerKey');
     if (!hasAny(config, ['consumerSecret'])) missing.push('consumerSecret');
     if (!hasAny(config, ['shortcode','businessShortCode'])) missing.push('shortcode');
     if (!hasAny(config, ['passkey'])) missing.push('passkey');
-    return missing.length ? { status: 'not_configured', ready: false, visibleToParent: false, message: `Missing M-Pesa ${missing.join(', ')}.` } : { status: 'ready', ready: true, visibleToParent: true, message: 'M-Pesa credentials are present. Confirm callback/webhook with a test transaction.' };
+    return missing.length
+      ? { status: 'needs_credentials', ready: false, visibleToParent: false, notificationStatus, message: `Missing M-Pesa ${missing.join(', ')}.` }
+      : { status: 'ready', ready: true, visibleToParent: true, notificationStatus: notificationStatus || 'callback_attached_per_payment', message: 'M-Pesa credentials are present. STK callback is attached to each payment request.' };
   }
   if (provider === 'pesapal') {
     const missing = [];
     if (!hasAny(config, ['consumerKey'])) missing.push('consumerKey');
     if (!hasAny(config, ['consumerSecret'])) missing.push('consumerSecret');
     if (!hasAny(config, ['ipnId','notificationId']) && !config.checkoutUrl) missing.push('ipnId/notificationId');
-    return missing.length ? { status: 'not_configured', ready: false, visibleToParent: false, message: `Missing PesaPal ${missing.join(', ')}.` } : { status: 'ready', ready: true, visibleToParent: true, message: 'PesaPal settings are present.' };
+    return missing.length
+      ? { status: 'needs_credentials', ready: false, visibleToParent: false, notificationStatus, message: `Missing PesaPal ${missing.join(', ')}.` }
+      : { status: 'ready', ready: true, visibleToParent: true, notificationStatus: notificationStatus || 'registered', message: 'PesaPal credentials and IPN notification ID are present.' };
   }
-  if (provider === 'paystack') return hasAny(config, ['secretKey']) ? { status: 'ready', ready: true, visibleToParent: true, message: 'Paystack secret key is present.' } : { status: 'not_configured', ready: false, visibleToParent: false, message: 'Missing Paystack secret key.' };
-  if (provider === 'flutterwave') return hasAny(config, ['secretKey']) ? { status: 'ready', ready: true, visibleToParent: true, message: 'Flutterwave secret key is present.' } : { status: 'not_configured', ready: false, visibleToParent: false, message: 'Missing Flutterwave secret key.' };
-  if (provider === 'stripe') return hasAny(config, ['secretKey']) ? { status: 'ready', ready: true, visibleToParent: true, message: 'Stripe secret key is present.' } : { status: 'not_configured', ready: false, visibleToParent: false, message: 'Missing Stripe secret key.' };
-  return { status: enabled ? 'ready' : 'disabled', ready: enabled, visibleToParent: enabled, message: enabled ? `${providerLabel(provider)} is ready.` : `${providerLabel(provider)} is disabled.` };
+  if (provider === 'paystack') {
+    if (!hasAny(config, ['secretKey'])) return { status: 'needs_credentials', ready: false, visibleToParent: false, notificationStatus, message: 'Missing Paystack secret key.' };
+    const needsDashboard = notificationStatus === 'needs_dashboard_setup' && !config.webhookVerifiedAt;
+    return { status: needsDashboard ? 'needs_dashboard_setup' : 'ready', ready: !needsDashboard, visibleToParent: !needsDashboard, notificationStatus: notificationStatus || 'dashboard_setup_required', message: needsDashboard ? 'Paste the webhook URL in Paystack, then run a test webhook.' : 'Paystack credentials are present and notification setup is verified/accepted.' };
+  }
+  if (provider === 'flutterwave') {
+    if (!hasAny(config, ['secretKey'])) return { status: 'needs_credentials', ready: false, visibleToParent: false, notificationStatus, message: 'Missing Flutterwave secret key.' };
+    const hasSecretHash = hasAny(config, ['webhookSecret','secretHash','encryptionKey']);
+    const needsDashboard = notificationStatus === 'needs_dashboard_setup' && !config.webhookVerifiedAt;
+    if (!hasSecretHash) return { status: 'needs_credentials', ready: false, visibleToParent: false, notificationStatus, message: 'Missing Flutterwave webhook secret/hash.' };
+    return { status: needsDashboard ? 'needs_dashboard_setup' : 'ready', ready: !needsDashboard, visibleToParent: !needsDashboard, notificationStatus: notificationStatus || 'dashboard_setup_required', message: needsDashboard ? 'Paste the webhook URL and secret/hash in Flutterwave, then run a test webhook.' : 'Flutterwave credentials and webhook hash are present.' };
+  }
+  if (provider === 'stripe') {
+    if (!hasAny(config, ['secretKey'])) return { status: 'needs_credentials', ready: false, visibleToParent: false, notificationStatus, message: 'Missing Stripe secret key.' };
+    if (!hasAny(config, ['webhookSecret'])) return { status: 'needs_dashboard_setup', ready: false, visibleToParent: false, notificationStatus, message: 'Missing Stripe webhook signing secret.' };
+    return { status: 'ready', ready: true, visibleToParent: true, notificationStatus: notificationStatus || 'registered', message: 'Stripe credentials and webhook signing secret are present.' };
+  }
+  return { status: enabled ? 'ready' : 'disabled', ready: enabled, visibleToParent: enabled, notificationStatus, message: enabled ? `${providerLabel(provider)} is ready.` : `${providerLabel(provider)} is disabled.` };
 }
 
 function publicProviders(row) {
@@ -321,7 +406,7 @@ function publicProviders(row) {
   return Object.fromEntries(providers.map((provider) => {
     const cfg = providerConfigFromMap(map, provider) || {};
     const readiness = providerReadiness(provider, cfg, active);
-    return [provider, { ...vault.publicProvider(cfg), provider, enabled: provider === active, readiness: readiness.status, ready: readiness.ready, visibleToParent: readiness.visibleToParent, statusMessage: readiness.message }];
+    return [provider, { ...vault.publicProvider(cfg), provider, enabled: provider === active, readiness: readiness.status, ready: readiness.ready, visibleToParent: readiness.visibleToParent, notificationStatus: readiness.notificationStatus, statusMessage: readiness.message, notificationUrl: cfg.notificationUrl || cfg.webhookUrl || cfg.callbackUrl || providerNotificationUrl(provider), lastVerifiedAt: cfg.lastVerifiedAt || cfg.webhookVerifiedAt || null, lastError: cfg.lastError || null }];
   }));
 }
 
@@ -383,7 +468,9 @@ function buildIncomingProvider({ provider, body, existingProvider = {}, user }) 
     methods: sanitizeMethods(body.methods || body.config?.methods, provider),
     publicKey: body.publicKey || body.config?.publicKey || undefined,
     shortcode: body.shortcode || body.config?.shortcode || undefined,
-    callbackUrl: body.callbackUrl || body.config?.callbackUrl || publicUrl(`/api/payments/webhook/${provider}`),
+    callbackUrl: body.callbackUrl || body.config?.callbackUrl || providerNotificationUrl(provider),
+    notificationUrl: body.notificationUrl || body.webhookUrl || body.config?.notificationUrl || body.config?.webhookUrl || providerNotificationUrl(provider),
+    webhookUrl: body.webhookUrl || body.config?.webhookUrl || providerNotificationUrl(provider),
     updatedBy: user?.id || null,
     updatedAt: new Date().toISOString()
   };
@@ -473,7 +560,7 @@ async function resolvePaymentProvider({ paymentType, schoolCode, requestedProvid
   if (cfg.enabled !== true && !rawEnabledProviders(row).includes(active)) throw new Error(`${providerLabel(active)} is configured but not enabled.`);
   const selectedMethod = normalizePaymentMethod(method) || sanitizeMethods(cfg.methods, active)[0] || '';
   if (selectedMethod && !providerSupportsMethod(active, selectedMethod, cfg)) throw new Error(`${methodLabel(selectedMethod)} is not enabled for ${providerLabel(active)}.`);
-  return { row, provider: active, method: selectedMethod, linkingRule: row.metadata?.linkingRule || row.accountReferenceFormat || 'elimuid' };
+  return { row, provider: active, method: selectedMethod, linkingRule: row.metadata?.linkingRule || row.accountReferenceFormat || 'elimuid', providerConfigId: providerConfigIdFor({ scope: paymentType === PLATFORM ? 'platform' : 'school', schoolCode: row.schoolCode || schoolCode || 'platform', provider: active }) };
 }
 
 async function getProviderConfig({ paymentType, schoolCode, provider }) {
@@ -484,7 +571,7 @@ async function getProviderConfig({ paymentType, schoolCode, provider }) {
   const map = providerMap(row);
   const cfg = decryptProvider(providerConfigFromMap(map, provider) || {});
   if (provider === 'mpesa') {
-    return { ...cfg, consumerKey: cfg.consumerKey || row.darajaConsumerKey, consumerSecret: cfg.consumerSecret || row.darajaConsumerSecret, passkey: cfg.passkey || row.darajaPasskey, shortcode: cfg.shortcode || row.darajaShortcode, callbackUrl: cfg.callbackUrl || row.callbackUrl || publicUrl('/api/payments/webhook/mpesa'), mode: cfg.environment || row.darajaEnvironment || process.env.DARAJA_ENV || 'sandbox' };
+    return { ...cfg, consumerKey: cfg.consumerKey || row.darajaConsumerKey, consumerSecret: cfg.consumerSecret || row.darajaConsumerSecret, passkey: cfg.passkey || row.darajaPasskey, shortcode: cfg.shortcode || row.darajaShortcode, callbackUrl: cfg.callbackUrl || cfg.notificationUrl || row.callbackUrl || providerNotificationUrl('mpesa'), validationUrl: cfg.validationUrl || providerValidationUrl('mpesa'), confirmationUrl: cfg.confirmationUrl || providerConfirmationUrl('mpesa'), mode: cfg.environment || row.darajaEnvironment || process.env.DARAJA_ENV || 'sandbox' };
   }
   return cfg;
 }
@@ -706,18 +793,35 @@ async function initiatePayment({ user, body }) {
 
   return sequelize.transaction(async (transaction) => {
     if (paymentType === SCHOOL_FEE) {
-      if (!body.studentId || !body.feeId) throw new Error('studentId and feeId are required for school fee payments');
+      if (!body.studentId) throw new Error('studentId is required for school fee payments');
       schoolCode = user?.schoolCode || body.schoolCode;
       if (user?.role === 'parent') {
         ({ parent, student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user.id, studentId: body.studentId, schoolCode, transaction }));
       } else {
         student = await financeLedger.findStudentInSchool({ schoolCode, studentId: body.studentId, transaction });
       }
-      fee = await Fee.findOne({ where: { id: body.feeId, studentId: student.id, schoolCode }, transaction });
+      if (!student) throw new Error('Student not found for this school');
+
+      const requestedFeeId = body.feeId || body.invoiceId || body.feeAccountId || null;
+      if (requestedFeeId) {
+        fee = await Fee.findOne({ where: { id: requestedFeeId, studentId: student.id, schoolCode }, transaction });
+      } else {
+        const feeRows = await Fee.findAll({
+          where: { studentId: student.id, schoolCode },
+          order: [['year', 'DESC'], ['createdAt', 'DESC']],
+          transaction
+        });
+        fee = feeRows.find(row => Math.max(0, Number(row.totalAmount || 0) - Number((row.parentPaidAmount ?? row.paidAmount) || 0) - Number(row.creditAmount || 0)) > 0) || feeRows[0] || null;
+      }
       if (!fee) throw new Error('Fee account not found for this student');
       var invoice = await financialSystem.ensureInvoiceForFee({ feeId: fee.id, transaction });
       const balance = invoice ? Number(invoice.balanceAmount || 0) : Math.max(0, Number(fee.totalAmount || 0) - Number((fee.parentPaidAmount ?? fee.paidAmount) || 0) - Number(fee.creditAmount || 0));
-      if (amount > balance && body.allowOverpay !== true) throw new Error(`Amount exceeds outstanding balance. Balance is ${balance}`);
+      if (balance <= 0 && body.allowOverpay !== true) throw new Error('This fee account has no outstanding balance');
+      if (amount > balance && body.allowOverpay !== true) {
+        const err = new Error(`Amount exceeds outstanding balance. Balance is ${balance}`);
+        err.data = { balance, feeId: fee.id, studentId: student.id };
+        throw err;
+      }
     }
 
     const resolved = await resolvePaymentProvider({ paymentType, schoolCode, requestedProvider, method: paymentMethod });
@@ -743,7 +847,7 @@ async function initiatePayment({ user, body }) {
       schoolCode,
       studentId: student?.id || body.studentId || null,
       parentId: parent?.id || body.parentId || null,
-      feeId: fee?.id || body.feeId || null,
+      feeId: fee?.id || body.feeId || body.invoiceId || null,
       amount,
       currency,
       reference,
@@ -765,7 +869,7 @@ async function initiatePayment({ user, body }) {
       ownerType: platformSubscription.ownerType || body.ownerType || (body.studentId ? 'child' : null),
       subscriptionPaymentId: platformSubscription.subscriptionPaymentId || body.subscriptionPaymentId || null,
       subscriptionId: platformSubscription.subscriptionId || body.subscriptionId || null,
-      metadata: { purpose: body.purpose || body.platformPurpose || paymentType, studentName: student?.User?.name || null, feeId: fee?.id || null, initiatedBy: user?.id || null, selectedMethod: method, activeProvider: provider, providerSelectionRule: 'one_active_provider_per_scope', linkingRule: resolved.linkingRule, planCode: platformSubscription.planCode || body.planCode || body.plan || null, planName: platformSubscription.planName || body.planName || null, billingCycle: platformSubscription.billingCycle || body.billingCycle || body.billingPeriod || null, ownerType: platformSubscription.ownerType || body.ownerType || null, subscriptionPaymentId: platformSubscription.subscriptionPaymentId || body.subscriptionPaymentId || null, subscriptionId: platformSubscription.subscriptionId || body.subscriptionId || null },
+      metadata: { purpose: body.purpose || body.platformPurpose || paymentType, studentName: student?.User?.name || null, feeId: fee?.id || null, amountSource: body.feeId || body.invoiceId ? 'selected_fee_account' : (paymentType === SCHOOL_FEE ? 'auto_selected_outstanding_fee_account' : 'provided_amount'), initiatedBy: user?.id || null, selectedMethod: method, activeProvider: provider, providerConfigId: resolved.providerConfigId, providerSelectionRule: 'one_active_provider_per_scope', linkingRule: resolved.linkingRule, planCode: platformSubscription.planCode || body.planCode || body.plan || null, planName: platformSubscription.planName || body.planName || null, billingCycle: platformSubscription.billingCycle || body.billingCycle || body.billingPeriod || null, ownerType: platformSubscription.ownerType || body.ownerType || null, subscriptionPaymentId: platformSubscription.subscriptionPaymentId || body.subscriptionPaymentId || null, subscriptionId: platformSubscription.subscriptionId || body.subscriptionId || null },
       auditTrail: [{ action: 'payment_created_before_provider_call', actorUserId: user?.id || null, actorRole: user?.role || null, at: new Date().toISOString(), provider, method, paymentType, providerSelectionRule: 'one_active_provider_per_scope' }],
       expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24)
     }, { transaction });
@@ -863,7 +967,7 @@ async function createPaymentEventSafely({ provider, providerEventId, eventType =
       verified: false,
       rawPayload: payload || {},
       sourceIp: sourceIp || null,
-      metadata: { headers: webhookVerifier.sanitizeHeaders(headers), sourceIp: sourceIp || null, verification: { status: 'not_checked' } }
+      metadata: { headers: webhookVerifier.sanitizeHeaders(headers), sourceIp: sourceIp || null, rawPayloadHash: crypto.createHash('sha256').update(JSON.stringify(payload || {})).digest('hex'), verification: { status: 'not_checked' } }
     });
   } catch (error) {
     if (error && (error.name === 'SequelizeUniqueConstraintError' || error.name === 'SequelizeDatabaseError')) {
@@ -1000,8 +1104,9 @@ async function handleWebhook({ provider, payload, headers = {}, rawBody = null, 
     sourceIp: eventSourceIp || null,
     paymentId: payment.id,
     schoolCode: payment.schoolCode,
-    metadata: { ...(event.metadata || {}), verification, headers: webhookVerifier.sanitizeHeaders(headers), sourceIp: eventSourceIp }
+    metadata: { ...(event.metadata || {}), verification, providerConfigId: payment.metadata?.providerConfigId || providerConfigIdFor({ scope: payment.paymentType === PLATFORM ? 'platform' : 'school', schoolCode: payment.schoolCode, provider }), headers: webhookVerifier.sanitizeHeaders(headers), sourceIp: eventSourceIp }
   });
+  await markProviderWebhookVerified({ payment, provider });
 
   let finalStatus = status;
   let finalProviderReference = extracted.providerReference;
@@ -1085,6 +1190,139 @@ async function persistProviderConfig({ scope, schoolCode, provider, patch = {} }
   return serializeSettings(await row.reload());
 }
 
+
+async function updateProviderConfigPatch({ scope = 'school', schoolCode, provider, patch = {}, user = null }) {
+  provider = normalizeProvider(provider);
+  const row = scope === 'platform' ? await getPlatformRow() : await getSchoolRow(schoolCode);
+  const existing = providerMap(row);
+  const current = providerConfigFromMap(existing, provider) || {};
+  const merged = vault.mergeEncryptedCredentials(current, { ...patch, provider, updatedBy: user?.id || current.updatedBy || null, updatedAt: new Date().toISOString() }, SECRET_FIELDS);
+  const metadata = {
+    ...(row.metadata || {}),
+    paymentProviders: { ...existing, [provider]: merged },
+    auditTrail: [
+      ...(row.metadata?.auditTrail || []),
+      { action: 'provider_config_patch', provider, scope, actorUserId: user?.id || null, at: new Date().toISOString(), changedFields: Object.keys(patch).filter(k => !/secret|key|pass|token/i.test(k)) }
+    ]
+  };
+  await row.update({ metadata });
+  return serializeSettings(await row.reload());
+}
+
+async function createStripeWebhookEndpoint(config = {}) {
+  if (!config.secretKey) throw new Error('Stripe secret key is missing.');
+  const webhookUrl = config.webhookUrl || config.notificationUrl || providerNotificationUrl('stripe');
+  const body = new URLSearchParams();
+  body.set('url', webhookUrl);
+  const events = config.webhookEvents || ['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed', 'payment_intent.succeeded', 'payment_intent.payment_failed'];
+  events.forEach((eventName, idx) => body.set(`enabled_events[${idx}]`, eventName));
+  const data = await requestFormUrlEncoded({ hostname: 'api.stripe.com', path: '/v1/webhook_endpoints', headers: { Authorization: `Bearer ${config.secretKey}` }, body });
+  const secret = data.secret || data.signing_secret || data.webhook_secret;
+  return { webhookUrl, endpointId: data.id || null, webhookSecret: secret || '', gatewayResponse: data };
+}
+
+async function verifyPaystackCredentials(config = {}) {
+  if (!config.secretKey) throw new Error('Paystack secret key is missing.');
+  const data = await requestJson({ method: 'GET', hostname: 'api.paystack.co', path: '/bank?country=kenya&perPage=1', headers: { Authorization: `Bearer ${config.secretKey}`, Accept: 'application/json' } });
+  return { ok: true, gatewayResponse: data };
+}
+
+async function verifyFlutterwaveCredentials(config = {}) {
+  if (!config.secretKey) throw new Error('Flutterwave secret key is missing.');
+  const data = await requestJson({ method: 'GET', hostname: 'api.flutterwave.com', path: '/v3/banks/KE', headers: { Authorization: `Bearer ${config.secretKey}`, Accept: 'application/json' } });
+  return { ok: true, gatewayResponse: data };
+}
+
+async function setupProviderNotifications({ scope = 'school', schoolCode, provider, user = null }) {
+  provider = normalizeProvider(provider);
+  const row = scope === 'platform' ? await getPlatformRow() : await getSchoolRow(schoolCode);
+  const active = activeProviderFromRow(row);
+  if (active && active !== provider) throw new Error(`${providerLabel(provider)} is not the active provider for this ${scope}. Save it as active before setting up notifications.`);
+  const config = await getProviderConfig({ paymentType: scope === 'platform' ? PLATFORM : SCHOOL_FEE, schoolCode: schoolCode || row.schoolCode, provider });
+  const now = new Date().toISOString();
+  let patch = { notificationUrl: providerNotificationUrl(provider), webhookUrl: providerNotificationUrl(provider), callbackUrl: providerNotificationUrl(provider), notificationStatus: 'verified', lastVerifiedAt: now, lastError: '' };
+  let message = `${providerLabel(provider)} notification URL verified.`;
+  let details = { provider, providerConfigId: providerConfigIdFor({ scope, schoolCode: schoolCode || row.schoolCode || 'platform', provider }), notificationUrl: providerNotificationUrl(provider) };
+
+  try {
+    if (provider === 'pesapal') {
+      const registered = await registerPesapalIpn({ ...config, ipnUrl: providerNotificationUrl('pesapal') });
+      patch = { ...patch, ipnId: registered.notificationId, notificationId: registered.notificationId, ipnUrl: registered.ipnUrl, notificationUrl: registered.ipnUrl, webhookUrl: registered.ipnUrl, notificationStatus: 'registered_automatically', lastVerifiedAt: now };
+      message = registered.alreadyRegistered ? 'PesaPal IPN already existed and was saved for this school/account.' : 'PesaPal IPN registered automatically and saved.';
+      details = { ...details, ipnId: registered.notificationId, notificationUrl: registered.ipnUrl, alreadyRegistered: !!registered.alreadyRegistered };
+    } else if (provider === 'stripe') {
+      if (config.webhookSecret && config.webhookEndpointId) {
+        patch = { ...patch, webhookEndpointId: config.webhookEndpointId, notificationStatus: 'registered_automatically', lastVerifiedAt: now };
+        message = 'Stripe webhook endpoint and signing secret are already saved.';
+        details = { ...details, webhookEndpointId: config.webhookEndpointId, alreadyRegistered: true };
+      } else {
+        const created = await createStripeWebhookEndpoint({ ...config, webhookUrl: providerNotificationUrl('stripe') });
+        if (!created.webhookSecret) throw new Error('Stripe created/returned webhook data without a signing secret. Create it in Stripe Dashboard and paste the signing secret.');
+        patch = { ...patch, webhookEndpointId: created.endpointId, webhookSecret: created.webhookSecret, notificationStatus: 'registered_automatically', lastVerifiedAt: now };
+        message = 'Stripe webhook endpoint created and signing secret saved.';
+        details = { ...details, webhookEndpointId: created.endpointId };
+      }
+    } else if (provider === 'mpesa') {
+      await daraja.getAccessToken(config);
+      const validationUrl = providerValidationUrl('mpesa');
+      const confirmationUrl = providerConfirmationUrl('mpesa');
+      patch = { ...patch, callbackUrl: providerNotificationUrl('mpesa'), validationUrl, confirmationUrl, notificationStatus: 'callback_attached_per_payment', lastVerifiedAt: now };
+      message = 'M-Pesa/Daraja credentials verified. STK callback URL will be attached to each payment request.';
+      details = { ...details, callbackUrl: providerNotificationUrl('mpesa'), validationUrl, confirmationUrl };
+    } else if (provider === 'paystack') {
+      await verifyPaystackCredentials(config);
+      patch = { ...patch, notificationStatus: config.webhookVerifiedAt ? 'verified' : 'needs_dashboard_setup', lastVerifiedAt: now };
+      message = 'Paystack credentials verified. Paste the webhook URL in Paystack dashboard, then run/send a test webhook to mark it fully ready.';
+      details = { ...details, needsDashboardSetup: true };
+    } else if (provider === 'flutterwave') {
+      await verifyFlutterwaveCredentials(config);
+      const hasSecretHash = hasAny(config, ['webhookSecret','secretHash','encryptionKey']);
+      patch = { ...patch, notificationStatus: (hasSecretHash && config.webhookVerifiedAt) ? 'verified' : 'needs_dashboard_setup', lastVerifiedAt: now };
+      message = hasSecretHash ? 'Flutterwave credentials verified. Paste the webhook URL in Flutterwave dashboard, then run/send a test webhook to mark it fully ready.' : 'Flutterwave credentials verified, but webhook secret/hash is required for safe webhook verification.';
+      details = { ...details, needsDashboardSetup: true, webhookSecretRequired: !hasSecretHash };
+    } else if (['manual','bank','cash','card'].includes(provider)) {
+      patch = { ...patch, notificationStatus: 'not_required', lastVerifiedAt: now };
+      message = `${providerLabel(provider)} does not require provider webhooks. Finance verification remains manual.`;
+    } else {
+      patch = { ...patch, notificationStatus: 'needs_dashboard_setup', lastVerifiedAt: now };
+      message = `${providerLabel(provider)} notification URL is ready to copy into the provider dashboard.`;
+    }
+  } catch (error) {
+    const failedPatch = { notificationUrl: providerNotificationUrl(provider), webhookUrl: providerNotificationUrl(provider), callbackUrl: providerNotificationUrl(provider), notificationStatus: 'error', lastError: error.message, lastVerifiedAt: now };
+    await updateProviderConfigPatch({ scope, schoolCode: schoolCode || row.schoolCode, provider, patch: failedPatch, user });
+    throw error;
+  }
+
+  const settings = await updateProviderConfigPatch({ scope, schoolCode: schoolCode || row.schoolCode, provider, patch, user });
+  return { provider, scope, message, details, settings };
+}
+
+async function markProviderWebhookVerified({ payment, provider }) {
+  if (!payment) return;
+  const scope = payment.paymentType === PLATFORM ? 'platform' : 'school';
+  await updateProviderConfigPatch({ scope, schoolCode: payment.schoolCode, provider, patch: { notificationStatus: 'verified', webhookVerifiedAt: new Date().toISOString(), lastError: '' } }).catch(() => null);
+}
+
+async function getParentAvailableMethods({ user, studentId }) {
+  let schoolCode = user?.schoolCode;
+  let student = null;
+  if (studentId) {
+    const parent = await Parent.findOne({ where: { userId: user.id } });
+    if (!parent) throw new Error('Parent profile not found');
+    student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode','role'] }] });
+    if (!student) throw new Error('Student not found');
+    if (parent.hasStudent) {
+      const ok = await parent.hasStudent(student).catch(() => false);
+      if (!ok) throw new Error('Student is not linked to this parent');
+    }
+    schoolCode = student.schoolCode || student.User?.schoolCode || schoolCode;
+  }
+  const row = await getSchoolRow(schoolCode);
+  const settings = serializeSettings(row);
+  const publicMethods = (settings.publicMethods || []).filter(m => settings.providers?.[m.provider]?.ready && settings.providers?.[m.provider]?.visibleToParent !== false);
+  return { schoolCode, studentId: student?.id || studentId || null, defaultProvider: settings.defaultProvider, enabledProviders: settings.enabledProviders, readyProviders: settings.readyProviders, providers: Object.fromEntries(Object.entries(settings.providers || {}).filter(([, p]) => p.ready && p.visibleToParent !== false && p.enabled)), methods: publicMethods };
+}
+
 async function testProviderConnection({ scope = 'school', schoolCode, user }) {
   const row = scope === 'platform' ? await getPlatformRow() : await getSchoolRow(schoolCode);
   const provider = activeProviderFromRow(row);
@@ -1137,9 +1375,18 @@ module.exports = {
   getPaymentStatus,
   reconcilePayment,
   testProviderConnection,
+  setupProviderNotifications,
+  getParentAvailableMethods,
+  updateProviderConfigPatch,
   queryPesapalTransactionStatus,
+  listPesapalIpns,
+  registerPesapalIpn,
   normalizeProvider,
   normalizePaymentType,
   normalizePaymentMethod,
-  providerReadiness
+  providerReadiness,
+  providerNotificationUrl,
+  providerValidationUrl,
+  providerConfirmationUrl,
+  providerConfigIdFor
 };

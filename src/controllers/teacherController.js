@@ -4,6 +4,7 @@ const path = require('path');
 const csv = require('csv-parser');
 const { Op } = require('sequelize');
 const { Teacher, Student, AcademicRecord, Attendance, User, Parent, Class, Message, DutyRoster, School, Task, TeacherSubjectAssignment, ReportSnapshot, Admin, Fee, StudentEnrollment } = require('../models');
+const reportCommentsController = require('./reportCommentsController');
 const reportSnapshotService = require('../services/reportSnapshotService');
 const { getGradeFromScore } = require('../utils/curriculumHelper');
 const { createAlert } = require('../services/notificationService');
@@ -1667,7 +1668,7 @@ async function v102BuildStudentTermReportSnapshot({ student, records, meta, cls,
   const branding = school?.settings?.branding || {};
   const schoolLogo = branding.logoDataUrl || branding.logoUrl || branding.logo || school?.settings?.logo || null;
   const studentPhoto = student.User?.profileImage || student.profileImage || student.photo || null;
-  return {
+  let snapshot = {
     student: { id:student.id, name:student.User?.name || student.name || 'Student', elimuid:student.elimuid || null, admissionNumber:student.admissionNumber || null, grade:student.grade || cls?.name || null, classId:cls?.id || student.classId || null, className:cls?.name || student.grade || null, photo:studentPhoto, dateOfBirth:student.dateOfBirth || null },
     class: cls ? { id:cls.id, name:cls.name, grade:cls.grade, stream:cls.stream, curriculum:cls.curriculum, levelCode:cls.levelCode, curriculumLevel:cls.curriculumLevel } : null,
     school: { name:school?.name || school?.schoolName || null, schoolCode:cls.schoolCode, logo:schoolLogo, branding, reportCardSettings:school?.settings?.reportCardSettings || school?.reportCardSettings || {} },
@@ -1677,6 +1678,8 @@ async function v102BuildStudentTermReportSnapshot({ student, records, meta, cls,
     comments: { classTeacher: records.find(r => r.teacherComment)?.teacherComment || null, general: records.find(r => r.remarks)?.remarks || null },
     term, year:Number(year), curriculum:meta.system, schoolLevel:meta.level, gradingProfile:v102CurriculumEngine.getGradingProfile(meta.system, cls.levelCode || v102CurriculumEngine.levelCodeFromGrade(meta.system, cls.grade || cls.name)), subjects, reportRows, totalMarks:summary.totalMarks, countedSubjects:summary.countedSubjects, pendingSubjects:summary.pendingSubjects, notTakenSubjects:summary.notTakenSubjects, overallAverage:summary.average, overallGrade:summary.average == null ? null : getGradeFromScore(summary.average, meta.system, meta.level, meta.gradingScale), generatedAt:new Date().toISOString(), analyticsReady:true, calculationRule:'Only valid completed subjects the student is taking are counted. Pending/null, Not Taken, Not Offered, and Exempted subjects are not counted.'
   };
+  snapshot = await reportCommentsController.mergeDraftCommentsIntoSnapshot({ schoolCode: cls.schoolCode, studentId: student.id, term, year:Number(year), snapshot }).catch(() => snapshot);
+  return snapshot;
 }
 
 
@@ -1763,6 +1766,7 @@ exports.getClassTeacherReportPreviewDetails = async (req, res) => {
       feeBalance,
       ranking:{ classPosition:null, classSize:null, streamPosition:null, streamSize:null, showClassPosition:false, showStreamPosition:false },
       recentAssessments:records.slice(0, 12).map(r => ({ subject:r.subject, assessment:r.assessmentName || r.assessmentType || r.assessment, score:r.score, grade:r.grade || gradeFromScore(r.score), term:r.term, year:r.year, date:r.date, status:r.status || (r.isPublished ? 'published' : 'draft') })),
+      comments:(await reportCommentsController.mergeDraftCommentsIntoSnapshot({ schoolCode:req.user.schoolCode, studentId:student.id, term, year:Number(year), snapshot:{} }).catch(()=>({comments:{}}))).comments || {},
       school:{ name:school?.name || null, schoolName:school?.name || null, schoolCode:req.user.schoolCode, curriculum:meta.system, system:meta.system, schoolLevel, logo:school?.settings?.branding?.logoDataUrl || school?.settings?.branding?.logoUrl || school?.settings?.branding?.logo || school?.settings?.logo || null, branding:school?.settings?.branding || {}, reportCardSettings:school?.settings?.reportCardSettings || school?.reportCardSettings || {} }
     }});
   } catch(error) {
