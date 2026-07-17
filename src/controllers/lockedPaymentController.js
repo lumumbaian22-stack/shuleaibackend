@@ -104,6 +104,55 @@ exports.reconcilePayment = async (req, res) => {
   catch (error) { res.status(404).json({ success: false, message: error.message }); }
 };
 
+
+exports.getSchoolProviderSetupInfo = async (req, res) => {
+  try {
+    const provider = req.params.provider || req.query.provider;
+    const data = await engine.getProviderSetupInfo({ scope: 'school', schoolCode: schoolCode(req), provider });
+    res.json({ success: true, data });
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+};
+
+exports.getPlatformProviderSetupInfo = async (req, res) => {
+  try {
+    const provider = req.params.provider || req.query.provider;
+    const data = await engine.getProviderSetupInfo({ scope: 'platform', provider });
+    res.json({ success: true, data });
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+};
+
+exports.testSchoolProviderStk = async (req, res) => {
+  try {
+    const provider = req.params.provider || req.body?.provider;
+    const data = await engine.testProviderStk({ scope: 'school', schoolCode: schoolCode(req), provider, phone: req.body?.phone, amount: req.body?.amount || 1, user: req.user });
+    res.json({ success: true, message: data.message || 'STK test started. This test will not update student balances.', data });
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+};
+
+exports.testPlatformProviderStk = async (req, res) => {
+  try {
+    const provider = req.params.provider || req.body?.provider;
+    const data = await engine.testProviderStk({ scope: 'platform', provider, phone: req.body?.phone, amount: req.body?.amount || 1, user: req.user });
+    res.json({ success: true, message: data.message || 'STK test started. This test will not update balances.', data });
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+};
+
+exports.getSchoolProviderTestStatus = async (req, res) => {
+  try {
+    const data = await engine.getProviderTestStatus({ scope: 'school', schoolCode: schoolCode(req), provider: req.params.provider, testId: req.params.testId });
+    res.json({ success: true, data });
+  } catch (error) { res.status(404).json({ success: false, message: error.message }); }
+};
+
+exports.initiateParentStkPayment = async (req, res) => {
+  try {
+    const payment = await engine.initiateParentStkPayment({ user: req.user, body: req.body });
+    const data = paymentResponse(payment);
+    const code = payment.status === 'pending_provider_error' ? 202 : 200;
+    res.status(code).json({ success: true, message: data.message || 'STK Push sent. Check your phone and enter your M-Pesa PIN.', data });
+  } catch (error) { res.status(error.statusCode || 400).json({ success: false, message: error.message, data: error.data || undefined }); }
+};
+
 exports.setupSchoolProviderNotifications = async (req, res) => {
   try {
     const provider = req.params.provider || req.body?.provider;

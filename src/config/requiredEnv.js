@@ -38,9 +38,15 @@ function assertRequiredEnv() {
     const cloudinaryMissing = ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'].filter(key => !process.env[key]);
     if (cloudinaryMissing.length) throw new Error(`Cloudinary object storage is required but missing: ${cloudinaryMissing.join(', ')}`);
   }
-  const publicBase = process.env.PUBLIC_API_BASE_URL || process.env.BACKEND_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '';
-  if (process.env.NODE_ENV === 'production' && publicBase && !/^https:\/\//i.test(publicBase)) {
-    throw new Error('PUBLIC_API_BASE_URL/BACKEND_PUBLIC_URL must be a public HTTPS URL in production.');
+  const publicBase = process.env.PUBLIC_API_BASE_URL || '';
+  if (process.env.NODE_ENV === 'production' && !publicBase) {
+    throw new Error('PUBLIC_API_BASE_URL is required in production for payment callback/IPN URLs. Do not rely on Render fallback domains.');
+  }
+  if (publicBase && !/^https:\/\//i.test(publicBase)) {
+    throw new Error('PUBLIC_API_BASE_URL must be a public HTTPS URL in production.');
+  }
+  if (/shuleaibackend-32h1\.onrender\.com/i.test(publicBase)) {
+    throw new Error('PUBLIC_API_BASE_URL must use https://api.shuleai.live, not the old Render domain.');
   }
 }
 

@@ -4,15 +4,11 @@ const { protect, authorize } = require('../middleware/auth');
 const tutor = require('../controllers/tutorController');
 
 router.get('/config', protect, tutor.getTutorConfig);
-router.get('/onboarding', protect, tutor.getOnboarding);
-router.post('/onboarding/complete', protect, tutor.completeOnboarding);
-router.get('/suggestions', protect, tutor.getSuggestions);
 router.post('/ask', protect, tutor.askTutor);
 router.get('/progress/:studentId?', protect, tutor.getProgress);
 router.get('/sessions', protect, tutor.listTutorSessions);
 router.post('/sessions', protect, tutor.createTutorSession);
 router.get('/sessions/:id', protect, tutor.getTutorSession);
-router.delete('/sessions/:id', protect, tutor.deleteTutorSession);
 router.get('/session/:studentId?', protect, tutor.getSessionHistory);
 router.post('/practice/answer', protect, tutor.submitPracticeAnswer);
 router.get('/reports/parent/:parentId?', protect, authorize('admin', 'parent'), tutor.getParentReport);

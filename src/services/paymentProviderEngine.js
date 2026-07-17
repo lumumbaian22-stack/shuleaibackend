@@ -18,6 +18,9 @@ const PLATFORM = 'platform';
 const FINAL_PAID = ['paid','completed','success','successful','approved'];
 const FINAL_FAILED = ['failed','cancelled','canceled','expired','abandoned','reversed'];
 const SECRET_FIELDS = ['secretKey','apiKey','privateKey','consumerSecret','passkey','clientSecret','webhookSecret','encryptionKey','accessToken'];
+const PARENT_STK_PAYMENT_MODE = 'stk_only';
+const STK_CAPABLE_PROVIDERS = new Set(['mpesa','flutterwave','paystack','pesapal']);
+const NON_STK_PARENT_PROVIDERS = new Set(['stripe','manual','bank','cash','card']);
 
 function cleanAmount(v) {
   const n = Math.round(Number(v));
@@ -66,19 +69,41 @@ function ref(prefix) {
   return `${prefix}-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
 
-function publicUrl(path) {
-  const base = process.env.PUBLIC_API_BASE_URL || process.env.BACKEND_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '';
+function canonicalPublicApiBase() {
+  const base = String(process.env.PUBLIC_API_BASE_URL || '').trim().replace(/\/$/, '');
   if (!base) {
-    if (process.env.NODE_ENV === 'production' && /^\/api\/payments\//i.test(String(path || ''))) {
-      throw new Error('PUBLIC_API_BASE_URL or BACKEND_PUBLIC_URL is required for public payment callback URLs.');
-    }
-    return path;
+    if (process.env.NODE_ENV === 'production') throw new Error('PUBLIC_API_BASE_URL is required for public payment callback/IPN URLs. Do not use the Render fallback domain.');
+    return 'https://api.shuleai.live';
   }
-  const full = String(base).replace(/\/$/, '') + path;
-  if (process.env.NODE_ENV === 'production' && /^\/api\/payments\//i.test(String(path || '')) && !/^https:\/\//i.test(full)) {
-    throw new Error('Payment callback URLs must be public HTTPS URLs in production.');
+  if (!/^https:\/\//i.test(base)) throw new Error('PUBLIC_API_BASE_URL must be a public HTTPS URL for payment callbacks.');
+  if (/shuleaibackend-32h1\.onrender\.com/i.test(base)) throw new Error('PUBLIC_API_BASE_URL must use https://api.shuleai.live, not the old Render domain.');
+  return base;
+}
+
+function publicUrl(path) {
+  const safePath = String(path || '').startsWith('/') ? String(path || '') : '/' + String(path || '');
+  if (/^\/api\/payments\//i.test(safePath)) return canonicalPublicApiBase() + safePath;
+  const base = canonicalPublicApiBase();
+  return base + safePath;
+}
+
+function providerWebsiteDomain() {
+  try { return new URL(canonicalPublicApiBase()).hostname; } catch (_) { return 'api.shuleai.live'; }
+}
+
+function providerCallbackUrls(provider) {
+  provider = normalizeProvider(provider);
+  const webhook = providerNotificationUrl(provider);
+  const out = { provider, websiteDomain: providerWebsiteDomain(), notificationUrl: webhook, webhookUrl: webhook, callbackUrl: webhook };
+  if (provider === 'mpesa') {
+    out.stkCallbackUrl = providerNotificationUrl('mpesa');
+    out.validationUrl = providerValidationUrl('mpesa');
+    out.confirmationUrl = providerConfirmationUrl('mpesa');
+    out.notificationUrl = out.stkCallbackUrl;
+    out.callbackUrl = out.stkCallbackUrl;
+    out.webhookUrl = out.stkCallbackUrl;
   }
-  return full;
+  return out;
 }
 
 function providerNotificationUrl(provider) {
@@ -406,7 +431,33 @@ function publicProviders(row) {
   return Object.fromEntries(providers.map((provider) => {
     const cfg = providerConfigFromMap(map, provider) || {};
     const readiness = providerReadiness(provider, cfg, active);
-    return [provider, { ...vault.publicProvider(cfg), provider, enabled: provider === active, readiness: readiness.status, ready: readiness.ready, visibleToParent: readiness.visibleToParent, notificationStatus: readiness.notificationStatus, statusMessage: readiness.message, notificationUrl: cfg.notificationUrl || cfg.webhookUrl || cfg.callbackUrl || providerNotificationUrl(provider), lastVerifiedAt: cfg.lastVerifiedAt || cfg.webhookVerifiedAt || null, lastError: cfg.lastError || null }];
+    const urls = providerCallbackUrls(provider);
+    const stkReady = parentReadyForStk(provider, cfg, active);
+    return [provider, {
+      ...vault.publicProvider(cfg),
+      provider,
+      enabled: provider === active,
+      readiness: readiness.status,
+      ready: readiness.ready,
+      supportsStkPush: stkReady.supportsStkPush,
+      parentReady: stkReady.parentReady,
+      visibleToParent: stkReady.visibleToParent,
+      notificationStatus: readiness.notificationStatus,
+      statusMessage: stkReady.message,
+      websiteDomain: urls.websiteDomain,
+      notificationUrl: cfg.notificationUrl || cfg.webhookUrl || cfg.callbackUrl || urls.notificationUrl,
+      webhookUrl: cfg.webhookUrl || urls.webhookUrl,
+      callbackUrl: cfg.callbackUrl || urls.callbackUrl,
+      stkCallbackUrl: cfg.stkCallbackUrl || urls.stkCallbackUrl || urls.callbackUrl,
+      validationUrl: cfg.validationUrl || urls.validationUrl || null,
+      confirmationUrl: cfg.confirmationUrl || urls.confirmationUrl || null,
+      testLink: cfg.testLink || null,
+      lastStkTestStatus: cfg.lastStkTestStatus || null,
+      lastStkTestAt: cfg.lastStkTestAt || null,
+      parentAvailability: stkReady.parentReady ? 'visible' : 'hidden_until_stk_ready',
+      lastVerifiedAt: cfg.lastVerifiedAt || cfg.webhookVerifiedAt || null,
+      lastError: cfg.lastError || null
+    }];
   }));
 }
 
@@ -420,6 +471,28 @@ function methodLabel(m) {
 
 function providerPromptType(p) {
   return ['paystack','flutterwave','pesapal','stripe'].includes(p) ? 'checkout_url' : (p === 'mpesa' ? 'phone_prompt' : 'manual_instructions');
+}
+
+function supportsStkPush(provider, config = {}) {
+  provider = normalizeProvider(provider, { allowEmpty: true });
+  if (provider === 'mpesa') return config.supportsStkPush === true && String(config.lastStkTestStatus || '').toLowerCase() === 'success';
+  if (NON_STK_PARENT_PROVIDERS.has(provider)) return false;
+  if (provider === 'flutterwave' || provider === 'paystack' || provider === 'pesapal') {
+    return config.supportsStkPush === true && String(config.lastStkTestStatus || '').toLowerCase() === 'success' && ['verified','registered_automatically','callback_attached_per_payment'].includes(String(config.notificationStatus || '').toLowerCase());
+  }
+  return false;
+}
+
+function parentReadyForStk(provider, config = {}, active = '') {
+  const readiness = providerReadiness(provider, config, active);
+  const stk = supportsStkPush(provider, config);
+  return {
+    ...readiness,
+    supportsStkPush: stk,
+    parentReady: readiness.ready && stk,
+    visibleToParent: readiness.ready && stk,
+    message: readiness.ready && !stk ? `${providerLabel(provider)} is configured but is not verified for parent STK Push.` : readiness.message
+  };
 }
 
 function paymentModeForProvider(provider) {
@@ -452,7 +525,9 @@ function serializeSettings(row) {
     providers: publicProviders(row),
     providerStatuses: Object.values(publicProviders(row)).map(p => ({ provider:p.provider, label:providerLabel(p.provider), status:p.readiness, ready:p.ready, enabled:p.enabled, message:p.statusMessage, visibleToParent:p.visibleToParent })),
     readyProviders: Object.values(publicProviders(row)).filter(p => p.ready && p.enabled).map(p => p.provider),
-    publicMethods: methods.filter(m => (publicProviders(row)[m.provider] || {}).ready !== false),
+    parentStkProviders: Object.values(publicProviders(row)).filter(p => p.parentReady && p.enabled).map(p => p.provider),
+    parentPaymentMode: PARENT_STK_PAYMENT_MODE,
+    publicMethods: methods.filter(m => (publicProviders(row)[m.provider] || {}).parentReady === true || m.method === 'manual'),
     methods,
     linkingRule: row.metadata?.linkingRule || row.accountReferenceFormat || 'elimuid',
     matchingRules: row.metadata?.matchingRules || { autoMatchElimuId: true, autoMatchInvoiceNumber: true, requireExactAmount: true },
@@ -468,9 +543,13 @@ function buildIncomingProvider({ provider, body, existingProvider = {}, user }) 
     methods: sanitizeMethods(body.methods || body.config?.methods, provider),
     publicKey: body.publicKey || body.config?.publicKey || undefined,
     shortcode: body.shortcode || body.config?.shortcode || undefined,
-    callbackUrl: body.callbackUrl || body.config?.callbackUrl || providerNotificationUrl(provider),
-    notificationUrl: body.notificationUrl || body.webhookUrl || body.config?.notificationUrl || body.config?.webhookUrl || providerNotificationUrl(provider),
-    webhookUrl: body.webhookUrl || body.config?.webhookUrl || providerNotificationUrl(provider),
+    callbackUrl: providerCallbackUrls(provider).callbackUrl,
+    notificationUrl: providerCallbackUrls(provider).notificationUrl,
+    webhookUrl: providerCallbackUrls(provider).webhookUrl,
+    websiteDomain: providerWebsiteDomain(),
+    stkCallbackUrl: providerCallbackUrls(provider).stkCallbackUrl || undefined,
+    validationUrl: providerCallbackUrls(provider).validationUrl || undefined,
+    confirmationUrl: providerCallbackUrls(provider).confirmationUrl || undefined,
     updatedBy: user?.id || null,
     updatedAt: new Date().toISOString()
   };
@@ -992,6 +1071,29 @@ async function processConfirmedPayment({ payment, status, provider, providerRefe
       return;
     }
 
+    if (locked.paymentType === 'provider_stk_test' || locked.metadata?.isProviderStkTest === true) {
+      const testStatus = paid ? 'success' : (failed ? 'failed' : 'pending');
+      const testTrail = Array.isArray(locked.auditTrail) ? locked.auditTrail : [];
+      testTrail.push({ action: 'provider_stk_test_callback', provider, testStatus, at: new Date().toISOString(), providerReference, amount, currency });
+      await locked.update({
+        status: paid ? 'test_success' : (failed ? 'test_failed' : 'test_pending'),
+        providerStatus: status,
+        providerReference: providerReference || locked.providerReference,
+        confirmedAmount: nullableCleanAmount(amount) || locked.confirmedAmount,
+        confirmedCurrency: currency || locked.confirmedCurrency,
+        completedAt: paid ? new Date() : locked.completedAt,
+        failedAt: failed ? new Date() : locked.failedAt,
+        receiptNumber: receiptNumber || providerReference || locked.receiptNumber,
+        mpesaReceiptNumber: receiptNumber || locked.mpesaReceiptNumber,
+        gatewayResponse: rawPayload || locked.gatewayResponse,
+        auditTrail: testTrail,
+        metadata: { ...(locked.metadata || {}), applyToFees: false, lastProviderPayload: rawPayload || {}, stkTestResult: testStatus }
+      }, { transaction });
+      await updateProviderConfigPatch({ scope: locked.schoolCode === 'platform' ? 'platform' : 'school', schoolCode: locked.schoolCode, provider, patch: { supportsStkPush: paid, lastStkTestStatus: testStatus, lastStkTestAt: new Date().toISOString(), lastError: failed ? String(rawPayload?.notificationPayload?.Body?.stkCallback?.ResultDesc || rawPayload?.resultDesc || 'STK test failed') : '' } }).catch(() => null);
+      if (event) await event.update({ processed: paid || failed, paymentId: locked.id, schoolCode: locked.schoolCode, processingError: failed ? 'Provider STK test failed' : null }, { transaction });
+      return;
+    }
+
     if ((paid && FINAL_PAID.includes(String(locked.status).toLowerCase())) || (failed && FINAL_FAILED.includes(String(locked.status).toLowerCase()))) {
       if (event) await event.update({ processed: true, paymentId: locked.id, schoolCode: locked.schoolCode, processingError: null }, { transaction });
       return;
@@ -1240,9 +1342,10 @@ async function setupProviderNotifications({ scope = 'school', schoolCode, provid
   if (active && active !== provider) throw new Error(`${providerLabel(provider)} is not the active provider for this ${scope}. Save it as active before setting up notifications.`);
   const config = await getProviderConfig({ paymentType: scope === 'platform' ? PLATFORM : SCHOOL_FEE, schoolCode: schoolCode || row.schoolCode, provider });
   const now = new Date().toISOString();
-  let patch = { notificationUrl: providerNotificationUrl(provider), webhookUrl: providerNotificationUrl(provider), callbackUrl: providerNotificationUrl(provider), notificationStatus: 'verified', lastVerifiedAt: now, lastError: '' };
+  const urls = providerCallbackUrls(provider);
+  let patch = { ...urls, notificationStatus: 'verified', lastVerifiedAt: now, lastError: '', checkoutUrl: '' };
   let message = `${providerLabel(provider)} notification URL verified.`;
-  let details = { provider, providerConfigId: providerConfigIdFor({ scope, schoolCode: schoolCode || row.schoolCode || 'platform', provider }), notificationUrl: providerNotificationUrl(provider) };
+  let details = { provider, providerConfigId: providerConfigIdFor({ scope, schoolCode: schoolCode || row.schoolCode || 'platform', provider }), ...urls };
 
   try {
     if (provider === 'pesapal') {
@@ -1266,7 +1369,7 @@ async function setupProviderNotifications({ scope = 'school', schoolCode, provid
       await daraja.getAccessToken(config);
       const validationUrl = providerValidationUrl('mpesa');
       const confirmationUrl = providerConfirmationUrl('mpesa');
-      patch = { ...patch, callbackUrl: providerNotificationUrl('mpesa'), validationUrl, confirmationUrl, notificationStatus: 'callback_attached_per_payment', lastVerifiedAt: now };
+      patch = { ...patch, callbackUrl: providerNotificationUrl('mpesa'), stkCallbackUrl: providerNotificationUrl('mpesa'), validationUrl, confirmationUrl, supportsStkPush: true, notificationStatus: 'callback_attached_per_payment', lastVerifiedAt: now };
       message = 'M-Pesa/Daraja credentials verified. STK callback URL will be attached to each payment request.';
       details = { ...details, callbackUrl: providerNotificationUrl('mpesa'), validationUrl, confirmationUrl };
     } else if (provider === 'paystack') {
@@ -1288,7 +1391,7 @@ async function setupProviderNotifications({ scope = 'school', schoolCode, provid
       message = `${providerLabel(provider)} notification URL is ready to copy into the provider dashboard.`;
     }
   } catch (error) {
-    const failedPatch = { notificationUrl: providerNotificationUrl(provider), webhookUrl: providerNotificationUrl(provider), callbackUrl: providerNotificationUrl(provider), notificationStatus: 'error', lastError: error.message, lastVerifiedAt: now };
+    const failedPatch = { ...providerCallbackUrls(provider), notificationStatus: 'error', lastError: error.message, lastVerifiedAt: now, checkoutUrl: '' };
     await updateProviderConfigPatch({ scope, schoolCode: schoolCode || row.schoolCode, provider, patch: failedPatch, user });
     throw error;
   }
@@ -1321,6 +1424,117 @@ async function getParentAvailableMethods({ user, studentId }) {
   const settings = serializeSettings(row);
   const publicMethods = (settings.publicMethods || []).filter(m => settings.providers?.[m.provider]?.ready && settings.providers?.[m.provider]?.visibleToParent !== false);
   return { schoolCode, studentId: student?.id || studentId || null, defaultProvider: settings.defaultProvider, enabledProviders: settings.enabledProviders, readyProviders: settings.readyProviders, providers: Object.fromEntries(Object.entries(settings.providers || {}).filter(([, p]) => p.ready && p.visibleToParent !== false && p.enabled)), methods: publicMethods };
+}
+
+
+async function getProviderSetupInfo({ scope = 'school', schoolCode, provider }) {
+  provider = normalizeProvider(provider);
+  const row = scope === 'platform' ? await getPlatformRow() : await getSchoolRow(schoolCode);
+  const map = providerMap(row);
+  const cfg = providerConfigFromMap(map, provider) || {};
+  const urls = providerCallbackUrls(provider);
+  const active = activeProviderFromRow(row);
+  const readiness = parentReadyForStk(provider, cfg, active);
+  return {
+    scope,
+    provider,
+    providerConfigId: providerConfigIdFor({ scope, schoolCode: schoolCode || row.schoolCode || 'platform', provider }),
+    activeProvider: active,
+    websiteDomain: urls.websiteDomain,
+    notificationUrl: urls.notificationUrl,
+    webhookUrl: urls.webhookUrl,
+    callbackUrl: urls.callbackUrl,
+    stkCallbackUrl: urls.stkCallbackUrl || null,
+    validationUrl: urls.validationUrl || null,
+    confirmationUrl: urls.confirmationUrl || null,
+    ipnId: cfg.ipnId || cfg.notificationId || '',
+    notificationStatus: cfg.notificationStatus || readiness.notificationStatus || 'not_configured',
+    status: readiness.status,
+    statusMessage: readiness.message,
+    supportsStkPush: readiness.supportsStkPush,
+    parentReady: readiness.parentReady,
+    lastVerifiedAt: cfg.lastVerifiedAt || cfg.webhookVerifiedAt || null,
+    lastStkTestStatus: cfg.lastStkTestStatus || null,
+    lastStkTestAt: cfg.lastStkTestAt || null,
+    lastError: cfg.lastError || null,
+    testLink: cfg.testLink || null,
+    parentFacingUrls: false
+  };
+}
+
+async function testProviderStk({ scope = 'school', schoolCode, provider, phone, amount = 1, user = null }) {
+  provider = normalizeProvider(provider);
+  const now = new Date().toISOString();
+  const row = scope === 'platform' ? await getPlatformRow() : await getSchoolRow(schoolCode);
+  const active = activeProviderFromRow(row);
+  if (active && active !== provider) throw new Error(`${providerLabel(provider)} is not active for this ${scope}. Save it as active before testing STK.`);
+  const config = await getProviderConfig({ paymentType: scope === 'platform' ? PLATFORM : SCHOOL_FEE, schoolCode: schoolCode || row.schoolCode, provider });
+  if (provider !== 'mpesa') {
+    const msg = `${providerLabel(provider)} is not marked STK-ready by ShuleAI until a verified phone-prompt/mobile-money API test is implemented for this provider account.`;
+    await updateProviderConfigPatch({ scope, schoolCode: schoolCode || row.schoolCode, provider, patch: { supportsStkPush: false, lastStkTestStatus: 'not_supported', lastStkTestAt: now, lastError: msg }, user });
+    return { provider, status: 'not_supported', message: msg, parentReady: false };
+  }
+  if (!phone) throw new Error('Test phone number is required for STK Push.');
+  const reference = ref('STKTEST');
+  const payment = await Payment.create({
+    schoolCode: scope === 'platform' ? 'platform' : (schoolCode || row.schoolCode),
+    amount: cleanAmount(amount || 1),
+    currency: 'KES',
+    reference,
+    method: 'mobile_money',
+    paymentGateway: provider,
+    paymentType: 'provider_stk_test',
+    paymentDestination: 'test',
+    paidTo: 'test',
+    accountReference: reference,
+    status: 'test_pending',
+    promptStatus: 'created',
+    transactionType: 'provider_stk_test',
+    source: user?.role || 'system',
+    payerPhone: phone,
+    metadata: { isProviderStkTest: true, applyToFees: false, provider, scope, actorUserId: user?.id || null },
+    auditTrail: [{ action: 'provider_stk_test_created', actorUserId: user?.id || null, at: now, provider }],
+    expiresAt: new Date(Date.now() + 1000 * 60 * 30)
+  });
+  try {
+    const stk = await daraja.initiateSTKPush({ phone, amount: cleanAmount(amount || 1), accountReference: reference, transactionDesc: 'ShuleAI provider STK test', callbackUrl: providerNotificationUrl('mpesa'), credentials: config, metadata: { reference, paymentId: payment.id, paymentType: 'provider_stk_test', schoolCode: payment.schoolCode } });
+    await payment.update({ promptStatus: 'prompt_sent', promptType: 'phone_prompt', providerReference: stk.CheckoutRequestID, checkoutRequestId: stk.CheckoutRequestID, merchantRequestId: stk.MerchantRequestID, transactionId: stk.CheckoutRequestID || payment.transactionId, gatewayResponse: stk, metadata: { ...(payment.metadata || {}), testMessage: stk.CustomerMessage || 'STK test prompt sent' } });
+    await updateProviderConfigPatch({ scope, schoolCode: schoolCode || row.schoolCode, provider, patch: { supportsStkPush: true, lastStkTestStatus: 'pending', lastStkTestAt: now, lastStkTestReference: reference, lastStkCheckoutRequestId: stk.CheckoutRequestID, lastError: '', notificationStatus: 'callback_attached_per_payment', stkCallbackUrl: providerNotificationUrl('mpesa') }, user });
+    return { provider, status: 'pending', testId: payment.id, reference, checkoutRequestId: stk.CheckoutRequestID, message: stk.CustomerMessage || 'STK test prompt sent. This test will not update student balances.' };
+  } catch (error) {
+    await payment.update({ status: 'test_failed', promptStatus: 'provider_error', notes: error.message, metadata: { ...(payment.metadata || {}), providerError: error.message } }).catch(() => null);
+    await updateProviderConfigPatch({ scope, schoolCode: schoolCode || row.schoolCode, provider, patch: { supportsStkPush: false, lastStkTestStatus: 'failed', lastStkTestAt: now, lastError: error.message }, user }).catch(() => null);
+    throw error;
+  }
+}
+
+async function getProviderTestStatus({ scope = 'school', schoolCode, provider, testId }) {
+  provider = normalizeProvider(provider);
+  const where = { id: testId, paymentGateway: provider, paymentType: 'provider_stk_test' };
+  if (scope !== 'platform') where.schoolCode = schoolCode;
+  const payment = await Payment.findOne({ where });
+  if (!payment) throw new Error('Provider STK test not found for this scope.');
+  return { id: payment.id, provider, reference: payment.reference, status: payment.status, promptStatus: payment.promptStatus, checkoutRequestId: payment.checkoutRequestId, message: payment.metadata?.testMessage || payment.notes || '' };
+}
+
+async function initiateParentStkPayment({ user, body }) {
+  const studentId = body.studentId;
+  if (!studentId) throw new Error('studentId is required for parent STK payment.');
+  const { student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user.id, studentId, schoolCode: user.schoolCode });
+  const schoolCode = student.schoolCode || student.User?.schoolCode || user.schoolCode;
+  const row = await getSchoolRow(schoolCode);
+  const active = activeProviderFromRow(row);
+  if (!active) throw new Error('No school payment provider is active for this child.');
+  const map = providerMap(row);
+  const cfg = providerConfigFromMap(map, active) || {};
+  const readiness = parentReadyForStk(active, cfg, active);
+  if (!readiness.parentReady) {
+    throw new Error(`${providerLabel(active)} is not ready for parent STK Push. Ask the school finance office to run Setup/Verify and Test STK Push first.`);
+  }
+  if (active !== 'mpesa') {
+    throw new Error(`${providerLabel(active)} has not been integrated as a parent STK rail yet. Use M-Pesa Daraja or manual verification for now.`);
+  }
+  return initiatePayment({ user, body: { ...body, provider: active, paymentType: 'school_fee', purpose: 'school_fee', paymentMethod: 'mobile_money', schoolCode } });
 }
 
 async function testProviderConnection({ scope = 'school', schoolCode, user }) {

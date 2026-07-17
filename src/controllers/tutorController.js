@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { TutorSession, TutorMessage, TutorProgress, TutorUsage, Student, User, School, Class, AcademicRecord, Attendance, HomeTaskAssignment, Subscription, SubscriptionPlan } = require('../models');
+const { TutorSession, TutorMessage, TutorProgress, TutorUsage, Student, User, AcademicRecord, Attendance, Subscription, SubscriptionPlan } = require('../models');
 const { detectCommand } = require('../services/tutor/commandDetector');
 const { LEVELS, normalizeGrade, getLevelByGrade, detectSubject } = require('../services/tutor/curriculumSubjects');
 const { detectTopic, buildTutorAnswer } = require('../services/tutor/tutorKnowledge');
@@ -79,117 +79,6 @@ async function resolveStudent(req) {
   return student;
 }
 
-
-function getStudentPreferences(student) {
-  const prefs = student?.preferences && typeof student.preferences === 'object' ? student.preferences : {};
-  return Array.isArray(prefs) ? {} : prefs;
-}
-
-async function findSchoolForTutor(schoolCode) {
-  const value = String(schoolCode || '').trim();
-  if (!value) return null;
-  return School.findOne({
-    where: {
-      [Op.or]: [
-        { schoolId: value },
-        { shortCode: value },
-        { lookupCodes: { [Op.contains]: [value] } }
-      ]
-    }
-  }).catch(() => null);
-}
-
-function getSchoolAISettings(school) {
-  const settings = school?.settings || {};
-  const ai = settings.aiLearningAssistant && typeof settings.aiLearningAssistant === 'object' ? settings.aiLearningAssistant : {};
-  return {
-    enabled: ai.enabled !== false,
-    projectHelpMode: ai.projectHelpMode !== false,
-    studyAheadMode: ai.studyAheadMode !== false,
-    allowChatHistory: ai.allowChatHistory !== false,
-    allowTeacherSummaries: ai.allowTeacherSummaries === true,
-    blockDuringExams: ai.blockDuringExams === true,
-    dailyQuestionLimit: Number(ai.dailyQuestionLimit || 0) || null,
-    monthlySchoolLimit: Number(ai.monthlySchoolLimit || 0) || null,
-    languageSupport: ai.languageSupport || 'school_default'
-  };
-}
-
-function onboardingText() {
-  return {
-    title: 'Welcome to ShuleAI Learning Assistant',
-    message: 'AI means Artificial Intelligence. I am a smart learning helper that can explain topics, help you revise, answer questions, guide you through homework, help with school projects, and prepare you for exams. I am here to help you learn, not to replace your teacher or help you cheat. I may sometimes make mistakes, so always ask your teacher when something is unclear. Do not share private information like passwords, phone numbers, home address, payment details, or family secrets.',
-    bullets: [
-      'Ask questions and get clear step-by-step explanations.',
-      'Revise subjects with quizzes, summaries, and practice questions.',
-      'Get guided help for homework and school projects without copying.',
-      'Study ahead safely when you want to learn more advanced topics.',
-      'Use your registered class and curriculum as the starting level automatically.'
-    ],
-    buttonLabel: 'Start Learning'
-  };
-}
-
-function buildTutorSuggestionsForContext(context = {}) {
-  const subject = context.weakSubjects?.[0] || context.subjects?.[0] || 'Mathematics';
-  return [
-    `Explain ${subject} in simple words`,
-    `Help me with my school project`,
-    `Create 5 quiz questions for ${subject}`,
-    `Help me understand my homework step by step`,
-    `Make a study plan for this week`,
-    `Teach me the advanced version safely`,
-    `Explain this topic like I am in ${context.grade || 'my class'}`,
-    `Help me improve from AE to ME`
-  ];
-}
-
-function summarizeMarks(records = []) {
-  const list = (records || []).map(r => ({ subject: r.subject, score: Number(r.score ?? r.marks ?? r.finalScore ?? 0), term: r.term, year: r.year })).filter(r => r.subject);
-  const weakSubjects = list.filter(r => Number.isFinite(r.score) && r.score > 0 && r.score < 60).map(r => r.subject);
-  return { recentMarks: list, weakSubjects: [...new Set(weakSubjects)].slice(0, 4) };
-}
-
-async function buildStudentLearningContext(req, student) {
-  const schoolCode = req.user.schoolCode || student.User?.schoolCode || student.schoolCode || 'default';
-  const [school, classItem, recentMarksRows, recentAttendanceRows, taskRows] = await Promise.all([
-    findSchoolForTutor(schoolCode),
-    student.classId ? Class.findOne({ where: { id: student.classId, schoolCode }, attributes: ['id','name','grade','stream','curriculum','levelCode','levelLabel','curriculumLevel'] }).catch(() => null) : Promise.resolve(null),
-    AcademicRecord.findAll({ where: { studentId: student.id, schoolCode }, order: [['createdAt','DESC']], limit: 10 }).catch(() => []),
-    Attendance.findAll({ where: { studentId: student.id, schoolCode }, order: [['date','DESC']], limit: 10 }).catch(() => []),
-    HomeTaskAssignment ? HomeTaskAssignment.findAll({ where: { studentId: student.id, schoolCode }, order: [['createdAt','DESC']], limit: 6 }).catch(() => []) : Promise.resolve([])
-  ]);
-  const gradeRaw = student.grade || classItem?.grade || classItem?.name || 'Grade 5';
-  const grade = normalizeGrade(gradeRaw);
-  const level = getLevelByGrade(grade) || getLevelByGrade('Grade 5');
-  const curriculum = String(classItem?.curriculum || student.curriculum || school?.system || school?.settings?.curriculum || 'cbc').toLowerCase();
-  const marks = summarizeMarks(recentMarksRows);
-  const attendanceSummary = recentAttendanceRows.map(a => ({ date: a.date, status: a.status })).filter(a => a.date || a.status);
-  const subjects = Array.isArray(level.subjects) ? level.subjects : [];
-  return {
-    studentId: student.id,
-    studentName: student.User?.name || student.name || 'Student',
-    schoolCode,
-    schoolName: school?.name || 'your school',
-    classId: student.classId || classItem?.id || null,
-    className: classItem?.name || student.className || grade,
-    grade,
-    gradeLevel: grade,
-    stream: classItem?.stream || null,
-    curriculum,
-    levelId: level.id,
-    levelName: level.name,
-    subjects,
-    weakSubjects: marks.weakSubjects,
-    recentMarks: marks.recentMarks,
-    recentAttendance: attendanceSummary,
-    recentTasks: (taskRows || []).map(t => ({ taskId: t.taskId, status: t.status, assignedAt: t.assignedAt })).slice(0, 6),
-    aiSettings: getSchoolAISettings(school),
-    onboardingCompleted: !!getStudentPreferences(student).aiTutorOnboardingCompleted,
-    profileComplete: !!(student.grade || classItem?.grade || classItem?.name)
-  };
-}
-
 async function getActiveChildSubscription(studentId, schoolCode) {
   const subscription = await Subscription.findOne({
     where: {
@@ -247,7 +136,7 @@ exports.getTutorConfig = async (req, res) => {
     success: true,
     data: {
       levels: LEVELS,
-      commands: ['ask', 'explain', 'solve', 'quiz', 'summarize', 'revise', 'homework', 'weakness', 'plan', 'project', 'research', 'study_ahead'],
+      commands: ['ask', 'explain', 'solve', 'quiz', 'summarize', 'revise', 'homework', 'weakness', 'plan'],
       access: 'student_subscription_required',
       freeTier: false,
       provider: providerConfig.provider,
@@ -261,77 +150,19 @@ exports.getTutorConfig = async (req, res) => {
   });
 };
 
-
-exports.getOnboarding = async (req, res) => {
-  try {
-    if (req.user.role !== 'student') return res.status(403).json({ success: false, message: 'Student AI onboarding is student-only.' });
-    const student = await resolveStudent(req);
-    if (!student) return res.status(403).json({ success: false, message: 'Student profile not found for this account.' });
-    const context = await buildStudentLearningContext(req, student);
-    res.json({
-      success: true,
-      data: {
-        completed: context.onboardingCompleted,
-        onboarding: onboardingText(),
-        context: {
-          studentName: context.studentName,
-          grade: context.grade,
-          className: context.className,
-          curriculum: context.curriculum,
-          subjects: context.subjects,
-          weakSubjects: context.weakSubjects,
-          studyAheadAllowed: context.aiSettings.studyAheadMode !== false,
-          projectHelpAllowed: context.aiSettings.projectHelpMode !== false
-        }
-      }
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({ success: false, message: error.message });
-  }
-};
-
-exports.completeOnboarding = async (req, res) => {
-  try {
-    if (req.user.role !== 'student') return res.status(403).json({ success: false, message: 'Student AI onboarding is student-only.' });
-    const student = await resolveStudent(req);
-    if (!student) return res.status(403).json({ success: false, message: 'Student profile not found for this account.' });
-    const prefs = getStudentPreferences(student);
-    await student.update({ preferences: { ...prefs, aiTutorOnboardingCompleted: true, aiTutorOnboardingCompletedAt: new Date().toISOString() } });
-    res.json({ success: true, message: 'AI learning assistant onboarding completed.', data: { completed: true } });
-  } catch (error) {
-    res.status(error.status || 500).json({ success: false, message: error.message });
-  }
-};
-
-exports.getSuggestions = async (req, res) => {
-  try {
-    if (req.user.role !== 'student') return res.status(403).json({ success: false, message: 'Student AI suggestions are student-only.' });
-    const student = await resolveStudent(req);
-    if (!student) return res.status(403).json({ success: false, message: 'Student profile not found for this account.' });
-    const context = await buildStudentLearningContext(req, student);
-    res.json({ success: true, data: { suggestions: buildTutorSuggestionsForContext(context), context } });
-  } catch (error) {
-    res.status(error.status || 500).json({ success: false, message: error.message });
-  }
-};
-
 exports.askTutor = async (req, res) => {
   try {
     if (req.user.role !== 'student') {
       return res.status(403).json({ success: false, message: 'AI Tutor is currently available to students only.', data: { locked: true, reason: 'student_only' } });
     }
 
-    const { question = '', subject, mode, sessionId } = req.body || {};
+    const { question = '', grade, gradeLevel, level: requestedLevel, subject, mode, curriculum, sessionId } = req.body;
     if (!String(question).trim()) return res.status(400).json({ success: false, message: 'Question is required' });
 
     const schoolId = req.user.schoolCode || 'default';
     const student = await resolveStudent(req);
     if (!student) return res.status(403).json({ success: false, message: 'Student profile not found for this account.' });
     const realStudentId = student.id;
-    const learningContext = await buildStudentLearningContext(req, student);
-    if (learningContext.aiSettings.enabled === false) {
-      return res.status(403).json({ success: false, message: 'The school has disabled the student AI learning assistant for now.', data: { locked: true, reason: 'school_disabled' } });
-    }
 
     const subscription = await getActiveChildSubscription(realStudentId, schoolId);
     if (!subscription) {
@@ -344,8 +175,6 @@ exports.askTutor = async (req, res) => {
 
     const plan = subscription.SubscriptionPlan || await SubscriptionPlan.findByPk(subscription.planId).catch(() => null);
     const planLimit = planLimitsFrom(subscription, plan);
-    const schoolDailyLimit = Number(learningContext.aiSettings.dailyQuestionLimit || 0);
-    if (schoolDailyLimit > 0) planLimit.dailyLimit = Math.min(planLimit.dailyLimit, schoolDailyLimit);
     if (!planLimit.aiTutorEnabled || planLimit.dailyLimit <= 0) {
       return res.status(403).json({
         success: false,
@@ -353,7 +182,6 @@ exports.askTutor = async (req, res) => {
         data: { locked: true, reason: 'ai_not_in_plan', plan: planLimit.planName, planCode: planLimit.planCode, requiredPlans: ['Premium', 'Ultimate'] }
       });
     }
-
     const usageDate = todayISO();
     const usageMonth = monthKey();
     let usage = await TutorUsage.findOne({ where: { schoolId, studentId: realStudentId, usageDate } });
@@ -381,15 +209,18 @@ exports.askTutor = async (req, res) => {
       return res.status(403).json({ success: false, message: `Monthly AI tutor limit reached for ${planLimit.planName}. Renew or upgrade the child's plan to continue.`, data: { locked: true, monthlyLimit: planLimit.monthlyLimit, usedThisMonth: monthlyUsed, plan: planLimit.planName } });
     }
 
-    const realGrade = learningContext.grade || 'Grade 5';
+    const rawGrade = grade || gradeLevel || student.grade || student.className || student.Class?.name || 'Grade 5';
+    const realGrade = normalizeGrade(rawGrade || 'Grade 5');
     const level = getLevelByGrade(realGrade) || getLevelByGrade('Grade 5');
     const realSubject = subject || detectSubject(question, realGrade);
     const command = req.body.command || detectCommand(question);
     const topic = detectTopic(question, realSubject);
 
-    const localAnswer = buildTutorAnswer({ question, command, subject: realSubject, topic, grade: realGrade, level, curriculum: learningContext.curriculum });
-    let aiResult = null;
-    let providerFailed = false;
+    const localAnswer = buildTutorAnswer({ question, command, subject: realSubject, topic, grade: realGrade, level });
+    const recentMarks = await AcademicRecord.findAll({ where: { studentId: realStudentId, schoolCode: schoolId }, order: [['createdAt','DESC']], limit: 5 }).catch(() => []);
+    const recentAttendance = await Attendance.findAll({ where: { studentId: realStudentId, schoolCode: schoolId }, order: [['date','DESC']], limit: 5 }).catch(() => []);
+
+    let aiResult;
     try {
       aiResult = await callStudentTutorAI({
         question,
@@ -397,46 +228,18 @@ exports.askTutor = async (req, res) => {
         subject: realSubject,
         topic,
         grade: realGrade,
-        curriculum: learningContext.curriculum || 'cbc',
+        curriculum: curriculum || student.curriculum || 'cbc',
         studentContext: {
-          ...learningContext,
-          recentMarks: learningContext.recentMarks,
-          recentAttendance: learningContext.recentAttendance,
-          safetyRules: {
-            studyAheadAllowed: learningContext.aiSettings.studyAheadMode !== false,
-            projectHelpAllowed: learningContext.aiSettings.projectHelpMode !== false,
-            mustBeCompleteAndStepByStep: true,
-            doNotAskClassUnlessMissing: true
-          }
+          recentMarks: recentMarks.map(r => ({ subject: r.subject, score: r.score, term: r.term, year: r.year })),
+          recentAttendance: recentAttendance.map(a => ({ date: a.date, status: a.status }))
         }
       });
     } catch (aiError) {
-      providerFailed = true;
-      console.error('Student AI tutor provider failed, using local learning fallback:', aiError.message);
-      aiResult = {
-        text: `${localAnswer.explanation}\n\nNote: The full AI provider is unavailable right now, so I used the built-in ShuleAI learning guide. You can still continue learning and ask follow-up questions.`,
-        provider: 'local_learning_guide',
-        model: 'system_rules',
-        usage: {}
-      };
+      console.error('Student AI tutor provider failed:', aiError.message);
+      return res.status(aiError.status || 503).json({ success: false, message: 'Shule AI Tutor could not answer right now. Please try again shortly. Your usage has not been deducted.', data: { usageDeducted: false } });
     }
 
-    const answer = {
-      ...localAnswer,
-      answer: localAnswer.answer || 'ShuleAI Learning Assistant response',
-      explanation: aiResult.text || localAnswer.explanation,
-      source: aiResult.provider,
-      model: aiResult.model,
-      localFallback: providerFailed,
-      contextUsed: {
-        grade: learningContext.grade,
-        curriculum: learningContext.curriculum,
-        className: learningContext.className,
-        schoolName: learningContext.schoolName,
-        profileComplete: learningContext.profileComplete,
-        studyAheadAllowed: learningContext.aiSettings.studyAheadMode !== false
-      }
-    };
+    const answer = { ...localAnswer, answer: localAnswer.answer || 'Shule AI response', explanation: aiResult.text || localAnswer.explanation, source: aiResult.provider, model: aiResult.model };
     const sessionTitle = buildTutorSessionTitle(question, realSubject, topic, command);
     let session = null;
     if (sessionId) session = await TutorSession.findOne({ where:{ id:Number(sessionId), schoolId, studentId:realStudentId, userId:req.user.id } });
@@ -444,14 +247,14 @@ exports.askTutor = async (req, res) => {
       session = await TutorSession.create({
         schoolId, schoolCode: schoolId, studentId: realStudentId, userId: req.user.id,
         title: sessionTitle, grade: realGrade, gradeLevel: realGrade,
-        level: level.id || 'upper_primary', subject: realSubject,
+        level: level.id || requestedLevel || 'upper_primary', subject: realSubject,
         mode: mode || command || 'ask', lastCommand: command || 'ask',
-        metadata: { source: 'student-dashboard', learningAssistant: true, contextUsed: answer.contextUsed, provider: aiResult.provider, model: aiResult.model, subscriptionId: subscription.id, planCode: planLimit.planCode }
+        metadata: { source: 'student-dashboard', rawGrade, title: sessionTitle, provider: aiResult.provider, model: aiResult.model, subscriptionId: subscription.id, planCode: planLimit.planCode }
       });
     } else {
-      await session.update({ subject:realSubject || session.subject, lastCommand:command || session.lastCommand, updatedAt:new Date(), metadata: { ...(session.metadata || {}), learningAssistant: true, contextUsed: answer.contextUsed } });
+      await session.update({ subject:realSubject || session.subject, lastCommand:command || session.lastCommand, updatedAt:new Date() });
     }
-    await createTutorMessage({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'student', text: question, subject: realSubject, topic, command, source: 'student', metadata: { learningAssistant: true } });
+    await createTutorMessage({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'student', text: question, subject: realSubject, topic, command, source: 'student' });
     await createTutorMessage({ schoolId, schoolCode: schoolId, sessionId: session.id, studentId: realStudentId, userId: req.user.id, role: 'tutor', text: answer.explanation, subject: realSubject, topic, command, source: aiResult.provider, metadata: answer });
 
     const [progress] = await TutorProgress.findOrCreate({ where: { schoolId, studentId: realStudentId, subject: realSubject, topic }, defaults: { schoolId, schoolCode: schoolId, studentId: realStudentId, grade: realGrade, level: level.id, subject: realSubject, topic, attempts: 0, correct: 0 } });
@@ -462,7 +265,7 @@ exports.askTutor = async (req, res) => {
     await usage.update({
       totalQuestions: Number(usage.totalQuestions || 0) + 1,
       monthlyQuestionsUsed: monthlyUsed + 1,
-      aiCalls: Number(usage.aiCalls || 0) + (providerFailed ? 0 : 1),
+      aiCalls: Number(usage.aiCalls || 0) + 1,
       subscriptionId: subscription.id,
       planCode: planLimit.planCode,
       dailyLimit: planLimit.dailyLimit,
@@ -480,12 +283,10 @@ exports.askTutor = async (req, res) => {
         command,
         subject: realSubject,
         grade: realGrade,
-        curriculum: learningContext.curriculum,
         level: level.name,
         supportedSubjects: level.subjects,
-        suggestions: buildTutorSuggestionsForContext(learningContext),
         sessionId: session.id,
-        aiLabel: providerFailed ? 'Guided by ShuleAI local learning rules' : 'Generated by ShuleAI Learning Assistant',
+        aiLabel: 'Generated by Shule AI Tutor',
         sessionTitle: session.title,
         usage: {
           used: Number(usage.totalQuestions || 0) + 1,
@@ -541,21 +342,6 @@ exports.createTutorSession = async (req,res)=>{
     const session=await TutorSession.create({schoolId,schoolCode:schoolId,studentId:student.id,userId:req.user.id,title:String(req.body?.title||'New Tutor Chat').slice(0,90),grade:String(req.body?.grade||student.grade||'Grade 5'),gradeLevel:String(req.body?.grade||student.grade||'Grade 5'),level:String(req.body?.level||'upper_primary'),subject:String(req.body?.subject||'General'),mode:'ask',lastCommand:'ask',metadata:{source:'student-dashboard',empty:true}});
     res.status(201).json({success:true,data:session});
   }catch(error){res.status(500).json({success:false,message:error.message});}
-};
-
-
-exports.deleteTutorSession = async (req, res) => {
-  try {
-    if (req.user.role !== 'student') return res.status(403).json({ success:false, message:'Tutor chats are student-only.' });
-    const schoolId = req.user.schoolCode || 'default';
-    const student = await resolveStudent(req);
-    if (!student) return res.status(403).json({ success:false, message:'Student profile not found' });
-    const session = await TutorSession.findOne({ where: { id: Number(req.params.id), schoolId, studentId: student.id, userId: req.user.id } });
-    if (!session) return res.status(404).json({ success:false, message:'Tutor chat not found' });
-    await TutorMessage.destroy({ where: { schoolId, studentId: student.id, sessionId: session.id } });
-    await session.destroy();
-    res.json({ success:true, message:'Tutor chat deleted.' });
-  } catch (error) { res.status(error.status || 500).json({ success:false, message:error.message }); }
 };
 
 exports.getSessionHistory = async (req, res) => {

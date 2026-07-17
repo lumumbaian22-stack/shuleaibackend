@@ -592,9 +592,6 @@ function v102BuildCurriculumSettings(school, patch = {}) {
     ...currentSettings,
     schoolStructure: structureType,
     curriculum,
-    aiLearningAssistant: patch.aiLearningAssistant && typeof patch.aiLearningAssistant === 'object'
-      ? { ...(currentSettings.aiLearningAssistant || {}), ...patch.aiLearningAssistant, updatedAt: new Date().toISOString(), updatedBy: patch.updatedBy || null }
-      : (currentSettings.aiLearningAssistant || { enabled: true, projectHelpMode: true, studyAheadMode: true, allowChatHistory: true }),
     classGeneration: classGenerationConfig,
     curriculumEngine: {
       ...currentEngine,

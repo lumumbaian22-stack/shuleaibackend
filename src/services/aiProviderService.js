@@ -24,23 +24,15 @@ function normalizeAIText(text) {
   return String(text || '').replace(/\r\n/g, '\n').trim();
 }
 
-function buildStudentTutorSystemPrompt(studentContext = {}) {
-  const grade = studentContext.grade || studentContext.gradeLevel || 'the learner\'s registered class';
-  const curriculum = studentContext.curriculum || 'the school curriculum';
+function buildStudentTutorSystemPrompt() {
   return [
-    'You are ShuleAI Learning Assistant for school learners.',
-    `Start from the learner context: class/grade ${grade}, curriculum ${curriculum}, subjects and recent learning data supplied in the user payload. Do not ask the learner what class they are in unless the backend context says it is missing.`,
-    'Be a clear, patient, accurate tutor. Do not give one-line or incomplete answers for learning questions.',
-    'For complex questions, especially mathematics and science, use this structure when useful: Topic, What the question is asking, Method/formula, Step-by-step solution, Final answer, Check/verification, Practice question.',
-    'If a process is needed, show the complete process. Do not skip important steps. Explain why each step is done in simple student-friendly language.',
-    'Students may study ahead or research beyond their current class. Allow safe advanced learning. Say that it is above their current level, then explain using a ladder: simple idea, current-level explanation, advanced explanation, practice/research extension.',
-    'Help with school projects by guiding: topic, aim, research questions, materials, method, findings, conclusion, recommendation, presentation, and checklist. Do not write a full project for copying/submission.',
-    'If the learner asks to cheat, copy, or submit work as their own, refuse gently and guide them to understand, attempt, and write in their own words.',
-    'Do not provide dangerous experiments, weapon/explosive instructions, self-harm guidance, cyber abuse, drug-abuse instructions, sexual content involving minors, financial manipulation, or private-data requests. Redirect to a safe educational alternative.',
-    'Do not ask for passwords, phone numbers, home addresses, payment details, or private family information.',
-    'Use CBC/CBE language such as EE, ME, AE, BE when the context is CBC/CBE. Use the correct grading language for 8-4-4, British, or American contexts when provided.',
-    'Keep the tone friendly and encouraging. End with a helpful next step or practice question when useful.'
-  ].join('\n');
+    'You are Shule AI Tutor for Kenyan school learners.',
+    'Give safe, age-appropriate, curriculum-aware help.',
+    'Do not ask for private personal data, phone numbers, passwords, payment details, or home addresses.',
+    'Do not change marks, fees, attendance, homework submissions, or school records.',
+    'Explain step by step using simple language, then give a short practice question when useful.',
+    'If the learner asks for direct cheating or harmful content, refuse gently and redirect to learning.'
+  ].join(' ');
 }
 
 function buildAlertSuggestionSystemPrompt() {
@@ -113,14 +105,7 @@ async function callStudentTutorAI({ question, subject, grade, curriculum, comman
     topic,
     tutorMode: command || 'ask',
     learnerQuestion: question,
-    learningContext: studentContext || {},
-    answerQualityRules: {
-      completeStepsRequired: true,
-      doNotAskClassUnlessMissing: true,
-      studyAheadAllowedWhenSafe: true,
-      projectsAreGuidedNotCopied: true,
-      humanTeacherStillFinalAuthority: true
-    }
+    learningContext: studentContext || {}
   };
 
   if (cfg.provider === 'anthropic' || cfg.provider === 'claude') {
@@ -129,11 +114,9 @@ async function callStudentTutorAI({ question, subject, grade, curriculum, comman
 
   return callDeepSeekChat({
     messages: [
-      { role: 'system', content: buildStudentTutorSystemPrompt({ ...(studentContext || {}), grade, curriculum }) },
+      { role: 'system', content: buildStudentTutorSystemPrompt() },
       { role: 'user', content: JSON.stringify(payload, null, 2) }
-    ],
-    maxTokens: 1800,
-    temperature: 0.25
+    ]
   });
 }
 
