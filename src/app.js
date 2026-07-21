@@ -193,7 +193,7 @@ function healthPayload(req, extra = {}) {
   return {
     success: true,
     version: require('../package.json').version,
-    build: 'v2031-payment-callback-ipn-stk-setup-final-lock',
+    build: 'v2032-single-active-provider-parent-payment-lock',
     instanceId: req.app.locals.shuleAiInstanceId || loadBalancingConfig.instanceId,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),

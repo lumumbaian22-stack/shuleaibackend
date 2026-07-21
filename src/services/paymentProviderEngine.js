@@ -196,12 +196,12 @@ async function registerPesapalIpn(config = {}) {
   return { notificationId, ipnUrl, alreadyRegistered: false, gatewayResponse: data };
 }
 
-async function createPesapalCheckout({ payment, phone, email, name, config }) {
+async function createPesapalCheckout({ payment, phone, email, name, config, internalOnly = false }) {
   const consumerKey = config.consumerKey || config.consumer_key || process.env.PESAPAL_CONSUMER_KEY;
   const consumerSecret = config.consumerSecret || config.consumer_secret || process.env.PESAPAL_CONSUMER_SECRET;
   const notificationId = config.ipnId || config.notificationId || config.notification_id || process.env.PESAPAL_IPN_ID;
   if ((!consumerKey || !consumerSecret || !notificationId) && config.checkoutUrl) {
-    return { status: 'prompt_sent', promptType: 'checkout_url', checkoutUrl: config.checkoutUrl, providerReference: payment.reference, gatewayResponse: { mode: 'static_checkout_url' }, message: 'Open Pesapal checkout.' };
+    return { status: 'prompt_sent', promptType: internalOnly ? 'provider_managed' : 'checkout_url', checkoutUrl: internalOnly ? null : config.checkoutUrl, providerReference: payment.reference, gatewayResponse: { mode: 'static_checkout_url', checkoutUrlCreatedInternally: internalOnly ? true : false }, message: internalOnly ? 'PesaPal payment request created.' : 'Open Pesapal checkout.' };
   }
   if (!consumerKey || !consumerSecret) throw new Error('Pesapal consumer key and consumer secret are required');
   let finalNotificationId = notificationId;
@@ -233,7 +233,7 @@ async function createPesapalCheckout({ payment, phone, email, name, config }) {
   const checkoutUrl = checkout?.redirect_url || checkout?.redirectUrl || checkout?.data?.redirect_url;
   const providerReference = checkout?.order_tracking_id || checkout?.OrderTrackingId || checkout?.data?.order_tracking_id || payment.reference;
   if (!checkoutUrl) throw new Error(checkout?.error?.message || checkout?.message || 'Pesapal did not return a checkout URL');
-  return { status: 'prompt_sent', promptType: 'checkout_url', checkoutUrl, providerReference, gatewayResponse: checkout, message: 'Open Pesapal checkout to complete payment.' };
+  return { status: 'prompt_sent', promptType: internalOnly ? 'provider_managed' : 'checkout_url', checkoutUrl: internalOnly ? null : checkoutUrl, providerReference, gatewayResponse: { ...checkout, checkoutUrlCreatedInternally: internalOnly ? true : false, internalCheckoutUrl: internalOnly ? checkoutUrl : undefined }, message: internalOnly ? 'PesaPal payment request created. Fees update after IPN/status confirmation.' : 'Open Pesapal checkout to complete payment.' };
 }
 
 async function queryPesapalTransactionStatus({ trackingId, merchantReference, config = {} }) {
@@ -399,7 +399,7 @@ function providerReadiness(provider, config = {}, active = '') {
     const missing = [];
     if (!hasAny(config, ['consumerKey'])) missing.push('consumerKey');
     if (!hasAny(config, ['consumerSecret'])) missing.push('consumerSecret');
-    if (!hasAny(config, ['ipnId','notificationId']) && !config.checkoutUrl) missing.push('ipnId/notificationId');
+    if (!hasAny(config, ['ipnId','notificationId'])) missing.push('ipnId/notificationId');
     return missing.length
       ? { status: 'needs_credentials', ready: false, visibleToParent: false, notificationStatus, message: `Missing PesaPal ${missing.join(', ')}.` }
       : { status: 'ready', ready: true, visibleToParent: true, notificationStatus: notificationStatus || 'registered', message: 'PesaPal credentials and IPN notification ID are present.' };
@@ -470,7 +470,32 @@ function methodLabel(m) {
 }
 
 function providerPromptType(p) {
-  return ['paystack','flutterwave','pesapal','stripe'].includes(p) ? 'checkout_url' : (p === 'mpesa' ? 'phone_prompt' : 'manual_instructions');
+  // Parent school-fee UI never exposes raw checkout URLs.
+  // This prompt type is only descriptive for admin/platform contexts.
+  return ['paystack','flutterwave','pesapal','stripe'].includes(p) ? 'provider_managed' : (p === 'mpesa' ? 'phone_prompt' : 'manual_instructions');
+}
+
+function isParentSchoolFeeFlow(payment = {}) {
+  return payment.paymentType === SCHOOL_FEE && (payment.metadata?.parentInternalPaymentFlow === true || payment.source === 'parent');
+}
+
+function safeParentPromptMessage(provider, fallback = '') {
+  const label = providerLabel(provider);
+  if (provider === 'mpesa') return fallback || 'STK Push sent. Check your phone and enter your M-Pesa PIN.';
+  if (provider === 'manual' || provider === 'bank' || provider === 'cash') return fallback || 'Payment reference submitted for school finance verification.';
+  if (provider === 'stripe') return fallback || 'Secure provider payment request created. Fees update only after provider confirmation.';
+  return fallback || `${label} payment request created securely. Fees update only after provider confirmation.`;
+}
+
+function parentManagedPrompt({ provider, providerReference, gatewayResponse, message, providerAction = 'provider_managed_payment' }) {
+  return {
+    status: 'prompt_sent',
+    promptType: provider === 'mpesa' ? 'phone_prompt' : 'provider_managed',
+    checkoutUrl: null,
+    providerReference,
+    gatewayResponse: { ...(gatewayResponse || {}), parentFlow: 'internal_no_checkout_url', providerAction },
+    message: safeParentPromptMessage(provider, message)
+  };
 }
 
 function supportsStkPush(provider, config = {}) {
@@ -662,13 +687,95 @@ function manualMessageForMethod(method) {
   return 'Manual payment instructions shown. Balance updates after finance verification.';
 }
 
+
+async function createPaystackMobileMoneyPrompt({ payment, phone, email, name, config }) {
+  if (!config.secretKey) throw new Error('Paystack secret key is not configured for this payment destination');
+  if (!phone) throw new Error('Phone number is required for Paystack mobile-money payment.');
+  const amount = cleanAmount(payment.amount);
+  const reference = payment.reference;
+  const payload = {
+    email: email || config.fallbackEmail || 'payments@shuleai.local',
+    amount: amount * 100,
+    currency: payment.currency || 'KES',
+    reference,
+    mobile_money: { phone, provider: config.mobileMoneyProvider || config.mpesaProvider || 'mpesa' },
+    metadata: { paymentId: payment.id, paymentType: payment.paymentType, schoolCode: payment.schoolCode, parentFlow: 'internal_no_checkout_url' }
+  };
+  const data = await requestJson({ hostname: 'api.paystack.co', path: '/charge', headers: { Authorization: `Bearer ${config.secretKey}`, Accept: 'application/json' }, body: payload });
+  const providerReference = data?.data?.reference || data?.data?.id || reference;
+  const message = data?.data?.display_text || data?.message || 'Paystack mobile-money request started. Complete the prompt if it appears on your phone.';
+  return parentManagedPrompt({ provider: 'paystack', providerReference, gatewayResponse: data, message, providerAction: 'paystack_mobile_money_charge' });
+}
+
+async function createFlutterwaveMpesaPrompt({ payment, phone, email, name, config }) {
+  if (!config.secretKey) throw new Error('Flutterwave secret key is not configured for this payment destination');
+  if (!phone) throw new Error('Phone number is required for Flutterwave M-Pesa payment.');
+  const amount = cleanAmount(payment.amount);
+  const reference = payment.reference;
+  const payload = {
+    tx_ref: reference,
+    amount,
+    currency: payment.currency || 'KES',
+    email: email || config.fallbackEmail || 'payments@shuleai.local',
+    phone_number: phone,
+    fullname: name || 'ShuleAI payer',
+    redirect_url: config.returnUrl || publicUrl('/payment-return.html'),
+    meta: { paymentId: payment.id, paymentType: payment.paymentType, schoolCode: payment.schoolCode, parentFlow: 'internal_no_checkout_url' }
+  };
+  const data = await requestJson({ hostname: 'api.flutterwave.com', path: '/v3/charges?type=mpesa', headers: { Authorization: `Bearer ${config.secretKey}`, Accept: 'application/json' }, body: payload });
+  const providerReference = data?.data?.id ? String(data.data.id) : (data?.data?.flw_ref || data?.data?.tx_ref || reference);
+  const message = data?.meta?.authorization?.note || data?.message || 'Flutterwave M-Pesa request started. Complete the phone prompt if it appears.';
+  return parentManagedPrompt({ provider: 'flutterwave', providerReference, gatewayResponse: data, message, providerAction: 'flutterwave_mpesa_charge' });
+}
+
+async function createPesapalManagedPrompt({ payment, phone, email, name, config }) {
+  const prompt = await createPesapalCheckout({ payment, phone, email, name, config, internalOnly: true });
+  return parentManagedPrompt({ provider: 'pesapal', providerReference: prompt.providerReference || payment.reference, gatewayResponse: { ...(prompt.gatewayResponse || {}), checkoutUrlCreatedInternally: !!prompt.checkoutUrl }, message: 'PesaPal payment request created. Fees update after IPN/status confirmation.', providerAction: 'pesapal_ipn_order' });
+}
+
+async function createStripeManagedPrompt({ payment, phone, email, name, config }) {
+  if (!config.secretKey) throw new Error('Stripe secret key is not configured for this payment destination');
+  const amount = cleanAmount(payment.amount);
+  const currency = payment.currency || 'KES';
+  const body = new URLSearchParams();
+  body.set('mode', 'payment');
+  body.set('success_url', config.successUrl || publicUrl('/payment-success.html'));
+  body.set('cancel_url', config.cancelUrl || publicUrl('/payment-cancelled.html'));
+  body.set('client_reference_id', payment.reference);
+  body.set('line_items[0][price_data][currency]', String(currency).toLowerCase());
+  body.set('line_items[0][price_data][product_data][name]', payment.paymentType === SCHOOL_FEE ? 'School fees' : 'ShuleAI platform payment');
+  body.set('line_items[0][price_data][unit_amount]', String(amount * 100));
+  body.set('line_items[0][quantity]', '1');
+  body.set('metadata[paymentId]', String(payment.id));
+  body.set('metadata[reference]', payment.reference);
+  body.set('metadata[parentFlow]', 'internal_no_checkout_url');
+  const data = await requestFormUrlEncoded({ hostname:'api.stripe.com', path:'/v1/checkout/sessions', headers:{ Authorization:`Bearer ${config.secretKey}` }, body });
+  return parentManagedPrompt({ provider: 'stripe', providerReference: data.id || payment.reference, gatewayResponse: { id: data.id, urlCreatedInternally: !!data.url }, message: 'Stripe payment session created. Fees update only after Stripe webhook confirmation.', providerAction: 'stripe_checkout_session_internal' });
+}
+
 async function createProviderPrompt({ provider, payment, phone, email, name, config, method }) {
   const amount = cleanAmount(payment.amount);
   const currency = payment.currency || 'KES';
   const reference = payment.reference;
+  const parentSchoolFee = isParentSchoolFeeFlow(payment);
+
+  // Parent school-fee payments are simple inside ShuleAI: child -> amount -> phone -> Pay.
+  // The parent never receives provider/callback/checkout URLs. The active provider adapter runs server-side.
+  if (parentSchoolFee) {
+    if (provider === 'mpesa') {
+      if (!phone) throw new Error('Phone number is required for the school fee payment prompt.');
+      const stk = await daraja.initiateSTKPush({ phone, amount, accountReference: payment.accountReference || reference, transactionDesc: 'School fees', callbackUrl: config.callbackUrl || publicUrl('/api/payments/mpesa/callback'), credentials: config, metadata: { reference, paymentId: payment.id, paymentType: payment.paymentType, schoolCode: payment.schoolCode, parentFlow: 'internal_no_checkout_url' } });
+      return { status: 'prompt_sent', promptType: 'phone_prompt', checkoutUrl: null, providerReference: stk.CheckoutRequestID, checkoutRequestId: stk.CheckoutRequestID, merchantRequestId: stk.MerchantRequestID, gatewayResponse: stk, message: stk.CustomerMessage || 'STK Push sent. Check your phone and enter your M-Pesa PIN.' };
+    }
+    if (provider === 'paystack') return createPaystackMobileMoneyPrompt({ payment, phone, email, name, config });
+    if (provider === 'flutterwave') return createFlutterwaveMpesaPrompt({ payment, phone, email, name, config });
+    if (provider === 'pesapal') return createPesapalManagedPrompt({ payment, phone, email, name, config });
+    if (provider === 'stripe') return createStripeManagedPrompt({ payment, phone, email, name, config });
+    return { status: 'prompt_sent', promptType: 'manual_instructions', checkoutUrl: null, providerReference: reference, message: manualMessageForMethod(method || provider) };
+  }
 
   // Bank transfer, cash, manual M-Pesa/reference, and offline card/POS must always work.
-  // They create a pending verification record instead of trying to call an online provider.
+  // They create a pending verification record instead of trying to call disabled providers.
   if (['manual','bank','cash'].includes(method) || provider === 'manual' || provider === 'bank' || provider === 'cash' || (method === 'card' && ['mpesa','manual','bank','cash','card'].includes(provider))) {
     return { status: 'prompt_sent', promptType: 'manual_instructions', checkoutUrl: null, providerReference: reference, message: manualMessageForMethod(method || provider) };
   }
@@ -696,6 +803,7 @@ async function createProviderPrompt({ provider, payment, phone, email, name, con
 
   if (provider === 'stripe') {
     if (!config.secretKey) throw new Error('Stripe secret key is not configured for this payment destination');
+    const amount = cleanAmount(payment.amount);
     const body = new URLSearchParams();
     body.set('mode', 'payment');
     body.set('success_url', config.successUrl || publicUrl('/payment-success.html'));
@@ -708,17 +816,7 @@ async function createProviderPrompt({ provider, payment, phone, email, name, con
     body.set('metadata[paymentId]', String(payment.id));
     body.set('metadata[reference]', reference);
     body.set('metadata[method]', method || 'card');
-    const data = await new Promise((resolve, reject) => {
-      const payload = body.toString();
-      const req = https.request({ method:'POST', hostname:'api.stripe.com', path:'/v1/checkout/sessions', headers:{ Authorization:`Bearer ${config.secretKey}`, 'Content-Type':'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(payload) } }, res => {
-        let raw='';
-        res.on('data',c=>raw+=c);
-        res.on('end',()=>{ let json={}; try{json=JSON.parse(raw)}catch(_){}; if(res.statusCode>=400) return reject(new Error(json.error?.message || raw)); resolve(json); });
-      });
-      req.on('error',reject);
-      req.write(payload);
-      req.end();
-    });
+    const data = await requestFormUrlEncoded({ hostname:'api.stripe.com', path:'/v1/checkout/sessions', headers:{ Authorization:`Bearer ${config.secretKey}` }, body });
     if (!data.url) throw new Error('Stripe did not return a checkout URL');
     return { status: 'prompt_sent', promptType: 'checkout_url', checkoutUrl: data.url, providerReference: data.id, gatewayResponse: data, message: 'Open Stripe checkout to complete payment.' };
   }
@@ -948,7 +1046,7 @@ async function initiatePayment({ user, body }) {
       ownerType: platformSubscription.ownerType || body.ownerType || (body.studentId ? 'child' : null),
       subscriptionPaymentId: platformSubscription.subscriptionPaymentId || body.subscriptionPaymentId || null,
       subscriptionId: platformSubscription.subscriptionId || body.subscriptionId || null,
-      metadata: { purpose: body.purpose || body.platformPurpose || paymentType, studentName: student?.User?.name || null, feeId: fee?.id || null, amountSource: body.feeId || body.invoiceId ? 'selected_fee_account' : (paymentType === SCHOOL_FEE ? 'auto_selected_outstanding_fee_account' : 'provided_amount'), initiatedBy: user?.id || null, selectedMethod: method, activeProvider: provider, providerConfigId: resolved.providerConfigId, providerSelectionRule: 'one_active_provider_per_scope', linkingRule: resolved.linkingRule, planCode: platformSubscription.planCode || body.planCode || body.plan || null, planName: platformSubscription.planName || body.planName || null, billingCycle: platformSubscription.billingCycle || body.billingCycle || body.billingPeriod || null, ownerType: platformSubscription.ownerType || body.ownerType || null, subscriptionPaymentId: platformSubscription.subscriptionPaymentId || body.subscriptionPaymentId || null, subscriptionId: platformSubscription.subscriptionId || body.subscriptionId || null },
+      metadata: { ...(body.metadata || {}), purpose: body.purpose || body.platformPurpose || paymentType, parentInternalPaymentFlow: body.parentInternalPaymentFlow === true || body.metadata?.parentInternalPaymentFlow === true, noParentCheckoutUrl: body.parentInternalPaymentFlow === true || body.metadata?.noParentCheckoutUrl === true || false, studentName: student?.User?.name || null, feeId: fee?.id || null, amountSource: body.feeId || body.invoiceId ? 'selected_fee_account' : (paymentType === SCHOOL_FEE ? 'auto_selected_outstanding_fee_account' : 'provided_amount'), initiatedBy: user?.id || null, selectedMethod: method, activeProvider: provider, providerConfigId: resolved.providerConfigId, providerSelectionRule: 'one_active_provider_per_scope', linkingRule: resolved.linkingRule, planCode: platformSubscription.planCode || body.planCode || body.plan || null, planName: platformSubscription.planName || body.planName || null, billingCycle: platformSubscription.billingCycle || body.billingCycle || body.billingPeriod || null, ownerType: platformSubscription.ownerType || body.ownerType || null, subscriptionPaymentId: platformSubscription.subscriptionPaymentId || body.subscriptionPaymentId || null, subscriptionId: platformSubscription.subscriptionId || body.subscriptionId || null },
       auditTrail: [{ action: 'payment_created_before_provider_call', actorUserId: user?.id || null, actorRole: user?.role || null, at: new Date().toISOString(), provider, method, paymentType, providerSelectionRule: 'one_active_provider_per_scope' }],
       expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24)
     }, { transaction });
@@ -1261,7 +1359,7 @@ async function getPaymentStatus({ reference, user }) {
   if (user?.role !== 'super_admin') where.schoolCode = user?.schoolCode;
   const payment = await Payment.findOne({ where });
   if (!payment) throw new Error('Payment not found');
-  return { reference: payment.reference, status: payment.status, provider: payment.paymentGateway, method: payment.method, paymentType: payment.paymentType, amount: payment.amount, currency: payment.currency, checkoutUrl: payment.checkoutUrl, promptType: payment.promptType, promptStatus: payment.promptStatus, feeId: payment.feeId, studentId: payment.studentId };
+  return { reference: payment.reference, status: payment.status, provider: payment.paymentGateway, method: payment.method, paymentType: payment.paymentType, amount: payment.amount, currency: payment.currency, checkoutUrl: (payment.paymentType === SCHOOL_FEE && payment.metadata?.parentInternalPaymentFlow === true) ? null : payment.checkoutUrl, promptType: payment.promptType, promptStatus: payment.promptStatus, feeId: payment.feeId, studentId: payment.studentId }; 
 }
 
 async function reconcilePayment({ reference, user }) {
@@ -1467,21 +1565,16 @@ async function testProviderStk({ scope = 'school', schoolCode, provider, phone, 
   const now = new Date().toISOString();
   const row = scope === 'platform' ? await getPlatformRow() : await getSchoolRow(schoolCode);
   const active = activeProviderFromRow(row);
-  if (active && active !== provider) throw new Error(`${providerLabel(provider)} is not active for this ${scope}. Save it as active before testing STK.`);
+  if (active && active !== provider) throw new Error(`${providerLabel(provider)} is not active for this ${scope}. Save it as active before testing the parent payment flow.`);
   const config = await getProviderConfig({ paymentType: scope === 'platform' ? PLATFORM : SCHOOL_FEE, schoolCode: schoolCode || row.schoolCode, provider });
-  if (provider !== 'mpesa') {
-    const msg = `${providerLabel(provider)} is not marked STK-ready by ShuleAI until a verified phone-prompt/mobile-money API test is implemented for this provider account.`;
-    await updateProviderConfigPatch({ scope, schoolCode: schoolCode || row.schoolCode, provider, patch: { supportsStkPush: false, lastStkTestStatus: 'not_supported', lastStkTestAt: now, lastError: msg }, user });
-    return { provider, status: 'not_supported', message: msg, parentReady: false };
-  }
-  if (!phone) throw new Error('Test phone number is required for STK Push.');
-  const reference = ref('STKTEST');
+  if (!phone && !['manual','bank','cash','card'].includes(provider)) throw new Error('Test phone number is required for provider payment testing.');
+  const reference = ref('PAYTEST');
   const payment = await Payment.create({
     schoolCode: scope === 'platform' ? 'platform' : (schoolCode || row.schoolCode),
     amount: cleanAmount(amount || 1),
     currency: 'KES',
     reference,
-    method: 'mobile_money',
+    method: ['manual','bank','cash','card'].includes(provider) ? provider : 'mobile_money',
     paymentGateway: provider,
     paymentType: 'provider_stk_test',
     paymentDestination: 'test',
@@ -1492,15 +1585,27 @@ async function testProviderStk({ scope = 'school', schoolCode, provider, phone, 
     transactionType: 'provider_stk_test',
     source: user?.role || 'system',
     payerPhone: phone,
-    metadata: { isProviderStkTest: true, applyToFees: false, provider, scope, actorUserId: user?.id || null },
-    auditTrail: [{ action: 'provider_stk_test_created', actorUserId: user?.id || null, at: now, provider }],
+    metadata: { isProviderStkTest: true, applyToFees: false, provider, scope, actorUserId: user?.id || null, parentInternalPaymentFlow: true, noParentCheckoutUrl: true },
+    auditTrail: [{ action: 'provider_payment_test_created', actorUserId: user?.id || null, at: now, provider }],
     expiresAt: new Date(Date.now() + 1000 * 60 * 30)
   });
   try {
-    const stk = await daraja.initiateSTKPush({ phone, amount: cleanAmount(amount || 1), accountReference: reference, transactionDesc: 'ShuleAI provider STK test', callbackUrl: providerNotificationUrl('mpesa'), credentials: config, metadata: { reference, paymentId: payment.id, paymentType: 'provider_stk_test', schoolCode: payment.schoolCode } });
-    await payment.update({ promptStatus: 'prompt_sent', promptType: 'phone_prompt', providerReference: stk.CheckoutRequestID, checkoutRequestId: stk.CheckoutRequestID, merchantRequestId: stk.MerchantRequestID, transactionId: stk.CheckoutRequestID || payment.transactionId, gatewayResponse: stk, metadata: { ...(payment.metadata || {}), testMessage: stk.CustomerMessage || 'STK test prompt sent' } });
-    await updateProviderConfigPatch({ scope, schoolCode: schoolCode || row.schoolCode, provider, patch: { supportsStkPush: true, lastStkTestStatus: 'pending', lastStkTestAt: now, lastStkTestReference: reference, lastStkCheckoutRequestId: stk.CheckoutRequestID, lastError: '', notificationStatus: 'callback_attached_per_payment', stkCallbackUrl: providerNotificationUrl('mpesa') }, user });
-    return { provider, status: 'pending', testId: payment.id, reference, checkoutRequestId: stk.CheckoutRequestID, message: stk.CustomerMessage || 'STK test prompt sent. This test will not update student balances.' };
+    const prompt = await createProviderPrompt({ provider, payment, phone, email: user?.email || config.fallbackEmail, name: user?.name || 'ShuleAI test payer', config, method: payment.method });
+    const nextStatus = prompt.promptType === 'manual_instructions' ? 'test_pending_verification' : 'test_pending_provider_confirmation';
+    await payment.update({
+      status: nextStatus,
+      promptStatus: prompt.status,
+      promptType: prompt.promptType,
+      checkoutUrl: null,
+      providerReference: prompt.providerReference || null,
+      checkoutRequestId: prompt.checkoutRequestId || payment.checkoutRequestId,
+      merchantRequestId: prompt.merchantRequestId || payment.merchantRequestId,
+      transactionId: prompt.checkoutRequestId || prompt.providerReference || payment.transactionId,
+      gatewayResponse: prompt.gatewayResponse || {},
+      metadata: { ...(payment.metadata || {}), testMessage: prompt.message || 'Provider test payment request created.', providerAction: prompt.gatewayResponse?.providerAction || prompt.gatewayResponse?.parentFlow || null }
+    });
+    await updateProviderConfigPatch({ scope, schoolCode: schoolCode || row.schoolCode, provider, patch: { supportsStkPush: true, lastStkTestStatus: 'pending', lastStkTestAt: now, lastStkTestReference: reference, lastStkCheckoutRequestId: prompt.checkoutRequestId || null, lastError: '', notificationStatus: provider === 'mpesa' ? 'callback_attached_per_payment' : (config.notificationStatus || 'verified'), stkCallbackUrl: provider === 'mpesa' ? providerNotificationUrl('mpesa') : undefined }, user });
+    return { provider, status: 'pending', testId: payment.id, reference, checkoutRequestId: prompt.checkoutRequestId || null, message: (prompt.message || 'Provider test payment request created.') + ' This test will not update student balances.' };
   } catch (error) {
     await payment.update({ status: 'test_failed', promptStatus: 'provider_error', notes: error.message, metadata: { ...(payment.metadata || {}), providerError: error.message } }).catch(() => null);
     await updateProviderConfigPatch({ scope, schoolCode: schoolCode || row.schoolCode, provider, patch: { supportsStkPush: false, lastStkTestStatus: 'failed', lastStkTestAt: now, lastError: error.message }, user }).catch(() => null);
@@ -1519,22 +1624,32 @@ async function getProviderTestStatus({ scope = 'school', schoolCode, provider, t
 
 async function initiateParentStkPayment({ user, body }) {
   const studentId = body.studentId;
-  if (!studentId) throw new Error('studentId is required for parent STK payment.');
+  if (!studentId) throw new Error('studentId is required for parent school fee payment.');
   const { student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user.id, studentId, schoolCode: user.schoolCode });
   const schoolCode = student.schoolCode || student.User?.schoolCode || user.schoolCode;
   const row = await getSchoolRow(schoolCode);
   const active = activeProviderFromRow(row);
-  if (!active) throw new Error('No school payment provider is active for this child.');
+  if (!active) throw new Error('No school payment provider is active for this child. Ask the school finance office to activate one provider.');
   const map = providerMap(row);
   const cfg = providerConfigFromMap(map, active) || {};
-  const readiness = parentReadyForStk(active, cfg, active);
-  if (!readiness.parentReady) {
-    throw new Error(`${providerLabel(active)} is not ready for parent STK Push. Ask the school finance office to run Setup/Verify and Test STK Push first.`);
+  const readiness = providerReadiness(active, cfg, active);
+  if (!readiness.ready) {
+    throw new Error(`${providerLabel(active)} is not ready for parent payments: ${readiness.message || 'provider setup is incomplete'}`);
   }
-  if (active !== 'mpesa') {
-    throw new Error(`${providerLabel(active)} has not been integrated as a parent STK rail yet. Use M-Pesa Daraja or manual verification for now.`);
-  }
-  return initiatePayment({ user, body: { ...body, provider: active, paymentType: 'school_fee', purpose: 'school_fee', paymentMethod: 'mobile_money', schoolCode } });
+  const method = ['manual','bank','cash','card'].includes(active) ? active : 'mobile_money';
+  return initiatePayment({
+    user,
+    body: {
+      ...body,
+      provider: undefined, // Parents do not choose providers. Backend uses the school's one active provider.
+      paymentType: 'school_fee',
+      purpose: 'school_fee',
+      paymentMethod: method,
+      schoolCode,
+      parentInternalPaymentFlow: true,
+      metadata: { ...(body.metadata || {}), parentInternalPaymentFlow: true, noParentCheckoutUrl: true }
+    }
+  });
 }
 
 async function testProviderConnection({ scope = 'school', schoolCode, user }) {

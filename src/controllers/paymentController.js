@@ -397,7 +397,7 @@ function lockedPaymentPayload(payment) {
     paymentMethod: payment.method,
     promptType: payment.promptType,
     promptStatus: payment.promptStatus,
-    checkoutUrl: payment.checkoutUrl,
+    checkoutUrl: (payment.paymentType === 'fee' && payment.metadata?.parentInternalPaymentFlow === true) ? null : payment.checkoutUrl,
     status: payment.status,
     amount: payment.amount,
     currency: payment.currency,
@@ -421,12 +421,19 @@ async function startLockedPayment(req, res, payload, successMessage) {
   }
 }
 
-exports.parentFeeSTK = async (req, res) => startLockedPayment(req, res, {
-  ...req.body,
-  paymentType: 'school_fee',
-  paymentMethod: req.body?.paymentMethod || 'mobile_money',
-  purpose: 'school_fee'
-}, 'School fee payment started using the active school provider.');
+exports.parentFeeSTK = async (req, res) => {
+  try {
+    const payment = await paymentEngine.initiateParentStkPayment({ user: req.user, body: req.body });
+    const data = lockedPaymentPayload(payment);
+    res.status(payment.status === 'pending_provider_error' ? 202 : 200).json({
+      success: true,
+      message: payment.metadata?.promptMessage || 'School fee payment started using the school active provider. Balance updates only after provider confirmation.',
+      data
+    });
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ success: false, message: error.message, data: error.data || undefined });
+  }
+};
 
 exports.parentSubscriptionSTK = async (req, res) => startLockedPayment(req, res, {
   ...req.body,

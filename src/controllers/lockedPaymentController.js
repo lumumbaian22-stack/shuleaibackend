@@ -39,6 +39,7 @@ exports.savePlatformProviderSettings = async (req, res) => {
 };
 
 function paymentResponse(payment) {
+  const isParentSchoolFee = payment.paymentType === 'fee' && payment.metadata?.parentInternalPaymentFlow === true;
   const data = {
     paymentId: payment.id,
     reference: payment.reference,
@@ -48,10 +49,11 @@ function paymentResponse(payment) {
     status: payment.status,
     promptStatus: payment.promptStatus,
     promptType: payment.promptType,
-    checkoutUrl: payment.checkoutUrl,
+    checkoutUrl: isParentSchoolFee ? null : payment.checkoutUrl,
+    providerAction: isParentSchoolFee ? (payment.gatewayResponse?.providerAction || payment.gatewayResponse?.parentFlow || 'internal_provider_flow') : undefined,
     amount: payment.amount,
     currency: payment.currency,
-    message: payment.metadata?.promptMessage || (payment.status === 'pending_provider_error' ? payment.notes : 'Payment created. Complete the prompt/checkout; balances update only after provider confirmation.')
+    message: payment.metadata?.promptMessage || (payment.status === 'pending_provider_error' ? payment.notes : (isParentSchoolFee ? 'Payment request started through the school active provider. Balance updates only after verified confirmation.' : 'Payment created. Complete the provider prompt/checkout; balances update only after provider confirmation.'))
   };
   return data;
 }
@@ -67,15 +69,7 @@ exports.initiatePayment = async (req, res) => {
 
 exports.initiateParentFeePayment = async (req, res) => {
   try {
-    const payment = await engine.initiatePayment({
-      user: req.user,
-      body: {
-        ...req.body,
-        paymentType: 'school_fee',
-        purpose: req.body?.purpose || 'school_fee',
-        paymentMethod: req.body?.paymentMethod || req.body?.method || 'mobile_money'
-      }
-    });
+    const payment = await engine.initiateParentStkPayment({ user: req.user, body: req.body });
     const data = paymentResponse(payment);
     const code = payment.status === 'pending_provider_error' ? 202 : 200;
     res.status(code).json({ success: true, message: data.message, data });
