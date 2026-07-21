@@ -23,6 +23,6 @@ module.exports = (sequelize, DataTypes) => {
     defaultProvider: { type: DataTypes.STRING, allowNull: true },
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
     metadata: { type: DataTypes.JSONB, defaultValue: {} }
-  }, { timestamps: true, indexes: [{ fields: ['schoolCode'] }] });
+  }, { timestamps: true, indexes: [{ unique: true, fields: ['schoolCode'], name: 'school_payment_settings_school_unique_v2033' }] });
   return SchoolPaymentSetting;
 };

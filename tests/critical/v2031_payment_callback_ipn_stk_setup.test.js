@@ -27,9 +27,11 @@ test('v2031 setup info, setup notification, test STK, and parent STK routes exis
   assert.match(frontendApi, /initiateParentStk/);
 });
 
-test('v2031 parent school-fee payment is STK-only plus manual fallback', () => {
+test('v2031 parent school-fee payment follows the active provider plus manual fallback', () => {
   assert.match(parentDash, /initiateParentStk/);
-  assert.match(parentDash, /Send STK Push/);
+  assert.match(parentDash, /Send Phone Prompt/);
+  assert.match(parentDash, /Continue to Secure Checkout/);
+  assert.match(parentDash, /continueCheckout/);
   assert.match(parentDash, /Manual Verification/);
   assert.doesNotMatch(parentDash, /Backend opened checkout/);
 });
@@ -37,6 +39,7 @@ test('v2031 parent school-fee payment is STK-only plus manual fallback', () => {
 test('v2031 provider card shows generated URLs and STK test state instead of checkout test URL field', () => {
   assert.match(finance, /Website Domain/);
   assert.match(finance, /Notification \/ Callback URL/);
-  assert.match(finance, /Test STK Push/);
+  assert.match(finance, /Test Secure Checkout/);
+  assert.match(finance, /Test Phone Prompt/);
   assert.doesNotMatch(finance, /Checkout URL \/ test link/);
 });

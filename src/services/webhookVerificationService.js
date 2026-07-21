@@ -26,6 +26,11 @@ function hmacHex(algo, secret, body) {
   return crypto.createHmac(algo, String(secret)).update(body).digest('hex');
 }
 
+function safeToleranceSeconds(value, fallback = 300) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 30 ? Math.floor(number) : fallback;
+}
+
 function parseStripeSignature(sig = '') {
   const parts = {};
   String(sig || '').split(',').forEach(part => {
@@ -46,6 +51,9 @@ function verifyStripe({ rawBody, payload, headers, config }) {
   const timestamp = parts.t?.[0];
   const signatures = parts.v1 || [];
   if (!timestamp || !signatures.length) return { verified: false, reason: 'malformed_stripe_signature', method: 'stripe_signature' };
+  const toleranceSeconds = safeToleranceSeconds(config.webhookToleranceSeconds || process.env.STRIPE_WEBHOOK_TOLERANCE_SECONDS, 300);
+  const ageSeconds = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
+  if (!Number.isFinite(ageSeconds) || ageSeconds > toleranceSeconds) return { verified: false, reason: 'stale_stripe_signature', method: 'stripe_signature' };
   const body = rawBuffer(rawBody, payload);
   const expected = hmacHex('sha256', secret, Buffer.concat([Buffer.from(`${timestamp}.`, 'utf8'), body]));
   const ok = signatures.some(v => safeCompare(v, expected));
@@ -66,7 +74,7 @@ function verifyFlutterwave({ rawBody, payload, headers, config }) {
   const signatureSecret = config.webhookSecret || process.env.FLUTTERWAVE_WEBHOOK_SECRET || secretHash;
   const modernSig = header(headers, 'flutterwave-signature');
   if (modernSig && signatureSecret) {
-    const expected = hmacHex('sha256', signatureSecret, rawBuffer(rawBody, payload));
+    const expected = crypto.createHmac('sha256', String(signatureSecret)).update(rawBuffer(rawBody, payload)).digest('base64');
     if (safeCompare(modernSig, expected)) return { verified: true, method: 'flutterwave_hmac_sha256' };
     return { verified: false, reason: 'invalid_flutterwave_signature', method: 'flutterwave_hmac_sha256' };
   }

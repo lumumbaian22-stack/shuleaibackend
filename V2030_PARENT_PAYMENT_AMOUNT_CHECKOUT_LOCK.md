@@ -1,6 +1,6 @@
 # V2030 Parent Payment Amount Checkout Lock
 
-Build: `2032-single-active-provider-parent-payment-lock`
+Build: `2033-production-payment-lock`
 Backend package version: `2.1.525`
 
 This integration adds the missing parent school-fee amount-to-pay checkout workflow while preserving the v2029 multi-tenant provider/IPN setup.

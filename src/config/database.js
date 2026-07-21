@@ -73,11 +73,13 @@ if (process.env.DATABASE_URL) {
   });
 }
 
-sequelize.authenticate()
-  .then(() => console.log(`✅ Database connection ready. Pool max=${pool.max}`))
-  .catch(err => {
-    console.error('❌ Database connection failed:', err.message);
-    if (!isProduction) console.error(err);
-  });
+if (process.env.SKIP_DB_AUTH_ON_IMPORT !== 'true') {
+  sequelize.authenticate()
+    .then(() => console.log(`✅ Database connection ready. Pool max=${pool.max}`))
+    .catch(err => {
+      console.error('❌ Database connection failed:', err.message);
+      if (!isProduction) console.error(err);
+    });
+}
 
 module.exports = sequelize;

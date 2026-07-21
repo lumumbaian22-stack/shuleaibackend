@@ -20,7 +20,7 @@ function encrypt(value) {
   return `vault:v1:${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`;
 }
 
-function decrypt(value) {
+function decrypt(value, options = {}) {
   if (!value) return '';
   const raw = String(value);
   if (!raw.startsWith('vault:v1:')) return raw;
@@ -30,7 +30,7 @@ function decrypt(value) {
     decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
     return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]).toString('utf8');
   } catch (error) {
-    console.error('[payment-vault] decrypt failed:', error.message);
+    if (options.silent !== true) console.error('[payment-vault] decrypt failed:', error.message);
     return '';
   }
 }
@@ -47,10 +47,14 @@ function publicProvider(provider = {}) {
   const copy = { ...provider };
   const safePublicFields = new Set(['provider','enabled','methods','publicKey','publishableKey','shortcode','environment','mode','callbackUrl','returnUrl','successUrl','cancelUrl','checkoutUrl','ipnId','updatedAt','updatedBy']);
   Object.keys(copy).forEach(k => {
-    if (copy[k] && !safePublicFields.has(k) && /secret|key|pass|token|credential/i.test(k)) copy[k] = mask(copy[k]);
+    if (k !== 'credentials' && copy[k] && !safePublicFields.has(k) && /secret|key|pass|token|credential/i.test(k)) copy[k] = mask(copy[k]);
   });
-  if (copy.credentials) {
-    copy.credentials = Object.fromEntries(Object.entries(copy.credentials).map(([k,v]) => [/secret|key|pass|token|credential/i.test(k) ? [k, mask(v)] : [k, v]]));
+  if (copy.credentials && typeof copy.credentials === 'object' && !Array.isArray(copy.credentials)) {
+    copy.credentials = Object.fromEntries(Object.entries(copy.credentials).map(([k,v]) =>
+      /secret|key|pass|token|credential/i.test(k) ? [k, mask(v)] : [k, v]
+    ));
+  } else if (copy.credentials) {
+    copy.credentials = mask(copy.credentials);
   }
   return copy;
 }
@@ -59,9 +63,14 @@ function mergeEncryptedCredentials(existing = {}, incoming = {}, secretFields = 
   const next = { ...existing };
   Object.entries(incoming || {}).forEach(([field, value]) => {
     if (value === undefined || value === null) return;
-    const text = String(value);
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
     if (text === '' || text.includes('••••')) return;
-    next[field] = secretFields.includes(field) ? encrypt(text) : text;
+    const sensitive = secretFields.includes(field) || (!/^(public|publishable)/i.test(field) && /secret|private.?key|pass(key|word)?|access.?token|api.?key|consumer.?key|credential/i.test(field));
+    if (sensitive) {
+      next[field] = text.startsWith('vault:v1:') ? text : encrypt(text);
+      return;
+    }
+    next[field] = value;
   });
   return next;
 }

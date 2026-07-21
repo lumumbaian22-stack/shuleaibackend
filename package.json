@@ -1,6 +1,6 @@
 {
   "name": "shuleai-backend",
-  "version": "2.1.526",
+  "version": "2.1.528",
   "description": "Complete School Intelligence System with PostgreSQL",
   "main": "server.js",
   "scripts": {
@@ -34,7 +34,6 @@
     "helmet": "^7.0.0",
     "jsonwebtoken": "^9.0.2",
     "moment": "^2.29.4",
-    "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "pdfkit": "^0.17.2",
     "pg": "^8.11.3",
@@ -47,6 +46,26 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
+  },
+  "overrides": {
+    "ws": "^8.21.0",
+    "body-parser": "^1.20.6",
+    "glob": {
+      "minimatch": {
+        "brace-expansion": "^1.1.16"
+      }
+    },
+    "readdir-glob": {
+      "minimatch": {
+        "brace-expansion": "^2.1.2"
+      }
+    },
+    "exceljs": {
+      "uuid": "^11.1.1"
+    },
+    "sequelize": {
+      "uuid": "^11.1.1"
+    }
   },
   "engines": {
     "node": ">=20 <23"

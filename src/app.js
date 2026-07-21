@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const morgan = require('morgan');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const fileUpload = require('express-fileupload');
@@ -70,6 +69,11 @@ const { getMonitoringHealth } = require('./services/errorMonitorService');
 assertRequiredEnv();
 
 const app = express();
+if (process.env.NODE_ENV === 'production') {
+  const configuredProxyHops = Number(process.env.TRUST_PROXY_HOPS || 1);
+  const trustedProxyHops = Number.isInteger(configuredProxyHops) && configuredProxyHops >= 1 ? configuredProxyHops : 1;
+  app.set('trust proxy', trustedProxyHops);
+}
 applyLoadBalancingMiddleware(app);
 
 // ============ MIDDLEWARE ============
@@ -132,14 +136,14 @@ function isPaymentWebhookPath(req) {
 }
 
 app.use(express.json({
-  limit: '50mb',
+  limit: process.env.API_JSON_LIMIT || '2mb',
   verify: (req, res, buf) => {
     if (isPaymentWebhookPath(req)) req.rawBody = Buffer.from(buf);
   }
 }));
 app.use(express.urlencoded({
   extended: true,
-  limit: '50mb',
+  limit: process.env.API_FORM_LIMIT || '2mb',
   verify: (req, res, buf) => {
     if (isPaymentWebhookPath(req)) req.rawBody = Buffer.from(buf);
   }
@@ -155,7 +159,15 @@ app.use(fileUpload({
 }));
 
 if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
+  app.use((req, res, next) => {
+    const started = Date.now();
+    res.on('finish', () => {
+      const method = String(req.method || '').replace(/[\r\n]/g, '');
+      const route = String(req.originalUrl || req.url || '').replace(/[\r\n]/g, '').slice(0, 500);
+      console.log(`[http] ${method} ${route} ${res.statusCode} ${Date.now() - started}ms`);
+    });
+    next();
+  });
 }
 
 // Authentication is stateless JWT-based; no in-memory session store is used in production.
@@ -193,7 +205,7 @@ function healthPayload(req, extra = {}) {
   return {
     success: true,
     version: require('../package.json').version,
-    build: 'v2032-single-active-provider-parent-payment-lock',
+    build: 'v2033-production-payment-lock',
     instanceId: req.app.locals.shuleAiInstanceId || loadBalancingConfig.instanceId,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),

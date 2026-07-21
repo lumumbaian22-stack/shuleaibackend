@@ -40,6 +40,7 @@ exports.savePlatformProviderSettings = async (req, res) => {
 
 function paymentResponse(payment) {
   const isParentSchoolFee = payment.paymentType === 'fee' && payment.metadata?.parentInternalPaymentFlow === true;
+  const hostedCheckout = isParentSchoolFee && payment.status === 'pending_customer_action' && ['checkout_url','hosted_checkout'].includes(payment.promptType) && !!payment.checkoutUrl;
   const data = {
     paymentId: payment.id,
     reference: payment.reference,
@@ -50,10 +51,11 @@ function paymentResponse(payment) {
     promptStatus: payment.promptStatus,
     promptType: payment.promptType,
     checkoutUrl: isParentSchoolFee ? null : payment.checkoutUrl,
+    action: hostedCheckout ? { type: 'redirect', continueEndpoint: `/api/payments/${encodeURIComponent(payment.reference)}/continue` } : null,
     providerAction: isParentSchoolFee ? (payment.gatewayResponse?.providerAction || payment.gatewayResponse?.parentFlow || 'internal_provider_flow') : undefined,
     amount: payment.amount,
     currency: payment.currency,
-    message: payment.metadata?.promptMessage || (payment.status === 'pending_provider_error' ? payment.notes : (isParentSchoolFee ? 'Payment request started through the school active provider. Balance updates only after verified confirmation.' : 'Payment created. Complete the provider prompt/checkout; balances update only after provider confirmation.'))
+    message: payment.metadata?.promptMessage || (payment.status === 'pending_provider_error' ? 'The payment provider could not start this request. Please retry or contact the finance office.' : (isParentSchoolFee ? 'Payment request started through the school active provider. Balance updates only after verified confirmation.' : 'Payment created. Complete the provider prompt/checkout; balances update only after provider confirmation.'))
   };
   return data;
 }
@@ -62,8 +64,8 @@ exports.initiatePayment = async (req, res) => {
   try {
     const payment = await engine.initiatePayment({ user: req.user, body: req.body });
     const data = paymentResponse(payment);
-    const code = payment.status === 'pending_provider_error' ? 202 : 200;
-    res.status(code).json({ success: true, message: data.message, data });
+    if (payment.status === 'pending_provider_error') return res.status(502).json({ success: false, retryable: true, message: data.message || 'The payment provider could not start this payment.', data });
+    res.status(200).json({ success: true, message: data.message, data });
   } catch (error) { res.status(error.statusCode || 400).json({ success: false, message: error.message, data: error.data || undefined }); }
 };
 
@@ -71,8 +73,8 @@ exports.initiateParentFeePayment = async (req, res) => {
   try {
     const payment = await engine.initiateParentStkPayment({ user: req.user, body: req.body });
     const data = paymentResponse(payment);
-    const code = payment.status === 'pending_provider_error' ? 202 : 200;
-    res.status(code).json({ success: true, message: data.message, data });
+    if (payment.status === 'pending_provider_error') return res.status(502).json({ success: false, retryable: true, message: data.message || 'The school payment provider could not start this payment.', data });
+    res.status(200).json({ success: true, message: data.message, data });
   } catch (error) { res.status(error.statusCode || 400).json({ success: false, message: error.message, data: error.data || undefined }); }
 };
 
@@ -83,14 +85,21 @@ exports.webhook = async (req, res) => {
     res.json({ success: true, accepted: true, data: result });
   } catch (error) {
     console.error('Locked payment webhook error:', error);
-    // Always acknowledge to prevent provider retry storms. Event is logged when possible.
-    res.status(200).json({ success: true, accepted: true, warning: 'Webhook accepted; internal processing logged for reconciliation.' });
+    // Do not falsely acknowledge an event that could not be durably recorded.
+    // A temporary failure response lets providers retry; duplicate retries are
+    // safe because provider event IDs are unique and finalization is idempotent.
+    res.status(503).json({ success: false, accepted: false, retryable: true, message: 'Payment notification could not be recorded yet.' });
   }
 };
 
 exports.getPaymentStatus = async (req, res) => {
   try { res.json({ success: true, data: await engine.getPaymentStatus({ reference: req.params.reference, user: req.user }) }); }
   catch (error) { res.status(404).json({ success: false, message: error.message }); }
+};
+
+exports.getPaymentContinuation = async (req, res) => {
+  try { res.json({ success: true, data: await engine.getPaymentContinuation({ reference: req.params.reference, user: req.user }) }); }
+  catch (error) { res.status(error.statusCode || 400).json({ success: false, message: error.message }); }
 };
 
 exports.reconcilePayment = async (req, res) => {
@@ -142,8 +151,8 @@ exports.initiateParentStkPayment = async (req, res) => {
   try {
     const payment = await engine.initiateParentStkPayment({ user: req.user, body: req.body });
     const data = paymentResponse(payment);
-    const code = payment.status === 'pending_provider_error' ? 202 : 200;
-    res.status(code).json({ success: true, message: data.message || 'STK Push sent. Check your phone and enter your M-Pesa PIN.', data });
+    if (payment.status === 'pending_provider_error') return res.status(502).json({ success: false, retryable: true, message: data.message || 'The school payment provider could not start this payment.', data });
+    res.json({ success: true, message: data.message || 'Payment request started through the school active provider.', data });
   } catch (error) { res.status(error.statusCode || 400).json({ success: false, message: error.message, data: error.data || undefined }); }
 };
 

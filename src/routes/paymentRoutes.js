@@ -26,9 +26,10 @@ router.get('/providers/available', protect, authorize('parent'), locked.getParen
 router.get('/parent/methods', protect, authorize('parent'), locked.getParentPaymentMethods);
 router.post('/parent/initiate', protect, authorize('parent'), locked.initiateParentFeePayment);
 router.post('/parent/stk/initiate', protect, authorize('parent'), locked.initiateParentStkPayment);
-router.post('/initiate', protect, locked.initiatePayment);
-router.get('/:reference/status', protect, locked.getPaymentStatus);
-router.post('/reconcile/:reference', protect, locked.reconcilePayment);
+router.post('/initiate', protect, authorize('admin', 'finance_officer', 'super_admin'), locked.initiatePayment);
+router.get('/:reference/continue', protect, authorize('parent', 'admin', 'finance_officer', 'super_admin'), locked.getPaymentContinuation);
+router.get('/:reference/status', protect, authorize('parent', 'admin', 'finance_officer', 'super_admin'), locked.getPaymentStatus);
+router.post('/reconcile/:reference', protect, authorize('parent', 'admin', 'finance_officer', 'super_admin'), locked.reconcilePayment);
 router.get('/webhook/:provider', locked.webhook);
 router.post('/webhook/:provider', locked.webhook);
 
@@ -74,7 +75,7 @@ router.post('/parent/subscription/stk', protect, authorize('parent'), ctrl.paren
 router.post('/parent/subscription/manual', protect, authorize('parent'), ctrl.parentSubscriptionManual);
 router.post('/school/subscription/stk', protect, authorize('admin', 'super_admin'), ctrl.schoolSubscriptionSTK);
 router.post('/admin/name-change/stk', protect, authorize('admin'), ctrl.adminNameChangePaymentSTK);
-router.post('/platform/stk', protect, ctrl.genericPlatformSTK);
-router.get('/stk/:checkoutRequestId/status', protect, ctrl.queryStatus);
+router.post('/platform/stk', protect, authorize('admin', 'super_admin'), ctrl.genericPlatformSTK);
+router.get('/stk/:checkoutRequestId/status', protect, authorize('parent', 'admin', 'finance_officer', 'super_admin'), ctrl.queryStatus);
 
 module.exports = router;

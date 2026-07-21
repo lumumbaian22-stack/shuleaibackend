@@ -158,7 +158,7 @@ exports.getParentSchoolPaymentSettings = async (req, res) => {
       publicMethods: data.publicMethods || data.methods || [],
       supports: {
         stk: (data.publicMethods || data.methods || []).some(m => m.prompt === 'phone_prompt'),
-        checkout: (data.publicMethods || data.methods || []).some(m => m.prompt === 'checkout_url'),
+        checkout: (data.publicMethods || data.methods || []).some(m => ['checkout_url', 'hosted_checkout'].includes(m.prompt)),
         manual: (data.publicMethods || data.methods || []).some(m => m.prompt === 'manual_instructions'),
         bank: (data.publicMethods || data.methods || []).some(m => m.method === 'bank'),
         cash: (data.publicMethods || data.methods || []).some(m => m.method === 'cash'),
@@ -173,9 +173,8 @@ exports.queryStatus = async (req, res) => {
   try {
     const key = String(req.params.checkoutRequestId || req.query.reference || '').trim();
     if (!key) return res.status(400).json({ success: false, message: 'Payment reference is required' });
-    const payment = await Payment.findOne({ where: { [Op.or]: [{ reference: key }, { checkoutRequestId: key }, { transactionId: key }, { providerReference: key }] } });
-    if (!payment) return res.status(404).json({ success: false, message: 'Payment not found' });
-    res.json({ success: true, data: lockedPaymentPayload(payment) });
+    const data = await paymentEngine.getPaymentStatus({ reference: key, user: req.user, anyReference: true });
+    res.json({ success: true, data });
   } catch (error) { errorJson(res, error, 500); }
 };
 
@@ -384,6 +383,8 @@ exports.getFinanceContext = async (req, res) => {
 
 // Locked provider payment initiation, callback, and platform manual review.
 function lockedPaymentPayload(payment) {
+  const isParentSchoolFee = payment.paymentType === 'fee' && payment.metadata?.parentInternalPaymentFlow === true;
+  const hostedCheckout = isParentSchoolFee && payment.status === 'pending_customer_action' && ['checkout_url','hosted_checkout'].includes(payment.promptType) && !!payment.checkoutUrl;
   return {
     paymentId: payment.id,
     subscriptionPaymentId: payment.subscriptionPaymentId || null,
@@ -397,7 +398,8 @@ function lockedPaymentPayload(payment) {
     paymentMethod: payment.method,
     promptType: payment.promptType,
     promptStatus: payment.promptStatus,
-    checkoutUrl: (payment.paymentType === 'fee' && payment.metadata?.parentInternalPaymentFlow === true) ? null : payment.checkoutUrl,
+    checkoutUrl: isParentSchoolFee ? null : payment.checkoutUrl,
+    action: hostedCheckout ? { type: 'redirect', continueEndpoint: `/api/payments/${encodeURIComponent(payment.reference)}/continue` } : null,
     status: payment.status,
     amount: payment.amount,
     currency: payment.currency,
@@ -411,8 +413,9 @@ async function startLockedPayment(req, res, payload, successMessage) {
   try {
     const payment = await paymentEngine.initiatePayment({ user: req.user, body: payload });
     const data = lockedPaymentPayload(payment);
-    res.status(payment.status === 'pending_provider_error' ? 202 : 200).json({
-      success: true,
+    res.status(payment.status === 'pending_provider_error' ? 502 : 200).json({
+      success: payment.status !== 'pending_provider_error',
+      retryable: payment.status === 'pending_provider_error',
       message: payment.metadata?.promptMessage || successMessage || 'Payment started using the active configured provider.',
       data
     });
@@ -425,8 +428,9 @@ exports.parentFeeSTK = async (req, res) => {
   try {
     const payment = await paymentEngine.initiateParentStkPayment({ user: req.user, body: req.body });
     const data = lockedPaymentPayload(payment);
-    res.status(payment.status === 'pending_provider_error' ? 202 : 200).json({
-      success: true,
+    res.status(payment.status === 'pending_provider_error' ? 502 : 200).json({
+      success: payment.status !== 'pending_provider_error',
+      retryable: payment.status === 'pending_provider_error',
       message: payment.metadata?.promptMessage || 'School fee payment started using the school active provider. Balance updates only after provider confirmation.',
       data
     });
@@ -492,17 +496,20 @@ exports.darajaCallback = async (req, res) => {
     res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
   } catch (error) {
     console.error('Locked M-Pesa callback error:', error.message);
-    res.json({ ResultCode: 0, ResultDesc: 'Accepted with internal reconciliation logging' });
+    res.status(503).json({ ResultCode: 1, ResultDesc: 'Temporary processing failure; retry callback' });
   }
 };
 
-exports.parentFeeManual = async (req, res) => startLockedPayment(req, res, {
-  ...req.body,
-  paymentType: 'school_fee',
-  paymentMethod: req.body?.paymentMethod || req.body?.method || 'manual',
-  reference: req.body?.reference || req.body?.mpesaCode || req.body?.transactionCode || undefined,
-  purpose: 'school_fee_manual_reference'
-}, 'School fee reference submitted to the backend verification queue. It is not marked paid until finance approves it.');
+exports.parentFeeManual = async (req, res) => {
+  try {
+    const payment = await paymentEngine.initiateParentManualPayment({ user: req.user, body: req.body || {} });
+    const data = lockedPaymentPayload(payment);
+    if (payment.status === 'pending_provider_error') return res.status(502).json({ success: false, retryable: true, message: data.customerMessage || 'The payment reference could not be submitted.', data });
+    res.json({ success: true, message: 'School fee reference submitted to the finance verification queue. It is not marked paid until finance approves it.', data });
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ success: false, message: error.message, data: error.data || undefined });
+  }
+};
 
 exports.parentSubscriptionManual = async (req, res) => startLockedPayment(req, res, {
   ...req.body,

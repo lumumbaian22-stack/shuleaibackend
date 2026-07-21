@@ -30,7 +30,7 @@ test('v2030 parent dashboard has visible amount input and summary', () => {
 
 test('v2030 backend validates parent fee amount against selected outstanding balance', () => {
   const engine = fs.readFileSync(engineFile, 'utf8');
-  assert.match(engine, /Payment amount must be at least 1/);
+  assert.match(engine, /Payment amount must be a whole number of at least 1/);
   assert.match(engine, /Amount exceeds outstanding balance/);
   assert.match(engine, /assertParentOwnsStudent/);
   assert.match(engine, /This fee account has no outstanding balance/);
