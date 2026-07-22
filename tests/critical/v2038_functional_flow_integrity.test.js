@@ -64,6 +64,8 @@ test('production migrations avoid describeTable timeout loops and use explicit D
   const full = readBackend('src/migrations/20260722010000-v2037-full-model-schema-verification.js');
   assert.doesNotMatch(finance, /describeTable/);
   assert.doesNotMatch(full, /describeTable/);
-  assert.match(finance, /information_schema\.columns/);
-  assert.match(full, /information_schema\.columns/);
+  assert.match(finance, /readSchema/);
+  assert.match(full, /reconcileModels/);
+  const reconciler = readBackend('src/migrations/lib/canonical-model-reconciler.js');
+  assert.match(reconciler, /information_schema\.columns/);
 });

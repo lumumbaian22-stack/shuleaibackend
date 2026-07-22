@@ -56,8 +56,7 @@ function createSafeQueryInterface(queryInterface) {
 
   safe.removeColumn = async function(tableName, columnName, options) {
     try {
-      const desc = await queryInterface.describeTable(tableName);
-      if (!desc || !desc[columnName]) {
+      if (!(await columnExists(tableName, columnName))) {
         console.log(`[migration-safe] ${tableName}.${columnName} missing; skipping removeColumn`);
         return;
       }

@@ -28,19 +28,18 @@ test('specific upload template route is declared before dynamic template route',
   assert.ok(source.indexOf("'/template/marks'") < source.indexOf("'/template/:type'"));
 });
 
-test('critical finance migration replays and verifies previously swallowed schema work', () => {
+test('critical finance migration reconciles canonical models without replaying obsolete migrations', () => {
   const source = read('src/migrations/20260722000000-v2037-critical-finance-schema-verification.js');
-  assert.match(source, /await paymentSchema\.up/);
-  assert.match(source, /await financialSchema\.up/);
+  assert.match(source, /reconcileModels/);
+  assert.doesNotMatch(source, /paymentSchema|financialSchema|202606260/);
+  assert.doesNotMatch(source, /f\."invoiceNumber"/);
   assert.match(source, /Critical finance schema verification failed/);
 });
 
 test('final migration repairs and verifies every registered model table and column', () => {
   const source = read('src/migrations/20260722010000-v2037-full-model-schema-verification.js');
   assert.match(source, /modelManager\.models/);
-  assert.match(source, /await model\.sync\(\{ force: false \}\)/);
-  assert.match(source, /await queryInterface\.addColumn/);
-  assert.match(source, /Full schema verification failed/);
+  assert.match(source, /reconcileModels/);
 });
 
 test('curriculum comparison is implemented and no longer returns 501', () => {
