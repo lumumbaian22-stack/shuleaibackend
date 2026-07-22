@@ -104,8 +104,8 @@ if (!routes.some(route => route.file === 'financeRoutes.js')) failures.push('fin
 if (/res\.status\(501\)/.test(fs.readFileSync(path.join(root, 'backend', 'src', 'controllers', 'analyticsController.js'), 'utf8'))) failures.push('analyticsController still contains an exposed 501 implementation');
 
 if (process.argv.includes('--write')) {
-  fs.writeFileSync(path.join(root, 'backend', 'ROUTE_MANIFEST.json'), `${JSON.stringify({ build: '2038-functional-flow-integrity-lock', count: routes.length, routes }, null, 2)}\n`);
-  fs.writeFileSync(path.join(root, 'frontend', 'API_CALL_MANIFEST.json'), `${JSON.stringify({ build: '2038-functional-flow-integrity-lock', count: apiCalls.length, apiCalls }, null, 2)}\n`);
+  fs.writeFileSync(path.join(root, 'backend', 'ROUTE_MANIFEST.json'), `${JSON.stringify({ build: '2039-production-migration-recovery-lock', count: routes.length, routes }, null, 2)}\n`);
+  fs.writeFileSync(path.join(root, 'frontend', 'API_CALL_MANIFEST.json'), `${JSON.stringify({ build: '2039-production-migration-recovery-lock', count: apiCalls.length, apiCalls }, null, 2)}\n`);
 }
 
 if (failures.length) {

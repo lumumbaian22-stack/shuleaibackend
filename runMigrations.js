@@ -7,10 +7,33 @@ function createSafeQueryInterface(queryInterface) {
   safe.sequelize = queryInterface.sequelize;
   safe.queryGenerator = queryInterface.queryGenerator;
 
+  const tableKey = tableName => typeof tableName === 'string' ? tableName : tableName?.tableName;
+  const tableExists = async tableName => {
+    const [rows] = await queryInterface.sequelize.query(
+      `SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = :table LIMIT 1`,
+      { replacements: { table: tableKey(tableName) } }
+    );
+    return rows.length > 0;
+  };
+  const columnExists = async (tableName, columnName) => {
+    const [rows] = await queryInterface.sequelize.query(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = :table AND column_name = :column LIMIT 1`,
+      { replacements: { table: tableKey(tableName), column: columnName } }
+    );
+    return rows.length > 0;
+  };
+  const indexExists = async name => {
+    if (!name) return false;
+    const [rows] = await queryInterface.sequelize.query(
+      `SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = :name LIMIT 1`,
+      { replacements: { name } }
+    );
+    return rows.length > 0;
+  };
+
   safe.addColumn = async function(tableName, columnName, attributes, options) {
     try {
-      const desc = await queryInterface.describeTable(tableName);
-      if (desc && desc[columnName]) {
+      if (await columnExists(tableName, columnName)) {
         console.log(`[migration-safe] ${tableName}.${columnName} already exists; skipping addColumn`);
         return;
       }
@@ -56,6 +79,10 @@ function createSafeQueryInterface(queryInterface) {
   };
 
   safe.addIndex = async function(tableName, attributes, options = {}) {
+    if (await indexExists(options.name)) {
+      console.log(`[migration-safe] Index ${options.name} already exists; skipping addIndex`);
+      return;
+    }
     try {
       return await queryInterface.addIndex(tableName, attributes, options);
     } catch (err) {
@@ -70,6 +97,10 @@ function createSafeQueryInterface(queryInterface) {
   };
 
   safe.createTable = async function(tableName, attributes, options) {
+    if (await tableExists(tableName)) {
+      console.log(`[migration-safe] Table ${tableKey(tableName)} already exists; skipping createTable`);
+      return;
+    }
     try {
       return await queryInterface.createTable(tableName, attributes, options);
     } catch (err) {
@@ -96,6 +127,12 @@ async function runMigrations() {
 
     await sequelize.authenticate();
     console.log('✅ Database connection test SUCCESSFUL');
+
+    // Migrations can legitimately wait for a short-lived application lock. The
+    // normal request timeout is too small for production DDL, so use explicit
+    // migration-session limits without disabling lock protection entirely.
+    await sequelize.query(`SET statement_timeout = '10min'`);
+    await sequelize.query(`SET lock_timeout = '90s'`);
 
     const queryInterface = sequelize.getQueryInterface();
     const safeQueryInterface = createSafeQueryInterface(queryInterface);

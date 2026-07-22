@@ -52,3 +52,18 @@ test('unfinished LearnFeed and worker operations cannot report fake success', ()
   assert.doesNotMatch(worker, /accepted: true/);
   assert.match(worker, /handler is not implemented/);
 });
+
+test('production migrations avoid describeTable timeout loops and use explicit DDL limits', () => {
+  const runner = readBackend('runMigrations.js');
+  const addColumnBlock = runner.slice(runner.indexOf('safe.addColumn'), runner.indexOf('safe.removeColumn'));
+  assert.doesNotMatch(addColumnBlock, /describeTable/);
+  assert.match(addColumnBlock, /columnExists/);
+  assert.match(runner, /SET statement_timeout = '10min'/);
+  assert.match(runner, /SET lock_timeout = '90s'/);
+  const finance = readBackend('src/migrations/20260722000000-v2037-critical-finance-schema-verification.js');
+  const full = readBackend('src/migrations/20260722010000-v2037-full-model-schema-verification.js');
+  assert.doesNotMatch(finance, /describeTable/);
+  assert.doesNotMatch(full, /describeTable/);
+  assert.match(finance, /information_schema\.columns/);
+  assert.match(full, /information_schema\.columns/);
+});

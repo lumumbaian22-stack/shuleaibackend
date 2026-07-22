@@ -24,9 +24,21 @@ module.exports = {
       PlatformSubscriptions: ['schoolCode', 'planCode', 'status']
     };
 
+    const [rows] = await queryInterface.sequelize.query(
+      `SELECT table_name, column_name
+         FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name IN (:tables)`,
+      { replacements: { tables: Object.keys(required) } }
+    );
+    const found = new Map();
+    for (const row of rows) {
+      if (!found.has(row.table_name)) found.set(row.table_name, new Set());
+      found.get(row.table_name).add(row.column_name);
+    }
     for (const [table, columns] of Object.entries(required)) {
-      const description = await queryInterface.describeTable(table);
-      const missing = columns.filter(column => !description[column]);
+      const present = found.get(table) || new Set();
+      const missing = columns.filter(column => !present.has(column));
       if (missing.length) throw new Error(`Critical finance schema verification failed: ${table} is missing ${missing.join(', ')}`);
     }
   },
