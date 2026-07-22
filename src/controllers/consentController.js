@@ -1,4 +1,5 @@
 const { UserConsent, SchoolDPA, ParentChildConsent } = require('../models');
+const ownership = require('../services/parentOwnershipService');
 
 // Accept Terms & Privacy
 exports.acceptTerms = async (req, res) => {
@@ -62,7 +63,9 @@ exports.getDPAStatus = async (req, res) => {
 // Give parental consent
 exports.giveParentalConsent = async (req, res) => {
   try {
-    const { studentId } = req.body;
+    const studentId = Number(req.body?.studentId);
+    if (!Number.isInteger(studentId) || studentId < 1) return res.status(400).json({ success: false, message: 'Valid studentId is required' });
+    await ownership.assertParentOwnsStudent({ parentUserId: req.user.id, studentId });
     const [consent] = await ParentChildConsent.upsert({
       parentId: req.user.id,
       studentId,
@@ -70,6 +73,6 @@ exports.giveParentalConsent = async (req, res) => {
     });
     res.json({ success: true, data: consent });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 };

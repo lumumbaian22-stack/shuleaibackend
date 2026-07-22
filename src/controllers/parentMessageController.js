@@ -38,8 +38,7 @@ async function verifyParentChild(parent, student, user = null) {
     return await ownership.ownsStudentId({
       parentUserId: user.id || parent.userId,
       parentId: parent.id,
-      studentId: student.id,
-      schoolCode: user.schoolCode
+      studentId: student.id
     });
   } catch (_) { return false; }
 }
@@ -50,7 +49,7 @@ async function findStudentForParent({ parent, studentId, schoolCode, user }) {
     where: { [Op.or]: [{ id: rawId }, { userId: rawId }] },
     include: [{ model: User, attributes:['id','name','email','profileImage','profilePicture','schoolCode'] }]
   });
-  if (!student || student.User?.schoolCode !== schoolCode) return null;
+  if (!student) return null;
   const ok = await verifyParentChild(parent, student, user || {});
   return ok ? student : null;
 }
@@ -111,10 +110,11 @@ exports.getMessageTargets = async (req, res) => {
     if (!studentId) return res.status(400).json({ success: false, message: 'studentId is required' });
     const parent = await getParentProfile(req.user.id);
     if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
-    const student = await findStudentForParent({ parent, studentId, schoolCode: req.user.schoolCode, user: req.user });
+    const student = await findStudentForParent({ parent, studentId, user: req.user });
     if (!student) return res.status(403).json({ success: false, message: 'This child is not linked to your parent account.' });
-    const classTeacher = await findClassTeacherForStudent(student, req.user.schoolCode);
-    const admin = await findSchoolAdmin(req.user.schoolCode);
+    const schoolCode = student.User?.schoolCode;
+    const classTeacher = await findClassTeacherForStudent(student, schoolCode);
+    const admin = await findSchoolAdmin(schoolCode);
     const payload = {
       studentId: student.id,
       studentName: student.User?.name || student.name || 'Student',
@@ -141,8 +141,9 @@ exports.sendMessage = async (req, res) => {
     const parent = await getParentProfile(req.user.id);
     if (!parent) return res.status(404).json({ success: false, message: 'Parent not found' });
 
-    const student = await findStudentForParent({ parent, studentId, schoolCode: req.user.schoolCode, user: req.user });
-    if (!student) return res.status(403).json({ success: false, message: 'Not your child or child is outside your school' });
+    const student = await findStudentForParent({ parent, studentId, user: req.user });
+    if (!student) return res.status(403).json({ success: false, message: 'This child is not linked to your parent account' });
+    const schoolCode = student.User?.schoolCode;
 
     let recipientId = null;
     let recipientRole = null;
@@ -152,7 +153,7 @@ exports.sendMessage = async (req, res) => {
     let classTeacher = null;
 
     if (recipientType === 'teacher') {
-      classTeacher = await findClassTeacherForStudent(student, req.user.schoolCode);
+      classTeacher = await findClassTeacherForStudent(student, schoolCode);
       if (!classTeacher?.userId) {
         return res.status(404).json({ success: false, message: 'Class teacher has not been assigned yet. Please message the school admin.', fallbackTarget: 'admin' });
       }
@@ -162,7 +163,7 @@ exports.sendMessage = async (req, res) => {
       conversationType = 'parent_class_teacher';
       classId = classTeacher.classId || classId;
     } else if (recipientType === 'admin') {
-      const admin = await findSchoolAdmin(req.user.schoolCode);
+      const admin = await findSchoolAdmin(schoolCode);
       if (!admin) return res.status(404).json({ success: false, message: 'School admin not found' });
       recipientId = admin.id;
       recipientRole = 'admin';
@@ -172,7 +173,7 @@ exports.sendMessage = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid recipient type' });
     }
 
-    const conversationKey = buildConversationKey({ type: conversationType, schoolCode: req.user.schoolCode, parentUserId: req.user.id, studentId: student.id, classId, receiverId: recipientId });
+    const conversationKey = buildConversationKey({ type: conversationType, schoolCode, parentUserId: req.user.id, studentId: student.id, classId, receiverId: recipientId });
     if (clientMessageId) {
       const recentSent = await Message.findAll({ where:{ senderId:req.user.id, receiverId:recipientId }, order:[['createdAt','DESC']], limit:50 });
       const duplicate = recentSent.find(item => meta(item).clientMessageId === String(clientMessageId));
@@ -181,9 +182,11 @@ exports.sendMessage = async (req, res) => {
     const newMessage = await Message.create({
       senderId: req.user.id,
       receiverId: recipientId,
+      schoolCode,
+      conversationId: conversationKey,
       content: cleanMessage,
       metadata: {
-        schoolCode: req.user.schoolCode,
+        schoolCode,
         conversationType,
         conversationKey,
         parentUserId: req.user.id,
@@ -212,11 +215,11 @@ exports.sendMessage = async (req, res) => {
       severity: 'info',
       title: `Message from parent of ${student.User?.name || 'student'}`,
       message: (cleanMessage || attachmentMeta?.originalName || attachmentMeta?.filename || 'Attachment').substring(0, 100) + ((cleanMessage || '').length > 100 ? '...' : ''),
-      data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [recipientId], conversationType, conversationKey, studentId: student.id, classId, messageId: newMessage.id }
+      data: { schoolCode, scope: 'user', targetUserIds: [recipientId], conversationType, conversationKey, studentId: student.id, classId, messageId: newMessage.id }
     });
 
     const canonicalMessage = { ...newMessage.toJSON(), messageId:newMessage.id, conversationId:conversationKey, conversationKey, senderId:req.user.id, senderRole:'parent', senderName:req.user.name,senderProfileImage:req.user.profileImage||req.user.profilePicture||null,receiverId:recipientId, receiverRole:recipientRole, body:cleanMessage, content:cleanMessage, attachment:attachmentMeta, clientMessageId:clientMessageId?String(clientMessageId):null, createdAt:newMessage.createdAt, deliveryStatus:'sent', metadata:{ ...newMessage.metadata, conversationKey, conversationType, studentId:student.id, classId } };
-    await realtime.emit({ type:'chat:message_created', schoolCode:req.user.schoolCode, audience:{ school:false, userIds:[req.user.id,recipientId], conversations:[conversationKey] }, entityType:'Message', entityId:newMessage.id, version:1, data:canonicalMessage }).catch(error=>console.error('[parent chat realtime]',error.message));
+    await realtime.emit({ type:'chat:message_created', schoolCode, audience:{ school:false, userIds:[req.user.id,recipientId], conversations:[conversationKey] }, entityType:'Message', entityId:newMessage.id, version:1, data:canonicalMessage }).catch(error=>console.error('[parent chat realtime]',error.message));
     res.status(201).json({ success: true, message: 'Message sent successfully', data: { ...canonicalMessage, recipient: recipientName, recipientType: recipientRole, requestedRecipientType: recipientType, recipientId, sentAt: newMessage.createdAt, Sender:{ id:req.user.id, name:req.user.name, role:'parent' } } });
   } catch (error) {
     console.error('Send parent message error:', error);
@@ -250,7 +253,7 @@ exports.getConversations = async (req, res) => {
     const requestedStudentId = req.query.studentId || req.query.childId || null;
     const scoped = messages.filter(m => {
       const md = meta(m);
-      if (!schoolMatches(m, req.user.schoolCode) || !['parent_class_teacher', 'parent_admin'].includes(md.conversationType)) return false;
+      if (!['parent_class_teacher', 'parent_admin'].includes(md.conversationType)) return false;
       if (requestedStudentId && String(md.studentId || '') !== String(requestedStudentId)) return false;
       return true;
     });
@@ -278,12 +281,13 @@ exports.getMessages = async (req, res) => {
     const wantedConversation = requestedType === 'admin' ? 'parent_admin' : requestedType === 'teacher' ? 'parent_class_teacher' : null;
     const scoped = messages.filter(m => {
       const md = meta(m);
-      if (!schoolMatches(m, req.user.schoolCode) || !['parent_class_teacher', 'parent_admin'].includes(md.conversationType)) return false;
+      if (!['parent_class_teacher', 'parent_admin'].includes(md.conversationType)) return false;
       if (wantedConversation && md.conversationType !== wantedConversation) return false;
       if (requestedStudentId && String(md.studentId || '') !== String(requestedStudentId)) return false;
       return true;
     }).reverse();
-    await Message.update({ isRead: true, readAt: new Date() }, { where: { senderId: otherUserId, receiverId: req.user.id, isRead: false } });
+    const scopedIds = scoped.filter(message => Number(message.senderId) === Number(otherUserId) && !message.isRead).map(message => message.id);
+    if (scopedIds.length) await Message.update({ isRead: true, readAt: new Date() }, { where: { id: { [Op.in]: scopedIds }, receiverId: req.user.id, isRead: false } });
     res.json({ success: true, ...buildCursorResponse({ rows: scoped, limit, cursorPosition: 'first' }) });
   } catch (error) {
     console.error('Get parent messages error:', error);

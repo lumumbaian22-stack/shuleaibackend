@@ -92,9 +92,7 @@ async function runMigrations() {
     console.log('📊 NODE_ENV:', process.env.NODE_ENV);
     console.log('📊 DATABASE_URL exists:', !!process.env.DATABASE_URL);
     console.log('📊 isProduction:', process.env.NODE_ENV === 'production');
-    if (process.env.DATABASE_URL) {
-      console.log('📊 Using DATABASE_URL (first 20 chars):', process.env.DATABASE_URL.substring(0, 20) + '...');
-    }
+    if (process.env.DATABASE_URL) console.log('📊 Using configured DATABASE_URL (value hidden)');
 
     await sequelize.authenticate();
     console.log('✅ Database connection test SUCCESSFUL');

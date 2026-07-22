@@ -1,4 +1,4 @@
-const { Badge, StudentBadge, Reward, StudentReward, Student, User, AcademicRecord, Attendance, Class, HomeTaskAssignment, HomeTask, AchievementEvent } = require('../models');
+const { sequelize, Badge, StudentBadge, Reward, StudentReward, Student, Parent, User, AcademicRecord, Attendance, Class, HomeTaskAssignment, HomeTask, AchievementEvent } = require('../models');
 const { Op } = require('sequelize');
 
 
@@ -10,8 +10,26 @@ function normalizeScore(value) {
 async function getCurrentStudent(req) {
   return Student.findOne({
     where: { userId: req.user.id },
-    include: [{ model: User, attributes: ['id', 'name', 'email'] }]
+    include: [{ model: User, required: true, where: { schoolCode: req.user.schoolCode }, attributes: ['id', 'name', 'email', 'schoolCode'] }]
   });
+}
+
+async function getSchoolStudent(studentId, schoolCode, transaction) {
+  return Student.findOne({
+    where: { id: Number(studentId) },
+    include: [{ model: User, required: true, where: { schoolCode }, attributes: ['id', 'name', 'schoolCode'] }],
+    transaction
+  });
+}
+
+async function canViewStudent(req, student) {
+  if (['admin', 'super_admin', 'teacher', 'finance_officer'].includes(req.user.role)) return true;
+  if (req.user.role === 'student') return Number(student.userId) === Number(req.user.id);
+  if (req.user.role === 'parent') {
+    const parent = await Parent.findOne({ where: { userId: req.user.id } });
+    return Boolean(parent && await parent.hasStudent(student));
+  }
+  return false;
 }
 
 function badgeStatus(earned, labelWhenEarned, labelWhenLocked) {
@@ -175,12 +193,12 @@ exports.getMyRewardsSummary = async (req, res) => {
 exports.getClassLeaderboard = async (req, res) => {
   try {
     const { classId } = req.params;
-    const classItem = await Class.findByPk(classId);
+    const classItem = await Class.findOne({ where: { id: Number(classId), schoolCode: req.user.schoolCode } });
     if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
 
     const students = await Student.findAll({
-      where: { grade: classItem.name },
-      include: [{ model: User, attributes: ['name'] }],
+      where: { classId: classItem.id },
+      include: [{ model: User, required: true, where: { schoolCode: req.user.schoolCode }, attributes: ['name'] }],
       order: [['points', 'DESC']],
       limit: 20
     });
@@ -202,9 +220,12 @@ exports.getClassLeaderboard = async (req, res) => {
 exports.getStudentBadges = async (req, res) => {
   try {
     const { studentId } = req.params;
+    const student = await getSchoolStudent(studentId, req.user.schoolCode);
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found in your school' });
+    if (!(await canViewStudent(req, student))) return res.status(403).json({ success: false, message: 'You cannot view this student\'s badges' });
     const badges = await StudentBadge.findAll({
       where: { studentId },
-      include: [{ model: Badge }]
+      include: [{ model: Badge, required: true, where: { schoolId: req.user.schoolCode } }]
     });
     res.json({ success: true, data: badges });
   } catch (error) {
@@ -230,7 +251,13 @@ exports.createBadge = async (req, res) => {
 exports.awardBadge = async (req, res) => {
   try {
     const { studentId, badgeId } = req.body;
-    await StudentBadge.create({ studentId, badgeId });
+    const [student, badge] = await Promise.all([
+      getSchoolStudent(studentId, req.user.schoolCode),
+      Badge.findOne({ where: { id: Number(badgeId), schoolId: req.user.schoolCode } })
+    ]);
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found in your school' });
+    if (!badge) return res.status(404).json({ success: false, message: 'Badge not found in your school' });
+    await StudentBadge.findOrCreate({ where: { studentId: Number(studentId), badgeId: Number(badgeId) } });
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -252,30 +279,39 @@ exports.getRewards = async (req, res) => {
 };
 
 exports.redeemReward = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { rewardId } = req.body;
-    const student = await Student.findOne({ where: { userId: req.user.id } });
-    const reward = await Reward.findByPk(rewardId);
-    if (!reward) return res.status(404).json({ success: false, message: 'Reward not found' });
+    const student = await Student.findOne({ where: { userId: req.user.id }, transaction, lock: transaction.LOCK.UPDATE });
+    const reward = await Reward.findOne({ where: { id: Number(rewardId), schoolId: req.user.schoolCode, isActive: true }, transaction, lock: transaction.LOCK.UPDATE });
+    if (!student) { await transaction.rollback(); return res.status(404).json({ success: false, message: 'Student profile not found' }); }
+    if (!reward) { await transaction.rollback(); return res.status(404).json({ success: false, message: 'Reward not found in your school' }); }
     if (student.points < reward.pointsCost) {
+      await transaction.rollback();
       return res.status(400).json({ success: false, message: 'Insufficient points' });
+    }
+    if (Number(reward.quantity) === 0) {
+      await transaction.rollback();
+      return res.status(409).json({ success: false, message: 'Reward is out of stock' });
     }
     // Deduct points
     student.points -= reward.pointsCost;
-    await student.save();
+    await student.save({ transaction });
     // Create redemption record
     await StudentReward.create({
       studentId: student.id,
       rewardId: reward.id,
       pointsSpent: reward.pointsCost
-    });
+    }, { transaction });
     // If quantity limited, reduce
     if (reward.quantity > 0) {
       reward.quantity -= 1;
-      await reward.save();
+      await reward.save({ transaction });
     }
+    await transaction.commit();
     res.json({ success: true, message: 'Reward redeemed', pointsRemaining: student.points });
   } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
     res.status(500).json({ success: false, message: error.message });
   }
 };

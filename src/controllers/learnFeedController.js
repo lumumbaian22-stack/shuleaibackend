@@ -399,21 +399,24 @@ exports.publishVideo = async (req, res) => {
 };
 
 exports.reportVideo = async (req, res) => { try { await LearnFeedInteraction.findOrCreate({ where: { userId: req.learnFeedUser.id, videoId: req.body.videoId, type: 'report' }, defaults: { metadata: { reason: cleanText(req.body.reason, 'Other') } } }); res.json({ success: true, message: 'Report submitted' }); } catch (error) { res.status(400).json({ success: false, message: error.message }); } };
-exports.remixVideo = async (req, res) => { res.json({ success: true, data: { sourceVideoId: req.body.sourceVideoId, mode: req.body.mode || 'remix', ready: true } }); };
+function unavailableFeature(name) {
+  return (req, res) => res.status(501).json({ success: false, code: 'FEATURE_NOT_IMPLEMENTED', message: `${name} is not available yet.` });
+}
+exports.remixVideo = unavailableFeature('Video remixing');
 
 exports.listComments = async (req, res) => { try { const videoId = Number(req.query.videoId || req.params.videoId || 0); const comments = await LearnFeedComment.findAll({ where: { videoId, status: 'visible' }, include: [{ model: LearnFeedUser, as: 'User', attributes: ['id', 'displayName', 'avatar'] }], order: [['pinned', 'DESC'], ['createdAt', 'DESC']], limit: 80 }); res.json({ success: true, data: { comments: comments.map(commentJson) } }); } catch (error) { res.status(400).json({ success: false, message: error.message }); } };
 exports.addComment = async (req, res) => { try { const video = await LearnFeedVideo.findByPk(req.body.videoId); if (!video || !video.allowComments) return res.status(404).json({ success: false, message: 'Comments unavailable for this video' }); const text = cleanText(req.body.text).slice(0, 1000); if (!text) return res.status(400).json({ success: false, message: 'Comment text is required' }); const comment = await LearnFeedComment.create({ userId: req.learnFeedUser.id, videoId: video.id, text }); await video.update({ commentsCount: Number(video.commentsCount || 0) + 1 }); const full = await LearnFeedComment.findByPk(comment.id, { include: [{ model: LearnFeedUser, as: 'User', attributes: ['id', 'displayName', 'avatar'] }] }); res.status(201).json({ success: true, data: { comment: commentJson(full), comments: video.commentsCount + 1 } }); } catch (error) { res.status(400).json({ success: false, message: error.message }); } };
-exports.likeComment = async (req, res) => { res.json({ success: true, data: { liked: true } }); };
+exports.likeComment = unavailableFeature('Comment likes');
 
 exports.listLiveRooms = async (req, res) => { try { const rooms = await LearnFeedLiveRoom.findAll({ where: { status: 'live' }, include: [{ model: LearnFeedUser, as: 'Host', attributes: ['id', 'displayName', 'handle', 'avatar'] }], order: [['createdAt', 'DESC']], limit: 30 }); res.json({ success: true, data: { rooms: rooms.map(roomJson) } }); } catch (error) { res.status(500).json({ success: false, message: error.message }); } };
 exports.startLive = async (req, res) => { try { const room = await LearnFeedLiveRoom.create({ hostUserId: req.learnFeedUser.id, title: cleanText(req.body.title, 'Live Lesson').slice(0, 180), subject: cleanText(req.body.subject, 'General').slice(0, 80), emoji: req.body.emoji || '🔴' }); const full = await LearnFeedLiveRoom.findByPk(room.id, { include: [{ model: LearnFeedUser, as: 'Host', attributes: ['id', 'displayName', 'handle', 'avatar'] }] }); res.status(201).json({ success: true, data: { room: roomJson(full) } }); } catch (error) { res.status(400).json({ success: false, message: error.message }); } };
 exports.endLive = async (req, res) => { try { await LearnFeedLiveRoom.update({ status: 'ended', endedAt: new Date() }, { where: { id: req.body.roomId, hostUserId: req.learnFeedUser.id } }); res.json({ success: true }); } catch (error) { res.status(400).json({ success: false, message: error.message }); } };
-exports.liveChat = async (req, res) => { res.json({ success: true, data: { message: cleanText(req.body.text), sender: publicUser(req.learnFeedUser), createdAt: new Date().toISOString() } }); };
-exports.liveGift = async (req, res) => { res.json({ success: true, data: { accepted: true, giftId: req.body.giftId || 'heart' } }); };
+exports.liveChat = unavailableFeature('Persistent live chat');
+exports.liveGift = unavailableFeature('Live gifts');
 
 exports.listSounds = async (req, res) => { res.json({ success: true, data: { sounds: [{ id: 's1', title: 'Original Sound - Study Beat', creator: 'LearnFeed', uses: '18.2K' }, { id: 's2', title: 'Soft Revision Lofi', creator: 'Shule AI', uses: '9.4K' }, { id: 's3', title: 'Exam Focus Timer', creator: 'Creator Tools', uses: '4.1K' }] } }); };
-exports.useSound = async (req, res) => { res.json({ success: true, data: { soundId: req.body.soundId, selected: true } }); };
-exports.askAi = async (req, res) => { const text = cleanText(req.body.text, 'Explain this lesson'); const video = req.body.videoId ? await LearnFeedVideo.findByPk(req.body.videoId).catch(() => null) : null; const context = video?.aiContext || 'This is a public LearnFeed lesson.'; res.json({ success: true, data: { answer: context + ' For your question: "' + text + '", start with the key idea, then solve it step by step.' } }); };
+exports.useSound = unavailableFeature('Sound selection');
+exports.askAi = unavailableFeature('LearnFeed AI');
 exports.submitQuiz = async (req, res) => { try { const video = await LearnFeedVideo.findByPk(req.body.videoId); if (!video) return res.status(404).json({ success: false, message: 'Video not found' }); const selected = Number(req.body.answer); const correct = selected === Number(video.quizAnswerIndex || 0); res.json({ success: true, data: { correct, xp: correct ? 10 : 2, answer: video.quizAnswerIndex } }); } catch (error) { res.status(400).json({ success: false, message: error.message }); } };
 
 exports.inbox = async (req, res) => { try { const messages = await LearnFeedMessage.findAll({ where: { [Op.or]: [{ toUserId: req.learnFeedUser.id }, { fromUserId: req.learnFeedUser.id }] }, order: [['createdAt', 'DESC']], limit: 50 }); res.json({ success: true, data: { messages } }); } catch (error) { res.status(400).json({ success: false, message: error.message }); } };
@@ -438,7 +441,7 @@ exports.checkout = async (req, res) => {
     const reference = 'LF-' + user.learnFeedId.replace(/[^A-Z0-9]/gi, '') + '-' + Date.now();
     const payment = await paymentEngine.initiatePayment({
       user: { id: user.id, role: 'learnfeed_user', email: user.email, name: user.displayName, phone, schoolCode: 'platform' },
-      body: { paymentType: 'platform', platformPurpose: 'learnfeed_subscription', purpose: 'learnfeed_subscription', amount: plan.monthlyKes, currency: 'KES', phone, email: user.email, name: user.displayName, reference, accountReference: user.learnFeedId, paymentMethod: req.body.paymentMethod || 'mobile_money', metadata: { learnFeedUserId: user.id, learnFeedId: user.learnFeedId, planCode: plan.code } }
+      body: { paymentType: 'platform', platformPurpose: 'learnfeed_subscription', purpose: 'learnfeed_subscription', amount: plan.monthlyKes, currency: 'KES', phone, email: user.email, name: user.displayName, reference, accountReference: user.learnFeedId, paymentMethod: req.body.paymentMethod || '', metadata: { learnFeedUserId: user.id, learnFeedId: user.learnFeedId, planCode: plan.code } }
     });
     const provider = payment.paymentGateway;
     const record = await LearnFeedSubscriptionPayment.create({ userId: user.id, learnFeedId: user.learnFeedId, legacyPaymentId: payment.id, planCode: plan.code, planName: plan.name, provider, phone, amount: plan.monthlyKes, currency: 'KES', status: 'pending', internalReference: payment.reference || reference, providerReference: payment.providerReference || null, checkoutRequestId: payment.checkoutRequestId || null, checkoutUrl: payment.checkoutUrl || null, metadata: { promptStatus: payment.promptStatus, promptType: payment.promptType, message: payment.metadata?.promptMessage || null } });
@@ -461,4 +464,4 @@ exports.paymentStatus = async (req, res) => {
 };
 
 exports.wallet = async (req, res) => { res.json({ success: true, data: { balanceKes: Math.round(Number(req.learnFeedUser.walletBalanceCents || 0) / 100), currency: 'KES', available: true, learnFeedId: req.learnFeedUser.learnFeedId } }); };
-exports.withdraw = async (req, res) => { res.json({ success: true, data: { status: 'requested', amount: Number(req.body.amount || 0), provider: req.body.provider || 'mpesa' } }); };
+exports.withdraw = unavailableFeature('Wallet withdrawals');

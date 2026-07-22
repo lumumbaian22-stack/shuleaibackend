@@ -402,11 +402,35 @@ exports.getClassAnalytics = getClassAnalyticsHandler;
 exports.getSchoolAnalytics = exports.getAdminAnalytics;
 
 exports.compareCurriculum = async (req, res) => {
-    res.status(501).json({
-        success: false,
-        message: 'Curriculum comparison is not fully connected in this production-safe build.',
-        data: { studentId: req.params.studentId }
-    });
+    try {
+        const student = await Student.findByPk(Number(req.params.studentId), { include: [{ model: User, required: true }] });
+        if (!student || student.User.schoolCode !== req.user.schoolCode) return res.status(404).json({ success: false, message: 'Student not found in your school' });
+        if (req.user.role === 'student' && Number(student.userId) !== Number(req.user.id)) return res.status(403).json({ success: false, message: 'You can only compare your own results' });
+        if (req.user.role === 'parent') {
+            const parent = await Parent.findOne({ where: { userId: req.user.id } });
+            if (!parent || !(await parent.hasStudent(student))) return res.status(403).json({ success: false, message: 'Not your child' });
+        }
+        const school = await School.findOne({ where: { schoolId: student.User.schoolCode } });
+        const records = await AcademicRecord.findAll({
+            where: { studentId: student.id, ...( ['student','parent'].includes(req.user.role) ? { isPublished: true } : {} ) },
+            attributes: ['subject', 'score'],
+            order: [['createdAt', 'DESC']]
+        });
+        const validScores = records.map(row => Number(row.score)).filter(Number.isFinite);
+        const average = validScores.length ? Math.round(validScores.reduce((sum, score) => sum + score, 0) / validScores.length * 100) / 100 : null;
+        const curriculumHelper = require('../utils/curriculumHelper');
+        const level = student.grade || school?.settings?.schoolLevel || 'primary';
+        const currentCurriculum = curriculumHelper.normalizeCurriculumKey(student.curriculum || school?.system || 'cbc');
+        const comparisons = ['cbc', '844', 'british', 'american'].map(curriculum => ({
+            curriculum,
+            grade: average === null ? 'N/A' : curriculumHelper.getGradeFromScore(average, curriculum, level),
+            average,
+            isCurrent: curriculum === currentCurriculum
+        }));
+        res.json({ success: true, data: { studentId: student.id, studentName: student.User.name, level, currentCurriculum, recordCount: records.length, average, comparisons } });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // ============ V17 OVERRIDE: role-aware student analytics ============

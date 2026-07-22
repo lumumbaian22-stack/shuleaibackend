@@ -28,8 +28,7 @@ async function seedSuperAdmin() {
 
     console.log('✅ Super admin created successfully');
     console.log('📧 Email:', superAdmin.email);
-    console.log('🔑 Secret Key:', process.env.SUPER_ADMIN_SECRET || 'SUPER_SECRET_2024_CHANGE_THIS');
-    console.log('⚠️  Please change the secret key in production!');
+    console.log('🔐 Super-admin credentials were loaded securely and are not printed.');
 
     process.exit(0);
   } catch (error) {

@@ -151,15 +151,10 @@ exports.getMessages = async (req, res) => {
 
         const scoped = rawMessages.filter(message => isTeacherParentConversation(message, req.user)).reverse();
 
-        await Message.update(
+        const scopedIds = scoped.filter(message => Number(message.senderId) === Number(parentId) && !message.isRead).map(message => message.id);
+        if (scopedIds.length) await Message.update(
             { isRead: true, readAt: new Date() },
-            {
-                where: {
-                    senderId: parentId,
-                    receiverId: req.user.id,
-                    isRead: false
-                }
-            }
+            { where: { id: { [Op.in]: scopedIds }, receiverId: req.user.id, isRead: false } }
         );
 
         res.json({ success: true, ...buildCursorResponse({ rows: scoped, limit, cursorPosition: 'first' }) });

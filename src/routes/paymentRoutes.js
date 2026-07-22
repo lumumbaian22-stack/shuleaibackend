@@ -24,6 +24,7 @@ router.post('/superadmin/providers/:provider/setup-notifications', protect, auth
 router.post('/superadmin/providers/:provider/test-stk', protect, authorize('super_admin'), locked.testPlatformProviderStk);
 router.get('/providers/available', protect, authorize('parent'), locked.getParentPaymentMethods);
 router.get('/parent/methods', protect, authorize('parent'), locked.getParentPaymentMethods);
+router.get('/platform/method', protect, authorize('parent', 'admin', 'super_admin'), locked.getPlatformPublicMethod);
 router.post('/parent/initiate', protect, authorize('parent'), locked.initiateParentFeePayment);
 router.post('/parent/stk/initiate', protect, authorize('parent'), locked.initiateParentStkPayment);
 router.post('/initiate', protect, authorize('admin', 'finance_officer', 'super_admin'), locked.initiatePayment);

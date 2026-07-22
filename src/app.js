@@ -106,8 +106,6 @@ const allowedOrigins = Array.from(new Set([
 function isAllowedOrigin(origin) {
   if (!origin) return true;
   if (allowedOrigins.includes(origin)) return true;
-  // Allow GitHub Pages preview/user pages without opening CORS to all origins.
-  if (/^https:\/\/[a-z0-9-]+\.github\.io$/i.test(origin)) return true;
   return false;
 }
 
@@ -205,7 +203,7 @@ function healthPayload(req, extra = {}) {
   return {
     success: true,
     version: require('../package.json').version,
-    build: 'v2033-production-payment-lock',
+    build: 'v2038-functional-flow-integrity-lock',
     instanceId: req.app.locals.shuleAiInstanceId || loadBalancingConfig.instanceId,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),

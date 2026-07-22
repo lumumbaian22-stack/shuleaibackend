@@ -7,9 +7,8 @@ const uploadController = require('../controllers/uploadController');
 router.use(protect);
 
 // Public templates (any authenticated user)
-router.get('/template/:type', uploadController.downloadTemplate);
-
 router.get('/template/marks', uploadController.downloadMarksTemplate);
+router.get('/template/:type', uploadController.downloadTemplate);
 
 // Validate CSV
 router.post('/validate', uploadController.validateCSV);

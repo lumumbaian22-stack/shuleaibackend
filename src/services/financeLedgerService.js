@@ -107,10 +107,12 @@ async function createFinanceAlerts({ schoolCode, student, parentId, payment, act
 }
 
 async function findStudentInSchool({ schoolCode, studentId, transaction }) {
+  const userWhere = { role: 'student' };
+  if (schoolCode) userWhere.schoolCode = schoolCode;
   return Student.findOne({
     where: { id: studentId },
     include: [
-      { model: User, where: { schoolCode, role: 'student' }, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'] },
+      { model: User, where: userWhere, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'] },
       { model: Class, attributes: ['id', 'name', 'grade', 'stream'], required: false }
     ],
     transaction
@@ -286,7 +288,10 @@ function decoratePayment(payment) {
 async function getStudentFinance({ schoolCode, studentId, parentUserId = null }) {
   let parent = null;
   let student = null;
-  if (parentUserId) ({ parent, student } = await assertParentOwnsStudent({ parentUserId, studentId, schoolCode }));
+  if (parentUserId) {
+    ({ parent, student } = await assertParentOwnsStudent({ parentUserId, studentId }));
+    schoolCode = student.schoolCode || student.User?.schoolCode;
+  }
   else student = await findStudentInSchool({ schoolCode, studentId });
   if (!student) throw new Error('Student not found');
   const accounts = await Fee.findAll({ where: { schoolCode, studentId }, include: [{ model: Student, include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }, { model: Class, required: false }] }], order: [['year', 'DESC'], ['term', 'DESC'], ['createdAt', 'DESC']] });
@@ -303,7 +308,10 @@ async function getStudentFinance({ schoolCode, studentId, parentUserId = null })
 }
 
 async function getStudentHistory({ schoolCode, studentId, parentUserId = null, status = 'all', transactionType = 'all', method = 'all', feeId = null }) {
-  if (parentUserId) await assertParentOwnsStudent({ parentUserId, studentId, schoolCode });
+  if (parentUserId) {
+    const owned = await assertParentOwnsStudent({ parentUserId, studentId });
+    schoolCode = owned.student.schoolCode || owned.student.User?.schoolCode;
+  }
   const where = { schoolCode, studentId, paymentType: { [Op.in]: ['fee', 'school_fee'] }, paidTo: 'school' };
   if (feeId) where.feeId = feeId;
   const rows = await Payment.findAll({

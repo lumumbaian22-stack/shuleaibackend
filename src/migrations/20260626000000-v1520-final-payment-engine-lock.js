@@ -2,7 +2,7 @@
 
 module.exports = {
   async up(queryInterface, Sequelize) {
-    const add = (table, column, spec) => queryInterface.addColumn(table, column, spec).catch(() => {});
+    const add = (table, column, spec) => queryInterface.addColumn(table, column, spec);
 
     await queryInterface.createTable('PaymentEvents', {
       id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true, allowNull: false },
@@ -20,7 +20,7 @@ module.exports = {
       metadata: { type: Sequelize.JSONB, allowNull: false, defaultValue: {} },
       createdAt: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn('NOW') },
       updatedAt: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn('NOW') }
-    }).catch(() => {});
+    });
 
     await add('Payments', 'paymentDestination', { type: Sequelize.STRING, allowNull: false, defaultValue: 'platform' });
     await add('Payments', 'providerReference', { type: Sequelize.STRING, allowNull: true });
@@ -41,12 +41,12 @@ module.exports = {
     await add('PlatformPaymentSettings', 'enabledProviders', { type: Sequelize.JSONB, allowNull: false, defaultValue: [] });
     await add('PlatformPaymentSettings', 'defaultProvider', { type: Sequelize.STRING, allowNull: true });
 
-    await queryInterface.addIndex('PaymentEvents', ['paymentId'], { name: 'payment_events_payment_idx' }).catch(() => {});
-    await queryInterface.addIndex('PaymentEvents', ['schoolCode'], { name: 'payment_events_school_idx' }).catch(() => {});
-    await queryInterface.addIndex('PaymentEvents', ['provider', 'providerEventId'], { name: 'payment_events_provider_event_unique', unique: true }).catch(() => {});
-    await queryInterface.addIndex('Payments', ['paymentType', 'paidTo', 'status'], { name: 'payments_type_destination_status_idx' }).catch(() => {});
-    await queryInterface.addIndex('Payments', ['schoolCode', 'reference'], { name: 'payments_school_reference_idx' }).catch(() => {});
-    await queryInterface.addIndex('Payments', ['paymentGateway', 'providerReference'], { name: 'payments_gateway_provider_ref_idx' }).catch(() => {});
+    await queryInterface.addIndex('PaymentEvents', ['paymentId'], { name: 'payment_events_payment_idx' });
+    await queryInterface.addIndex('PaymentEvents', ['schoolCode'], { name: 'payment_events_school_idx' });
+    await queryInterface.addIndex('PaymentEvents', ['provider', 'providerEventId'], { name: 'payment_events_provider_event_unique', unique: true });
+    await queryInterface.addIndex('Payments', ['paymentType', 'paidTo', 'status'], { name: 'payments_type_destination_status_idx' });
+    await queryInterface.addIndex('Payments', ['schoolCode', 'reference'], { name: 'payments_school_reference_idx' });
+    await queryInterface.addIndex('Payments', ['paymentGateway', 'providerReference'], { name: 'payments_gateway_provider_ref_idx' });
   },
   async down() {}
 };

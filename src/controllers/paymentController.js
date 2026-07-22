@@ -70,6 +70,7 @@ function providerBodyFromLegacyRequest(req, fallbackProvider = 'manual') {
 }
 
 function legacySchoolSettingsPayload(data, school = null) {
+  const visibleMethods = (data.publicMethods || []).length ? data.publicMethods : (data.methods || []);
   return {
     ...data,
     schoolName: school?.name || data.schoolName || null,
@@ -81,8 +82,8 @@ function legacySchoolSettingsPayload(data, school = null) {
       disabledProviders: data.disabledProviders,
       providerSelectionRule: data.providerSelectionRule,
       providers: data.providers,
-      methods: data.publicMethods || data.methods || [],
-      publicMethods: data.publicMethods || data.methods || [],
+      methods: visibleMethods,
+      publicMethods: data.publicMethods || [],
       linkingRule: data.linkingRule,
       matchingRules: data.matchingRules,
       notifications: data.notifications,
@@ -146,6 +147,7 @@ exports.testPlatformPaymentConnection = async (req, res) => {
 exports.getParentSchoolPaymentSettings = async (req, res) => {
   try {
     const data = await paymentEngine.getSettings({ scope: 'school', schoolCode: getSchoolCode(req) });
+    const publicMethods = data.publicMethods || [];
     res.json({ success: true, data: {
       activeProvider: data.activeProvider,
       defaultProvider: data.defaultProvider,
@@ -154,16 +156,16 @@ exports.getParentSchoolPaymentSettings = async (req, res) => {
       referenceFormat: data.linkingRule,
       linkingRule: data.linkingRule,
       matchingRules: data.matchingRules,
-      methods: data.publicMethods || data.methods || [],
-      publicMethods: data.publicMethods || data.methods || [],
+      methods: publicMethods,
+      publicMethods,
       supports: {
-        stk: (data.publicMethods || data.methods || []).some(m => m.prompt === 'phone_prompt'),
-        checkout: (data.publicMethods || data.methods || []).some(m => ['checkout_url', 'hosted_checkout'].includes(m.prompt)),
-        manual: (data.publicMethods || data.methods || []).some(m => m.prompt === 'manual_instructions'),
-        bank: (data.publicMethods || data.methods || []).some(m => m.method === 'bank'),
-        cash: (data.publicMethods || data.methods || []).some(m => m.method === 'cash'),
-        card: (data.publicMethods || data.methods || []).some(m => m.method === 'card'),
-        mobileMoney: (data.publicMethods || data.methods || []).some(m => m.method === 'mobile_money')
+        stk: publicMethods.some(m => m.prompt === 'phone_prompt'),
+        checkout: publicMethods.some(m => ['checkout_url', 'hosted_checkout'].includes(m.prompt)),
+        manual: publicMethods.some(m => m.prompt === 'manual_instructions'),
+        bank: publicMethods.some(m => m.method === 'bank'),
+        cash: publicMethods.some(m => m.method === 'cash'),
+        card: publicMethods.some(m => m.method === 'card'),
+        mobileMoney: publicMethods.some(m => m.method === 'mobile_money')
       }
     }});
   } catch (error) { errorJson(res, error); }
@@ -416,7 +418,7 @@ async function startLockedPayment(req, res, payload, successMessage) {
     res.status(payment.status === 'pending_provider_error' ? 502 : 200).json({
       success: payment.status !== 'pending_provider_error',
       retryable: payment.status === 'pending_provider_error',
-      message: payment.metadata?.promptMessage || successMessage || 'Payment started using the active configured provider.',
+      message: payment.metadata?.promptMessage || payment.metadata?.providerError || successMessage || 'Payment started using the active configured provider.',
       data
     });
   } catch (error) {
@@ -445,7 +447,7 @@ exports.parentSubscriptionSTK = async (req, res) => startLockedPayment(req, res,
   platformPurpose: 'child_subscription',
   purpose: 'child_subscription',
   ownerType: 'child',
-  paymentMethod: req.body?.paymentMethod || 'mobile_money',
+  paymentMethod: req.body?.paymentMethod || '',
   billingCycle: req.body?.billingCycle || req.body?.billingPeriod || 'monthly'
 }, 'Child subscription payment started using the active platform provider.');
 
@@ -455,7 +457,7 @@ exports.schoolSubscriptionSTK = async (req, res) => startLockedPayment(req, res,
   platformPurpose: 'school_subscription',
   purpose: 'school_subscription',
   ownerType: 'school',
-  paymentMethod: req.body?.paymentMethod || 'mobile_money',
+  paymentMethod: req.body?.paymentMethod || '',
   billingCycle: req.body?.billingCycle || req.body?.billingPeriod || 'monthly'
 }, 'School subscription payment started using the active platform provider.');
 
@@ -465,7 +467,7 @@ exports.genericPlatformSTK = async (req, res) => startLockedPayment(req, res, {
   platformPurpose: req.body?.platformPurpose || req.body?.purpose || req.body?.metadata?.type || 'platform_payment',
   purpose: req.body?.purpose || req.body?.metadata?.type || 'platform_payment',
   ownerType: req.body?.ownerType || req.body?.metadata?.ownerType || (req.user?.role === 'parent' ? 'child' : 'school'),
-  paymentMethod: req.body?.paymentMethod || 'mobile_money',
+  paymentMethod: req.body?.paymentMethod || '',
   billingCycle: req.body?.billingCycle || req.body?.billingPeriod || 'monthly'
 }, 'Platform payment started using the active platform provider.');
 
@@ -482,7 +484,7 @@ function v2003ManualProviderQueueWhere(extra = {}) {
   return {
     ...extra,
     paidTo: 'platform',
-    status: 'pending',
+    status: { [Op.in]: ['pending', 'pending_verification'] },
     [Op.or]: [
       { promptType: 'manual_instructions' },
       { paymentGateway: { [Op.in]: ['manual', 'bank', 'cash', 'card', 'manual_mpesa'] } }
@@ -517,7 +519,7 @@ exports.parentSubscriptionManual = async (req, res) => startLockedPayment(req, r
   platformPurpose: 'child_subscription',
   purpose: 'child_subscription_manual_reference',
   ownerType: 'child',
-  paymentMethod: req.body?.paymentMethod || req.body?.method || 'mobile_money',
+  paymentMethod: 'manual',
   reference: req.body?.reference || req.body?.mpesaCode || req.body?.transactionCode || undefined,
   billingCycle: req.body?.billingCycle || req.body?.billingPeriod || 'monthly'
 }, 'Child subscription reference submitted to the backend platform approval queue. It is not active until Super Admin approves it.');
@@ -528,7 +530,7 @@ exports.adminNameChangePaymentSTK = async (req, res) => startLockedPayment(req, 
   platformPurpose: 'name_change',
   purpose: 'school_name_change',
   ownerType: 'school',
-  paymentMethod: req.body?.paymentMethod || 'mobile_money',
+  paymentMethod: req.body?.paymentMethod || '',
   accountReference: req.body?.accountReference || req.body?.reference || 'SCHOOL-NAME-CHANGE',
   metadata: { ...(req.body?.metadata || {}), newName: req.body?.newName || null, reason: req.body?.reason || null }
 }, 'School name change payment started using the active platform provider.');

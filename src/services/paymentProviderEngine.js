@@ -379,7 +379,24 @@ async function getPlatformRow(options = {}) {
 }
 
 function providerMap(row) {
-  return row?.metadata?.paymentProviders && typeof row.metadata.paymentProviders === 'object' ? row.metadata.paymentProviders : {};
+  const map = row?.metadata?.paymentProviders && typeof row.metadata.paymentProviders === 'object' ? { ...row.metadata.paymentProviders } : {};
+  if (!row) return map;
+  const legacyMpesaConfigured = row.darajaEnabled === true || ['daraja','mpesa','stk'].includes(String(row.paymentMode || '').toLowerCase()) || row.darajaConsumerKey || row.darajaShortcode || row.businessShortCode;
+  if (!map.mpesa && legacyMpesaConfigured) map.mpesa = {
+    provider: 'mpesa', enabled: row.isActive !== false,
+    consumerKey: row.darajaConsumerKey, consumerSecret: row.darajaConsumerSecret,
+    passkey: row.darajaPasskey, shortcode: row.darajaShortcode || row.businessShortCode,
+    businessShortcode: row.businessShortCode || row.darajaShortcode,
+    environment: row.darajaEnvironment, callbackUrl: row.callbackUrl,
+    connectionVerifiedAt: row.metadata?.connectionVerifiedAt || row.metadata?.lastVerifiedAt,
+    lastVerifiedAt: row.metadata?.lastVerifiedAt,
+    supportsStkPush: row.metadata?.supportsStkPush === true,
+    lastStkTestStatus: row.metadata?.lastStkTestStatus,
+    notificationStatus: row.metadata?.notificationStatus || (row.callbackUrl ? 'callback_attached_per_payment' : '')
+  };
+  if (!map.bank && String(row.paymentMode || '').toLowerCase() === 'bank') map.bank = { provider:'bank', enabled:row.isActive !== false, bankName:row.bankName, accountName:row.bankAccountName, accountNumber:row.bankAccountNumber, branch:row.bankBranch };
+  if (!map.manual && String(row.paymentMode || '').toLowerCase() === 'manual') map.manual = { provider:'manual', enabled:row.isActive !== false, paybillNumber:row.paybillNumber, tillNumber:row.tillNumber, shortcode:row.businessShortCode, accountNumber:row.accountNumber };
+  return map;
 }
 
 function providerConfigFromMap(map = {}, provider = '') {
@@ -394,20 +411,27 @@ function rawEnabledProviders(row) {
 }
 
 function activeProviderFromRow(row) {
+  if (!row || row.isActive === false) return '';
   const direct = normalizeProviderIfPossible(row?.defaultProvider || row?.metadata?.defaultProvider || row?.metadata?.activeProvider);
   if (direct) return direct;
   const enabled = rawEnabledProviders(row);
-  return enabled[0] || '';
+  if (enabled[0]) return enabled[0];
+  const legacyMode = String(row.paymentMode || '').toLowerCase();
+  if (row.darajaEnabled === true || ['daraja','mpesa','stk'].includes(legacyMode)) return 'mpesa';
+  if (legacyMode === 'bank') return 'bank';
+  if (legacyMode === 'manual') return 'manual';
+  return '';
 }
 
 function providerDefaultMethods(provider) {
   if (provider === 'mpesa') return ['mobile_money'];
   if (provider === 'stripe') return ['card'];
-  if (provider === 'paystack' || provider === 'flutterwave' || provider === 'pesapal') return ['mobile_money', 'card', 'bank'];
+  if (provider === 'pesapal') return ['card'];
+  if (provider === 'paystack' || provider === 'flutterwave') return ['mobile_money', 'card'];
   if (provider === 'bank') return ['bank'];
   if (provider === 'cash') return ['cash'];
   if (provider === 'card') return ['card'];
-  if (provider === 'manual') return ['mobile_money', 'bank', 'cash', 'card', 'manual'];
+  if (provider === 'manual') return ['manual'];
   return ['manual'];
 }
 
@@ -420,10 +444,7 @@ function sanitizeMethods(methods, provider) {
 
 function providerSupportsMethod(provider, method, config = {}) {
   if (!method) return true;
-  // Verification/offline methods are always valid because they do not call disabled providers.
-  if (['manual','bank','cash'].includes(method)) return true;
-  if (method === 'card' && ['manual','bank','cash','card','mpesa'].includes(provider)) return true;
-  return sanitizeMethods(config.methods, provider).includes(method);
+  return providerDefaultMethods(provider).includes(method);
 }
 
 
@@ -773,7 +794,7 @@ async function resolvePaymentProvider({ paymentType, schoolCode, requestedProvid
   const map = providerMap(row);
   const cfg = providerConfigFromMap(map, active) || {};
   if (cfg.enabled !== true && !rawEnabledProviders(row).includes(active)) throw new Error(`${providerLabel(active)} is configured but not enabled.`);
-  const selectedMethod = normalizePaymentMethod(method) || sanitizeMethods(cfg.methods, active)[0] || '';
+  const selectedMethod = normalizePaymentMethod(method) || providerDefaultMethods(active)[0] || '';
   if (selectedMethod && !providerSupportsMethod(active, selectedMethod, cfg)) throw new Error(`${methodLabel(selectedMethod)} is not enabled for ${providerLabel(active)}.`);
   return { row, provider: active, method: selectedMethod, linkingRule: row.metadata?.linkingRule || row.accountReferenceFormat || 'elimuid', providerConfigId: providerConfigIdFor({ scope: paymentType === PLATFORM ? 'platform' : 'school', schoolCode: row.schoolCode || schoolCode || 'platform', provider: active }) };
 }
@@ -987,12 +1008,18 @@ async function ensurePlatformSubscriptionContext({ user, body, schoolCode, amoun
   const plan = await subscriptionController.getPlanByCode(planCode, ownerType).catch(() => null);
   if (!plan) throw new Error(ownerType === 'school' ? 'School subscription plan not found' : 'Child subscription plan not found');
   const planName = plan.displayName || plan.name || plan.code || planCode;
-  const cleanPlanAmount = cleanAmount(amount || subscriptionController.planAmount(plan, billingCycle));
+  const cleanPlanAmount = cleanAmount(subscriptionController.planAmount(plan, billingCycle));
+  if (cleanAmount(amount) !== cleanPlanAmount) {
+    const error = new Error(`Subscription price changed. Refresh and pay the current ${billingCycle} amount of KES ${cleanPlanAmount}.`);
+    error.statusCode = 409;
+    error.data = { expectedAmount: cleanPlanAmount, billingCycle, planCode: plan.code || planCode };
+    throw error;
+  }
 
   if (ownerType === 'child') {
     if (!body.studentId) throw new Error('studentId is required for child subscription payments');
-    const resolvedSchoolCode = schoolCode || user?.schoolCode;
-    const { parent, student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user?.id, studentId: Number(body.studentId), schoolCode: resolvedSchoolCode, transaction });
+    const { parent, student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user?.id, studentId: Number(body.studentId), transaction });
+    const resolvedSchoolCode = student.schoolCode || student.User?.schoolCode;
     const [subscription] = await Subscription.findOrCreate({
       where: { ownerType: 'child', studentId: student.id },
       defaults: { ownerType: 'child', schoolCode: resolvedSchoolCode, parentId: parent.id, studentId: student.id, planId: plan.id, planCode: plan.code || plan.name, planName, billingCycle, status: 'pending', features: plan.features || [], limits: plan.limits || {} },
@@ -1088,7 +1115,8 @@ async function initiatePayment({ user, body }) {
       if (!body.studentId) throw new Error('studentId is required for school fee payments');
       schoolCode = user?.schoolCode || body.schoolCode;
       if (user?.role === 'parent') {
-        ({ parent, student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user.id, studentId: body.studentId, schoolCode, transaction }));
+        ({ parent, student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user.id, studentId: body.studentId, transaction }));
+        schoolCode = student.schoolCode || student.User?.schoolCode;
       } else {
         student = await financeLedger.findStudentInSchool({ schoolCode, studentId: body.studentId, transaction });
       }
@@ -1119,7 +1147,9 @@ async function initiatePayment({ user, body }) {
     const resolved = await resolvePaymentProvider({ paymentType, schoolCode, requestedProvider, method: paymentMethod });
     const provider = resolved.provider;
     const method = resolved.method || paymentMethod || provider;
-    const reference = String(body.reference || ref(paymentType === SCHOOL_FEE ? 'FEE' : 'PLATFORM')).toUpperCase();
+    const reference = ['manual','bank','cash'].includes(paymentMethod) && body.reference
+      ? cleanManualReference(body.reference)
+      : String(body.reference || ref(paymentType === SCHOOL_FEE ? 'FEE' : 'PLATFORM')).toUpperCase();
     const duplicate = await Payment.findOne({ where: { reference }, transaction });
     if (duplicate) {
       const err = new Error('This payment reference/code has already been submitted. Use a unique M-Pesa code, bank reference, or provider reference.');
@@ -1724,6 +1754,7 @@ async function getParentAvailableMethods({ user, studentId }) {
   }
   const row = await getSchoolRow(schoolCode);
   const settings = serializeSettings(row);
+  const activePublicConfig = settings.providers?.[settings.activeProvider] || {};
   const publicMethods = (settings.publicMethods || []).filter(m => settings.providers?.[m.provider]?.ready && settings.providers?.[m.provider]?.visibleToParent !== false);
   const parentProviders = Object.fromEntries(Object.entries(settings.providers || {})
     .filter(([, provider]) => provider.ready && provider.visibleToParent !== false && provider.enabled)
@@ -1746,7 +1777,17 @@ async function getParentAvailableMethods({ user, studentId }) {
     enabledProviders: settings.enabledProviders,
     readyProviders: settings.readyProviders,
     providers: parentProviders,
-    methods: publicMethods
+    methods: publicMethods,
+    paymentInstructions: settings.activeProvider && ['manual','bank','cash','card'].includes(settings.activeProvider) ? {
+      method: settings.activeProvider,
+      paybill: activePublicConfig.paybill || activePublicConfig.paybillNumber || activePublicConfig.shortcode || activePublicConfig.businessShortcode || '',
+      till: activePublicConfig.till || activePublicConfig.tillNumber || '',
+      bankName: activePublicConfig.bankName || '',
+      accountName: activePublicConfig.accountName || '',
+      accountNumber: activePublicConfig.accountNumber || activePublicConfig.bankAccount || '',
+      branch: activePublicConfig.branch || '',
+      instructions: activePublicConfig.manualInstructions || activePublicConfig.offlineInstructions || ''
+    } : null
   };
 }
 
@@ -1854,20 +1895,23 @@ async function getProviderTestStatus({ scope = 'school', schoolCode, provider, t
 async function initiateParentStkPayment({ user, body }) {
   const studentId = body.studentId;
   if (!studentId) throw new Error('studentId is required for parent school fee payment.');
-  const { student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user.id, studentId, schoolCode: user.schoolCode });
+  const { student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user.id, studentId });
   const schoolCode = student.schoolCode || student.User?.schoolCode || user.schoolCode;
   const row = await getSchoolRow(schoolCode);
   const active = activeProviderFromRow(row);
   if (!active) throw new Error('No school payment provider is active for this child. Ask the school finance office to activate one provider.');
+  if (['manual','bank','cash','card'].includes(active)) {
+    const error = new Error('The school active method requires a payment reference, not an STK/online payment request.');
+    error.statusCode = 409;
+    throw error;
+  }
   const map = providerMap(row);
   const cfg = providerConfigFromMap(map, active) || {};
   const readiness = parentReadyForStk(active, cfg, active);
   if (!readiness.parentReady) {
     throw new Error(`${providerLabel(active)} is not ready for parent payments: ${readiness.message || 'provider setup is incomplete'}`);
   }
-  const method = active === 'stripe' || active === 'pesapal'
-    ? 'card'
-    : (['manual','bank','cash','card'].includes(active) ? active : 'mobile_money');
+  const method = active === 'stripe' || active === 'pesapal' ? 'card' : 'mobile_money';
   return initiatePayment({
     user,
     body: {
@@ -1888,8 +1932,15 @@ async function initiateParentStkPayment({ user, body }) {
 async function initiateParentManualPayment({ user, body }) {
   const studentId = Number(body.studentId);
   if (!studentId) throw new Error('studentId is required for parent school fee payment.');
-  const { student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user.id, studentId, schoolCode: user.schoolCode });
+  const { student } = await financeLedger.assertParentOwnsStudent({ parentUserId: user.id, studentId });
   const schoolCode = student.schoolCode || student.User?.schoolCode || user.schoolCode;
+  const providerRow = await getSchoolRow(schoolCode);
+  const activeProvider = activeProviderFromRow(providerRow);
+  if (!['manual','bank','cash','card'].includes(activeProvider)) {
+    const error = new Error('Manual reference submission is disabled. Use the school active online payment method.');
+    error.statusCode = 409;
+    throw error;
+  }
   const reference = cleanManualReference(body.reference || body.mpesaCode || body.transactionCode);
   return initiatePayment({
     user,
@@ -1901,7 +1952,7 @@ async function initiateParentManualPayment({ user, body }) {
       reference,
       paymentType: 'school_fee',
       purpose: 'school_fee_manual_reference',
-      paymentMethod: 'manual',
+      paymentMethod: activeProvider === 'manual' ? 'manual' : activeProvider,
       schoolCode,
       parentInternalPaymentFlow: true,
       metadata: { parentInternalPaymentFlow: true, noParentCheckoutUrl: true, manualReferenceSubmitted: true }

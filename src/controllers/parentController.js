@@ -54,8 +54,7 @@ async function parentOwnsStudentStrict(parent, student, user) {
   return ownership.ownsStudentId({
     parentUserId: user.id || parent.userId,
     parentId: parent.id,
-    studentId: student.id,
-    schoolCode: user.schoolCode
+    studentId: student.id
   });
 }
 
@@ -126,7 +125,7 @@ exports.getChildren = async (req, res) => {
     }
 
     // v124: strict parent-child isolation. Only approved/active StudentParents links are returned.
-    const children = await ownership.listOwnedStudents({ parentUserId: req.user.id, schoolCode: req.user.schoolCode });
+    const children = await ownership.listOwnedStudents({ parentUserId: req.user.id });
     const enrichedChildren = await enrichLinkedChildren(children);
     res.json({ success: true, data: enrichedChildren });
   } catch (error) {
@@ -310,7 +309,7 @@ exports.getChildReportCardDetails = async (req, res) => {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     if (!parent) return res.status(404).json({ success:false, message:'Parent profile not found' });
-    const owned = await ownership.assertParentOwnsStudent({ parentUserId: req.user.id, parentId: parent.id, studentId, schoolCode: req.user.schoolCode });
+    const owned = await ownership.assertParentOwnsStudent({ parentUserId: req.user.id, parentId: parent.id, studentId });
     const student = owned.student;
 
     const schoolCode = student.User?.schoolCode || req.user.schoolCode;
@@ -446,16 +445,17 @@ exports.reportAbsence = async (req, res) => {
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     const student = await Student.findByPk(studentId, { 
       attributes: { include: ['classId'] },
-      include: [{ model: User, attributes: ['id','name','profileImage','profilePicture'] }] 
+      include: [{ model: User, attributes: ['id','name','profileImage','profilePicture','schoolCode'] }] 
     });
     
     if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
+    const schoolCode = student.User?.schoolCode;
 
     const classTeacher = await Teacher.findOne({
       where: { classTeacher: student.grade },
-      include: [{ model: User, attributes: ['id', 'name', 'email'] }]
+      include: [{ model: User, where: { schoolCode }, attributes: ['id', 'name', 'email'] }]
     });
 
     const createdRecords = [];
@@ -470,7 +470,7 @@ exports.reportAbsence = async (req, res) => {
           reason,
           reportedBy: req.user.id,
           reportedByParent: true,
-          schoolCode: req.user.schoolCode
+          schoolCode
         }
       });
 
@@ -506,7 +506,7 @@ exports.reportAbsence = async (req, res) => {
       });
 
       const admins = await User.findAll({ 
-        where: { role: 'admin', schoolCode: req.user.schoolCode } 
+        where: { role: 'admin', schoolCode } 
       });
 
       for (const admin of admins) {
@@ -614,7 +614,7 @@ exports.getPayments = async (req, res) => {
     if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
 
     const payments = await Payment.findAll({
-      where: { parentId: parent.id, schoolCode: req.user.schoolCode },
+      where: { parentId: parent.id },
       include: [
         { model: Student, include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }] },
         { model: Fee }
@@ -623,10 +623,9 @@ exports.getPayments = async (req, res) => {
       limit: 500
     });
 
-    const school = await School.findOne({
-      where: { schoolId: req.user.schoolCode },
-      attributes: ['name', 'bankDetails', 'settings']
-    });
+    const schoolCodes = [...new Set(payments.map(payment => payment.schoolCode).filter(Boolean))];
+    const schools = await School.findAll({ where: { schoolId: { [Op.in]: schoolCodes } }, attributes: ['schoolId', 'name', 'bankDetails', 'settings'] });
+    const school = schools.length === 1 ? schools[0] : null;
 
     const normalized = payments.map((payment) => {
       const row = payment.toJSON ? payment.toJSON() : payment;
@@ -644,7 +643,7 @@ exports.getPayments = async (req, res) => {
       };
     });
 
-    res.json({ success: true, data: { payments: normalized, school } });
+    res.json({ success: true, data: { payments: normalized, school, schools } });
   } catch (error) {
     console.error('Get payments error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -759,7 +758,7 @@ exports.getChildAnalytics = async (req, res) => {
   try {
     const { studentId } = req.params;
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
-    const student = await Student.findByPk(studentId);
+    const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','schoolCode'] }] });
     if (!parent || !student || !(await parentOwnsStudent(parent, student, req.user))) return res.status(403).json({ success: false, message: 'Child not linked to this parent' });
 
     // Only published marks
@@ -795,7 +794,7 @@ exports.getChildAnalytics = async (req, res) => {
     });
 
     // Include school info for grade calculations
-    const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
+    const school = await School.findOne({ where: { schoolId: student.User?.schoolCode } });
 
     res.json({ 
       success: true, 
@@ -821,12 +820,13 @@ exports.getFees = async (req, res) => {
     const parent = await Parent.findOne({ where: { userId: req.user.id } });
     if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
     const student = await Student.findByPk(studentId, { include: [{ model: User, attributes: ['id','name','schoolCode'] }] });
-    if (!student || !(await parentOwnsStudent(parent, student, req.user)) || student.User?.schoolCode !== req.user.schoolCode) {
+    if (!student || !(await parentOwnsStudent(parent, student, req.user))) {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
+    const schoolCode = student.User?.schoolCode;
     const fees = await Fee.findAll({
-      where: { studentId, schoolCode: req.user.schoolCode },
-      include: [{ model: Payment, required: false, where: { schoolCode: req.user.schoolCode, paymentType: 'fee' } }],
+      where: { studentId, schoolCode },
+      include: [{ model: Payment, required: false, where: { schoolCode, paymentType: 'fee' } }],
       order: [['year', 'DESC'], ['term', 'DESC']]
     });
     const normalized = fees.map((fee) => {

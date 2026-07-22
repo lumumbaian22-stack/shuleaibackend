@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { saveUploadAsset } = require('../services/mediaAssetService');
 const { HomeTask, HomeTaskAssignment, Student, Teacher, Class, User, TeacherSubjectAssignment, ClassroomThread } = require('../models');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
@@ -58,7 +59,17 @@ function homeTaskAttachmentUrl(req, relativeUrl) {
   return `${safeProto}://${req.get('host')}${relativeUrl}`;
 }
 
-function homeworkFileApiUrl(req, rawUrl) {
+function homeworkFileSigningKey() {
+  return String(process.env.HOMEWORK_FILE_SIGNING_SECRET || process.env.JWT_SECRET || '');
+}
+
+function homeworkFileSignature(filename, schoolCode, expiresAt) {
+  return crypto.createHmac('sha256', homeworkFileSigningKey())
+    .update(`${filename}\n${schoolCode}\n${expiresAt}`)
+    .digest('base64url');
+}
+
+function homeworkFileApiUrl(req, rawUrl, schoolCode) {
   if (!rawUrl) return '';
   let filename = '';
   const raw = String(rawUrl || '').trim();
@@ -69,22 +80,26 @@ function homeworkFileApiUrl(req, rawUrl) {
     filename = path.basename(raw);
   }
   if (!filename || filename === '.' || filename === '..') return '';
+  const tenant = String(schoolCode || req.user?.schoolCode || '').trim();
+  if (!tenant || !homeworkFileSigningKey()) return '';
+  const expiresAt = Math.floor(Date.now() / 1000) + 15 * 60;
+  const signature = homeworkFileSignature(filename, tenant, expiresAt);
   const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
   const safeProto = req.get('host')?.includes('onrender.com') ? 'https' : proto;
-  return `${safeProto}://${req.get('host')}/homework-files/${encodeURIComponent(filename)}`;
+  return `${safeProto}://${req.get('host')}/homework-files/${encodeURIComponent(filename)}?school=${encodeURIComponent(tenant)}&expires=${expiresAt}&signature=${encodeURIComponent(signature)}`;
 }
 
-function safeHomeworkDownloadUrl(req, relativeUrl) {
+function safeHomeworkDownloadUrl(req, relativeUrl, schoolCode) {
   if (!relativeUrl) return '';
   // Use the dedicated homework file route instead of raw /uploads links.
   // This avoids CSP/inline-script browser previews and keeps view/download stable across dashboards.
-  return homeworkFileApiUrl(req, relativeUrl);
+  return homeworkFileApiUrl(req, relativeUrl, schoolCode);
 }
 
-function normalizeAttachmentUrlsForResponse(req, attachments = []) {
+function normalizeAttachmentUrlsForResponse(req, attachments = [], schoolCode = req.user?.schoolCode) {
   return normalizeAttachments(attachments).map(file => {
     const raw = file.secureUrl || file.url || file.viewUrl || file.downloadUrl || file.filename || '';
-    const secureUrl = safeHomeworkDownloadUrl(req, raw);
+    const secureUrl = safeHomeworkDownloadUrl(req, raw, schoolCode);
     return {
       url: secureUrl,
       secureUrl,
@@ -99,12 +114,12 @@ function normalizeAttachmentUrlsForResponse(req, attachments = []) {
   });
 }
 
-async function findHomeworkAttachmentInDatabase(filename) {
+async function findHomeworkAttachmentInDatabase(filename, schoolCode) {
   const wanted = path.basename(String(filename || ''));
   if (!wanted) return null;
   const tasks = await HomeTask.findAll({
     attributes: ['id', 'attachments'],
-    where: { attachments: { [Op.ne]: null } },
+    where: { schoolCode, attachments: { [Op.ne]: null } },
     order: [['updatedAt', 'DESC']],
     limit: 3000
   }).catch(() => []);
@@ -116,13 +131,13 @@ async function findHomeworkAttachmentInDatabase(filename) {
         .map(v => path.basename(String(v)));
       return names.includes(wanted);
     });
-    if (found?.dataBase64) return found;
+    if (found) return found;
   }
 
   // Also recover student submission files stored in HomeTaskAssignment.studentFeedback.
   const assignments = await HomeTaskAssignment.findAll({
     attributes: ['id', 'studentFeedback'],
-    where: { studentFeedback: { [Op.ne]: null } },
+    where: { schoolCode, studentFeedback: { [Op.ne]: null } },
     order: [['updatedAt', 'DESC']],
     limit: 5000
   }).catch(() => []);
@@ -135,7 +150,7 @@ async function findHomeworkAttachmentInDatabase(filename) {
         .map(v => path.basename(String(v)));
       return names.includes(wanted);
     });
-    if (found?.dataBase64) return found;
+    if (found) return found;
   }
   return null;
 }
@@ -148,6 +163,20 @@ exports.serveHomeworkAttachment = async (req, res) => {
   try {
     const filename = path.basename(String(req.params.filename || ''));
     if (!filename) return res.status(400).send('Invalid homework file');
+    const schoolCode = String(req.query.school || '').trim();
+    const expiresAt = Number(req.query.expires || 0);
+    const suppliedSignature = String(req.query.signature || '');
+    if (!schoolCode || !Number.isSafeInteger(expiresAt) || expiresAt < Math.floor(Date.now() / 1000) || expiresAt > Math.floor(Date.now() / 1000) + 3600) {
+      return res.status(403).send('Homework file link is invalid or expired');
+    }
+    const expectedSignature = homeworkFileSignature(filename, schoolCode, expiresAt);
+    const suppliedBuffer = Buffer.from(suppliedSignature);
+    const expectedBuffer = Buffer.from(expectedSignature);
+    if (suppliedBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(suppliedBuffer, expectedBuffer)) {
+      return res.status(403).send('Homework file link is invalid or expired');
+    }
+    const dbFile = await findHomeworkAttachmentInDatabase(filename, schoolCode);
+    if (!dbFile) return res.status(404).send('Homework file not found for this school');
 
     const uploadRoot = homeworkUploadRoot();
     const candidateRoots = [
@@ -178,7 +207,6 @@ exports.serveHomeworkAttachment = async (req, res) => {
 
     // Render/local disks can be wiped on deploy/restart. For files uploaded on this build,
     // fall back to the base64 copy stored inside the HomeTask attachments JSON.
-    const dbFile = await findHomeworkAttachmentInDatabase(filename);
     if (dbFile?.dataBase64) {
       const buffer = Buffer.from(String(dbFile.dataBase64), 'base64');
       res.setHeader('Content-Type', dbFile.mimeType || 'application/octet-stream');
@@ -550,7 +578,7 @@ exports.createAssignment = async (req, res) => {
       success: true,
       message: assignedCount ? 'Homework assigned successfully' : 'Homework saved, but no matching students were found for the selected class',
       data: {
-        task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments), studyThread },
+        task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments, task.schoolCode), studyThread },
         assignedCount,
         repairedCount: repairedStudents.length,
         taskId: task.id,
@@ -580,7 +608,7 @@ exports.createHomeworkDiscussion = async (req, res) => {
     });
     if (!task) return res.status(404).json({ success: false, message: 'Homework not found' });
     const thread = await ensureHomeworkStudyThread(req, task, req.body || {});
-    res.status(201).json({ success: true, data: { task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments) }, thread } });
+    res.status(201).json({ success: true, data: { task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments, task.schoolCode) }, thread } });
   } catch (error) {
     console.error('Create homework discussion error:', error);
     res.status(500).json({ success: false, message: error.message || 'Could not create homework discussion' });
@@ -631,7 +659,7 @@ exports.getTeacherAssignments = async (req, res) => {
       const assignments = json.HomeTaskAssignments || [];
       return {
         ...json,
-        attachments: normalizeAttachmentUrlsForResponse(req, json.attachments),
+        attachments: normalizeAttachmentUrlsForResponse(req, json.attachments, json.schoolCode),
         assignedCount: assignments.length,
         submittedCount: assignments.filter(a => ['submitted','graded'].includes(String(a.status || '').toLowerCase())).length,
         pendingCount: assignments.filter(a => !['submitted','graded'].includes(String(a.status || '').toLowerCase())).length
@@ -728,10 +756,10 @@ exports.getTeacherAssignmentDetails = async (req, res) => {
         displayStatus: timing.displayStatus,
         maxPoints,
         scoreText: json.pointsEarned !== null && json.pointsEarned !== undefined ? `${json.pointsEarned}/${maxPoints || ''}`.replace(/\/$/, '') : 'Not graded',
-        submissionFiles: normalizeAttachmentUrlsForResponse(req, (json.studentFeedback || {}).submissionFiles || ((json.studentFeedback || {}).fileUrl ? [{ url: (json.studentFeedback || {}).fileUrl }] : []))
+        submissionFiles: normalizeAttachmentUrlsForResponse(req, (json.studentFeedback || {}).submissionFiles || ((json.studentFeedback || {}).fileUrl ? [{ url: (json.studentFeedback || {}).fileUrl }] : []), json.schoolCode || task.schoolCode)
       };
     });
-    res.json({ success: true, data: { task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments) }, assignments: enrichedAssignments } });
+    res.json({ success: true, data: { task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments, task.schoolCode) }, assignments: enrichedAssignments } });
   } catch (error) {
     console.error('Get homework details error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -886,7 +914,7 @@ exports.getStudentAssignments = async (req, res) => {
         submittedAt: row.completedAt || null,
         studentFeedback: row.studentFeedback || {},
         parentFeedback: row.parentFeedback || {},
-        submissionFiles: normalizeAttachmentUrlsForResponse(req, (row.studentFeedback || {}).submissionFiles || ((row.studentFeedback || {}).fileUrl ? [{ url: (row.studentFeedback || {}).fileUrl }] : [])),
+        submissionFiles: normalizeAttachmentUrlsForResponse(req, (row.studentFeedback || {}).submissionFiles || ((row.studentFeedback || {}).fileUrl ? [{ url: (row.studentFeedback || {}).fileUrl }] : []), row.schoolCode || task.schoolCode),
         pointsEarned: row.pointsEarned ?? null,
         maxPoints,
         scoreText: row.pointsEarned !== null && row.pointsEarned !== undefined ? `${row.pointsEarned}/${maxPoints || ''}`.replace(/\/$/, '') : 'Not graded',
@@ -903,7 +931,7 @@ exports.getStudentAssignments = async (req, res) => {
           estimatedMinutes: task.estimatedMinutes || null,
           points: task.points || 0,
           difficulty: task.difficulty || null,
-          attachments: normalizeAttachmentUrlsForResponse(req, task.attachments),
+          attachments: normalizeAttachmentUrlsForResponse(req, task.attachments, task.schoolCode || row.schoolCode),
           teacherNote: task.teacherNote || '',
           teacherName: task.Teacher?.User?.name || 'Not assigned',
           studyDiscussionEnabled: Boolean(task.studyDiscussionEnabled),
@@ -957,7 +985,7 @@ exports.submitAssignment = async (req, res) => {
       completedAt: submittedAt,
       studentFeedback: feedback
     });
-    res.json({ success: true, data: { submittedLate, displayStatus: submittedLate ? 'Submitted late' : 'Submitted', submissionFiles: normalizeAttachmentUrlsForResponse(req, files) } });
+    res.json({ success: true, data: { submittedLate, displayStatus: submittedLate ? 'Submitted late' : 'Submitted', submissionFiles: normalizeAttachmentUrlsForResponse(req, files, assignment.schoolCode || task?.schoolCode) } });
   } catch (error) {
     console.error('Submit assignment error:', error);
     res.status(500).json({ success: false, message: error.message });

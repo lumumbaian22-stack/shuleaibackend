@@ -3,9 +3,9 @@
 module.exports = {
   async up(queryInterface, Sequelize) {
     const qi = queryInterface;
-    const create = (name, columns, options = {}) => qi.createTable(name, columns, options).catch(() => {});
-    const addIndex = (table, fields, opts) => qi.addIndex(table, fields, opts).catch(() => {});
-    const addColumn = (table, column, spec) => qi.addColumn(table, column, spec).catch(() => {});
+    const create = (name, columns, options = {}) => qi.createTable(name, columns, options);
+    const addIndex = (table, fields, opts) => qi.addIndex(table, fields, opts);
+    const addColumn = (table, column, spec) => qi.addColumn(table, column, spec);
 
     await create('FeeInvoices', {
       id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true, allowNull: false },
@@ -202,7 +202,7 @@ module.exports = {
       FROM "Fees" f
       WHERE f."studentId" IS NOT NULL AND f."schoolCode" IS NOT NULL
       ON CONFLICT DO NOTHING;
-    `).catch(() => {});
+    `);
 
     await qi.sequelize.query(`
       INSERT INTO "StudentFeeAccounts" ("schoolCode", "studentId", "currency", "invoicedAmount", "paidAmount", "creditAmount", "balanceAmount", "status", "lastRecalculatedAt", "metadata", "createdAt", "updatedAt")
@@ -212,7 +212,7 @@ module.exports = {
       FROM "FeeInvoices"
       GROUP BY "schoolCode", "studentId"
       ON CONFLICT DO NOTHING;
-    `).catch(() => {});
+    `);
   },
   async down() {}
 };

@@ -1,6 +1,6 @@
 {
   "name": "shuleai-backend",
-  "version": "2.1.528",
+  "version": "2.1.533",
   "description": "Complete School Intelligence System with PostgreSQL",
   "main": "server.js",
   "scripts": {
@@ -15,7 +15,8 @@
     "prestart": "node scripts/prestartMigrate.js",
     "test": "node --test tests/critical/*.test.js",
     "test:critical": "node --test tests/critical/*.test.js",
-    "audit:routes": "node scripts/checkRouteWiring.js"
+    "audit:routes": "node scripts/checkRouteWiring.js",
+    "audit:contracts": "node scripts/checkSystemContracts.js"
   },
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",

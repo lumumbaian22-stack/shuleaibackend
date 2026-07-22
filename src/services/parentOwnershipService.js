@@ -17,10 +17,10 @@ async function getParentForUser(parentUserId) {
 
 async function getStudentInSchool(studentId, schoolCode, options = {}) {
   const sid = asId(studentId);
-  if (!sid || !schoolCode) return null;
+  if (!sid) return null;
   return Student.findOne({
     where: { id: sid },
-    include: [{ model: User, where: { schoolCode }, attributes: ['id','name','email','phone','schoolCode','profileImage'] }],
+    include: [{ model: User, ...(schoolCode ? { where: { schoolCode } } : {}), attributes: ['id','name','email','phone','schoolCode','profileImage'] }],
     transaction: options.transaction || undefined
   });
 }
@@ -29,7 +29,7 @@ async function ownsStudentId({ parentUserId, parentId, studentId, schoolCode, tr
   const sid = asId(studentId);
   const uid = asId(parentUserId);
   let pid = asId(parentId);
-  if (!sid || !schoolCode || (!uid && !pid)) return false;
+  if (!sid || (!uid && !pid)) return false;
   if (!pid && uid) {
     const parent = await Parent.findOne({ where: { userId: uid }, transaction }).catch(() => null);
     pid = asId(parent?.id);
@@ -44,7 +44,7 @@ async function ownsStudentId({ parentUserId, parentId, studentId, schoolCode, tr
       WHERE sp."studentId" = :studentId
         AND sp."parentId" = :parentId
         AND p."userId" = :parentUserId
-        AND su."schoolCode" = :schoolCode
+        ${schoolCode ? 'AND su."schoolCode" = :schoolCode' : ''}
         AND ${linkStatusSql('sp')}
       LIMIT 1`,
     { replacements: { studentId: sid, parentId: pid, parentUserId: uid || 0, schoolCode }, type: qtype(), transaction }
@@ -79,7 +79,7 @@ async function listOwnedStudentIds({ parentUserId, schoolCode, transaction } = {
        JOIN "Users" su ON su."id" = s."userId"
       WHERE sp."parentId" = :parentId
         AND p."userId" = :parentUserId
-        AND su."schoolCode" = :schoolCode
+        ${schoolCode ? 'AND su."schoolCode" = :schoolCode' : ''}
         AND ${linkStatusSql('sp')}
       ORDER BY s."id" ASC`,
     { replacements: { parentId: parent.id, parentUserId, schoolCode }, type: qtype(), transaction }

@@ -9,11 +9,14 @@ const verifier = require(path.join(root, 'src/services/webhookVerificationServic
 const vault = require(path.join(root, 'src/services/paymentVaultService.js'));
 const service = fs.readFileSync(path.join(root, 'src/services/paymentProviderEngine.js'), 'utf8');
 const lockedController = fs.readFileSync(path.join(root, 'src/controllers/lockedPaymentController.js'), 'utf8');
+const paymentController = fs.readFileSync(path.join(root, 'src/controllers/paymentController.js'), 'utf8');
+const financeLedger = fs.readFileSync(path.join(root, 'src/services/financeLedgerService.js'), 'utf8');
 const routes = fs.readFileSync(path.join(root, 'src/routes/paymentRoutes.js'), 'utf8');
 const migration = fs.readFileSync(path.join(root, 'src/migrations/20260720000000-v2033-payment-production-hardening.js'), 'utf8');
 const appSource = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
 const parentDash = fs.readFileSync(path.resolve(root, '../frontend/js/parent-dashboard.js'), 'utf8');
 const financeUi = fs.readFileSync(path.resolve(root, '../frontend/js/finance-fees.js'), 'utf8');
+const adminDash = fs.readFileSync(path.resolve(root, '../frontend/js/admin-dashboard.js'), 'utf8');
 const frontendIndex = fs.readFileSync(path.resolve(root, '../frontend/index.html'), 'utf8');
 const serviceWorker = fs.readFileSync(path.resolve(root, '../frontend/service-worker.js'), 'utf8');
 
@@ -108,7 +111,38 @@ test('v2033 saves provider credentials before live tests and invalidates the v20
   assert.match(financeUi, /financeV31TestConnection[\s\S]*await saveProviderAgentDraft\(provider\)/);
   assert.match(financeUi, /financeV31SetupProviderNotifications[\s\S]*await saveProviderAgentDraft\(provider\)/);
   assert.match(financeUi, /financeV31TestStk[\s\S]*await saveProviderAgentDraft\(provider\)/);
-  assert.match(frontendIndex, /2033-production-payment-lock/);
+  assert.match(frontendIndex, /2038-functional-flow-integrity-lock/);
   assert.doesNotMatch(frontendIndex, /2032-single-active-provider-parent-payment-lock/);
-  assert.match(serviceWorker, /shule-ai-2033-production-payment-lock/);
+  assert.match(serviceWorker, /shule-ai-2038-functional-flow-integrity-lock/);
+});
+
+test('parent school-fee UI and API keep online prompts separate from manual references', () => {
+  assert.match(parentDash, /const payableFees = fees\.filter\(f => feeBalance\(f\) > 0\)/);
+  assert.match(parentDash, /This child has no unpaid invoice/);
+  assert.doesNotMatch(parentDash, /if \(!rows\.some\(row => row\.method === 'manual'\)\)/);
+  assert.doesNotMatch(parentDash, /manualPaybill \|\| parentPaymentMethods\?\.paybill \|\| '123456'/);
+  assert.match(parentDash, /\^\[A-Z0-9\]\[A-Z0-9\._\/-\]\{4,99\}\$/);
+  assert.match(service, /Manual reference submission is disabled\. Use the school active online payment method\./);
+  assert.match(service, /requires a payment reference, not an STK\/online payment request/);
+  assert.match(service, /paymentInstructions:/);
+});
+
+test('subscription payments use role-safe endpoints and automatic platform-provider resolution', () => {
+  assert.match(parentDash, /api\.payments\.parentSubscriptionSTK\(/);
+  assert.doesNotMatch(parentDash, /initiateChildPlatformSubscriptionPayment[\s\S]{0,500}api\.payments\.initiate\(/);
+  assert.match(adminDash, /api\.payments\.schoolSubscriptionSTK\(/);
+  assert.doesNotMatch(adminDash, /submitSchoolSubscriptionSTK[\s\S]{0,900}api\.payments\.initiate\(/);
+  assert.match(routes, /\/platform\/method[\s\S]*authorize\('parent', 'admin', 'super_admin'\)/);
+  assert.match(service, /legacyMpesaConfigured/);
+  assert.match(service, /resolvedSchoolCode = student\.schoolCode \|\| student\.User\?\.schoolCode/);
+  assert.match(service, /if \(provider === 'manual'\) return \['manual'\]/);
+  assert.match(service, /selectedMethod = normalizePaymentMethod\(method\) \|\| providerDefaultMethods\(active\)\[0\]/);
+  assert.doesNotMatch(financeUi, /data-provider-method="manual" checked/);
+  assert.doesNotMatch(financeUi, /\|\| '123456'/);
+  assert.doesNotMatch(fs.readFileSync(path.resolve(root, '../frontend/js/superadmin-dashboard.js'), 'utf8'), /data-platform-provider-method="manual" checked/);
+  assert.match(service, /cleanPlanAmount = cleanAmount\(subscriptionController\.planAmount\(plan, billingCycle\)\)/);
+  assert.match(service, /Subscription price changed/);
+  assert.match(financeLedger, /if \(schoolCode\) userWhere\.schoolCode = schoolCode/);
+  assert.match(financeLedger, /schoolCode = student\.schoolCode \|\| student\.User\?\.schoolCode/);
+  assert.match(paymentController, /status: \{ \[Op\.in\]: \['pending', 'pending_verification'\] \}/);
 });

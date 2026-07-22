@@ -10,6 +10,14 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true, // null for group messages
       references: { model: 'Users', key: 'id' }
     },
+    schoolCode: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    conversationId: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
     content: {
       type: DataTypes.TEXT,
       allowNull: false
@@ -29,7 +37,16 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: {}
     }
   }, {
-    timestamps: true
+    timestamps: true,
+    hooks: {
+      beforeValidate(message) {
+        const metadata = message.metadata || {};
+        if (!message.schoolCode && metadata.schoolCode) message.schoolCode = String(metadata.schoolCode);
+        if (!message.conversationId && (metadata.conversationKey || metadata.conversationId)) {
+          message.conversationId = String(metadata.conversationKey || metadata.conversationId);
+        }
+      }
+    }
   });
 
   return Message;

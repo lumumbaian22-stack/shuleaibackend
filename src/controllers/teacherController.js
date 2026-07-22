@@ -573,7 +573,7 @@ exports.deleteMessage = async (req, res) => {
     const { messageId } = req.params;
     const { deleteFor } = req.body;
 
-    const message = await Message.findByPk(messageId);
+    const message = await Message.findOne({ where: { id: messageId, schoolCode: req.user.schoolCode } });
 
     if (!message) {
       return res.status(404).json({ success: false, message: 'Message not found' });

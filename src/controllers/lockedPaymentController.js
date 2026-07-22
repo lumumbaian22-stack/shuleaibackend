@@ -178,3 +178,21 @@ exports.getParentPaymentMethods = async (req, res) => {
     res.json({ success: true, data });
   } catch (error) { res.status(400).json({ success: false, message: error.message }); }
 };
+
+exports.getPlatformPublicMethod = async (req, res) => {
+  try {
+    const settings = await engine.getSettings({ scope: 'platform' });
+    const publicMethods = settings.publicMethods || [];
+    const method = (publicMethods.length ? publicMethods : (settings.methods || []))[0] || null;
+    const providerStatus = settings.activeProvider ? (settings.providers?.[settings.activeProvider] || {}) : {};
+    res.json({ success: true, data: {
+      active: !!settings.activeProvider && !!method,
+      ready: providerStatus.ready === true,
+      method: method?.method || null,
+      prompt: method?.prompt || null,
+      label: method?.label || null,
+      status: settings.activeProvider ? (providerStatus.readiness || 'configured') : 'not_configured',
+      message: providerStatus.statusMessage || null
+    }});
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+};

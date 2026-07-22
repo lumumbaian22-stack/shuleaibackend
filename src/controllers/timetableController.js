@@ -800,7 +800,7 @@ exports.getForStudentMe = async (req, res) => { try {
 exports.getForParentChild = async (req, res) => { try {
   const parent = await Parent.findOne({ where: { userId: req.user.id } }); if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
   const student = await Student.unscoped().findOne({ where: { id: req.params.studentId }, include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'] }] });
-  if (!student || String(student.User?.schoolCode || '') !== String(req.user.schoolCode || '')) return res.status(404).json({ success: false, message: 'Student not found in this school' });
+  if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
   if (parent.hasStudent) { const ok = await parent.hasStudent(student); if (!ok) return res.status(403).json({ success: false, message: 'Child not linked to this parent' }); }
   const schoolId = student.User?.schoolCode || req.user.schoolCode;
   const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] } }); const cls = await schoolLinkageService.resolveStudentClass(student, schoolId) || resolveClassForStudent(student, classes);
