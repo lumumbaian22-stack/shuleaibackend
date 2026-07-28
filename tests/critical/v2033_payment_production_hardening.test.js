@@ -111,9 +111,9 @@ test('v2033 saves provider credentials before live tests and invalidates the v20
   assert.match(financeUi, /financeV31TestConnection[\s\S]*await saveProviderAgentDraft\(provider\)/);
   assert.match(financeUi, /financeV31SetupProviderNotifications[\s\S]*await saveProviderAgentDraft\(provider\)/);
   assert.match(financeUi, /financeV31TestStk[\s\S]*await saveProviderAgentDraft\(provider\)/);
-  assert.match(frontendIndex, /2040-consolidated-schema-reconciler-lock/);
+  assert.match(frontendIndex, /2043-full-system-completion-lock/);
   assert.doesNotMatch(frontendIndex, /2032-single-active-provider-parent-payment-lock/);
-  assert.match(serviceWorker, /shule-ai-2040-consolidated-schema-reconciler-lock/);
+  assert.match(serviceWorker, /shule-ai-2043-full-system-completion-lock/);
 });
 
 test('parent school-fee UI and API keep online prompts separate from manual references', () => {

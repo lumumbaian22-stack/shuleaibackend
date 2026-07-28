@@ -203,7 +203,7 @@ function healthPayload(req, extra = {}) {
   return {
     success: true,
     version: require('../package.json').version,
-    build: 'v2040-consolidated-schema-reconciler-lock',
+    build: 'v2043-full-system-completion-lock',
     instanceId: req.app.locals.shuleAiInstanceId || loadBalancingConfig.instanceId,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
@@ -235,7 +235,7 @@ app.get(['/health/ready', '/api/health/ready'], async (req, res) => {
   }
 });
 
-app.get('/api/health/detailed', async (req, res) => {
+app.get('/api/health/detailed', protect, (req, res, next) => authorize('super_admin')(req, res, next), async (req, res) => {
   const started = Date.now();
   const checks = { database: { ok: false }, daraja: { ok: false }, aiTutor: { ok: false }, storage: { ok: false } };
   try {
@@ -371,7 +371,7 @@ async function ensureCriticalDashboardColumns(req, res, next) {
 
 app.use('/api', ensureCriticalDashboardColumns);
 
-app.post('/api/system/repair-schema', (req, res, next) => {
+app.post('/api/system/repair-schema', protect, (req, res, next) => authorize('super_admin')(req, res, next), (req, res, next) => {
   if (process.env.ALLOW_RUNTIME_SCHEMA_REPAIR !== 'true') return res.status(403).json({ success:false, message:'Runtime schema repair is disabled. Run migrations instead.' });
   return ensureCriticalDashboardColumns(req, res, next);
 }, (req, res) => {
@@ -420,8 +420,6 @@ app.use('/api/learnfeed', learnFeedRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/finance-system', financialSystemRoutes);
-// National rollout completion routes fill missing school-operations APIs and disable old live-money endpoints.
-app.use('/api', nationalRolloutRoutes);
 app.use('/api/owner', ownerHardeningRoutes);
 app.use('/api/fee-structures', feeStructureRoutes);
 app.use('/api/fees/structures', feeStructureRoutes);
@@ -433,6 +431,11 @@ app.use('/api/lifecycle/birthdays', birthdayRoutes);
 app.use('/api/lifecycle', studentLifecycleRoutes);
 app.use('/api/analytics/advanced', advancedAnalyticsRoutes);
 app.use('/api/monitoring', monitoringRoutes);
+
+// Broad compatibility routes must be last. Mounting this authenticated router
+// before specific /api routes intercepts public monitoring and can shadow newer
+// fee, realtime, attendance and lifecycle endpoints.
+app.use('/api', nationalRolloutRoutes);
 
 // ============ 404 HANDLER ============
 app.use((req, res) => {

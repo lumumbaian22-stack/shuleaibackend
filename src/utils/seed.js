@@ -3,6 +3,12 @@ const bcrypt = require('bcryptjs');
 
 async function seed() {
   try {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Destructive development seed is disabled in production.');
+    }
+    if (process.env.ALLOW_DESTRUCTIVE_SEED !== 'true') {
+      throw new Error('Set ALLOW_DESTRUCTIVE_SEED=true only for a disposable development database.');
+    }
     await sequelize.sync({ force: true });
     console.log('Database synced');
 

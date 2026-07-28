@@ -1,6 +1,6 @@
 # V2031 Payment Callback/IPN/STK Setup Final Lock
 
-Build: `2040-consolidated-schema-reconciler-lock`
+Build: `2042-database-truth-roster-integrity-lock`
 
 This integration fixes payment setup URLs and parent STK behavior without changing payment finalization security.
 

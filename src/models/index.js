@@ -91,6 +91,8 @@ const LearnFeedComment = require('./LearnFeedComment')(sequelize, DataTypes);
 const LearnFeedLiveRoom = require('./LearnFeedLiveRoom')(sequelize, DataTypes);
 const LearnFeedMessage = require('./LearnFeedMessage')(sequelize, DataTypes);
 const LearnFeedSubscriptionPayment = require('./LearnFeedSubscriptionPayment')(sequelize, DataTypes);
+const BackgroundJob = require('./BackgroundJob')(sequelize, DataTypes);
+const LearnFeedWalletTransaction = require('./LearnFeedWalletTransaction')(sequelize, DataTypes);
 
 // LearnFeed public app associations
 LearnFeedUser.hasMany(LearnFeedVideo, { foreignKey: 'creatorId', as: 'videos' });
@@ -113,6 +115,11 @@ LearnFeedUser.hasMany(LearnFeedMessage, { foreignKey: 'fromUserId', as: 'sentLea
 LearnFeedUser.hasMany(LearnFeedMessage, { foreignKey: 'toUserId', as: 'receivedLearnFeedMessages' });
 LearnFeedUser.hasMany(LearnFeedSubscriptionPayment, { foreignKey: 'userId', as: 'learnFeedSubscriptionPayments' });
 LearnFeedSubscriptionPayment.belongsTo(LearnFeedUser, { foreignKey: 'userId' });
+User.hasMany(BackgroundJob, { foreignKey: 'createdBy', as: 'backgroundJobs' });
+BackgroundJob.belongsTo(User, { foreignKey: 'createdBy', as: 'Creator' });
+LearnFeedUser.hasMany(LearnFeedWalletTransaction, { foreignKey: 'userId', as: 'walletTransactions' });
+LearnFeedWalletTransaction.belongsTo(LearnFeedUser, { foreignKey: 'userId', as: 'WalletUser' });
+LearnFeedWalletTransaction.belongsTo(LearnFeedUser, { foreignKey: 'counterpartyUserId', as: 'Counterparty' });
 
 // Add to associations: School.hasMany(SchoolCalendar)
 
@@ -548,7 +555,7 @@ function installTenantHooks(models) {
     });
   });
 }
-installTenantHooks({ User, UserRoleAssignment, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ClassTransferRequest, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, SchoolNameRequest, Class, Settings, Task, HomeTask, HomeTaskAssignment, Subscription, SubscriptionPayment, SchoolPaymentSetting, PaymentEvent, AuditLog, MediaAsset, FinanceExpense, FeeInvoice, FeeInvoiceItem, StudentFeeAccount, PaymentTransaction, PaymentReconciliation, ProviderCredentialsAudit, PaymentRefund, PlatformSubscription, Department, ChatGroup, ChatMessage, ClassroomThread, AchievementEvent, ReportSnapshot, TutorSession, TutorMessage, TutorProgress, TutorUsage });
+installTenantHooks({ User, UserRoleAssignment, School, Student, Teacher, Parent, Admin, AcademicRecord, Attendance, AttendanceSession, AttendanceCorrection, ClassRelease, StudentEnrollment, PromotionBatch, PromotionDecision, ClassTransferRequest, ReportShare, BirthdayEvent, RealtimeEvent, Fee, FeeStructure, Payment, Message, Alert, ApprovalRequest, DutyRoster, UploadLog, SchoolNameRequest, Class, Settings, Task, HomeTask, HomeTaskAssignment, Subscription, SubscriptionPayment, SchoolPaymentSetting, PaymentEvent, AuditLog, MediaAsset, FinanceExpense, FeeInvoice, FeeInvoiceItem, StudentFeeAccount, PaymentTransaction, PaymentReconciliation, ProviderCredentialsAudit, PaymentRefund, PlatformSubscription, Department, ChatGroup, ChatMessage, ClassroomThread, AchievementEvent, ReportSnapshot, TutorSession, TutorMessage, TutorProgress, TutorUsage, BackgroundJob });
 
 module.exports = {
     sequelize,
@@ -640,5 +647,7 @@ module.exports = {
     LearnFeedLiveRoom,
     LearnFeedMessage,
     LearnFeedSubscriptionPayment,
+    BackgroundJob,
+    LearnFeedWalletTransaction,
     StudentParent
 };

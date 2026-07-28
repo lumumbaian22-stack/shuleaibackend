@@ -1,7 +1,7 @@
 const express = require('express');
 const { Op } = require('sequelize');
 const { protect, authorize } = require('../middleware/auth');
-const { User, Teacher, Student, Parent, Class, AcademicRecord, Attendance, School, Alert, Task, Payment } = require('../models');
+const { User, Teacher, Student, Parent, Class, AcademicRecord, Attendance, School, Alert, Task, Payment, SchoolNameRequest, ApprovalRequest, AuditLog } = require('../models');
 const paymentController = require('../controllers/paymentController');
 const schoolLinkageService = require('../services/schoolLinkageService');
 
@@ -15,18 +15,9 @@ async function assertSchoolUser(user, schoolCode){ return user && (!schoolCode |
 async function teacherById(id, schoolCode){ return Teacher.findByPk(id, { include:[{ model:User, attributes:['id','name','email','phone','schoolCode','isActive','role'] }] }).then(t => t && t.User?.schoolCode === schoolCode ? t : null); }
 async function studentById(id, schoolCode){ return Student.findByPk(id, { include:[{ model:User, attributes:['id','name','email','phone','schoolCode','isActive','role'] }] }).then(s => s && s.User?.schoolCode === schoolCode ? s : null); }
 
-// ============ REAL MONEY ROUTE COMPATIBILITY ============
-// These routes are compatibility aliases into the audited locked payment controller.
-// Real collection uses the active provider selected for the correct scope; disabled providers
-// cannot initiate or finalize payments through these aliases.
-router.post('/payments/parent/fee/stk', authorize('parent'), paymentController.parentFeeSTK);
-router.post('/payments/parent/subscription/stk', authorize('parent'), paymentController.parentSubscriptionSTK);
-router.post('/payments/admin/name-change/stk', authorize('admin'), paymentController.adminNameChangePaymentSTK);
-router.post('/payments/platform/stk', paymentController.genericPlatformSTK);
-router.post('/parent/pay', authorize('parent'), paymentController.parentFeeSTK);
-router.post('/parent/upgrade-plan', authorize('parent'), paymentController.parentSubscriptionSTK);
-router.post('/subscription/upgrade', authorize('parent'), paymentController.parentSubscriptionSTK);
-router.post('/subscription/initiate-payment', authorize('parent'), paymentController.parentSubscriptionSTK);
+// Canonical payment, parent, and subscription routes are mounted before this
+// compatibility router. Do not redeclare them here: duplicate signatures become
+// unreachable and make route behavior depend on mount order.
 
 // ============ ADMIN COMPLETION ROUTES ============
 router.post('/admin/teachers/:teacherId/activate', authorize('admin','super_admin'), async (req,res)=>{ try{ const t=await teacherById(req.params.teacherId, req.user.schoolCode); if(!t) return fail(res,404,'Teacher not found'); await t.User.update({ isActive:true }); await t.update({ approvalStatus:'approved', approvedBy:req.user.id, approvedAt:new Date() }); return ok(res,t,'Teacher activated successfully'); }catch(e){ return fail(res,500,e.message); } });
@@ -34,7 +25,6 @@ router.post('/admin/teachers/:teacherId/reactivate', authorize('admin','super_ad
 router.post('/admin/teachers/:teacherId/deactivate', authorize('admin','super_admin'), async (req,res)=>{ try{ const t=await teacherById(req.params.teacherId, req.user.schoolCode); if(!t) return fail(res,404,'Teacher not found'); await t.User.update({ isActive:false }); await t.update({ approvalStatus:'suspended', duties:{ ...(t.duties||{}), lastDeactivationReason:req.body?.reason||'Deactivated by admin', deactivatedAt:new Date() } }); return ok(res,t,'Teacher deactivated successfully'); }catch(e){ return fail(res,500,e.message); } });
 router.post('/admin/teachers/:teacherId/suspend', authorize('admin','super_admin'), async (req,res)=>{ try{ const t=await teacherById(req.params.teacherId, req.user.schoolCode); if(!t) return fail(res,404,'Teacher not found'); await t.User.update({ isActive:false }); await t.update({ approvalStatus:'suspended', duties:{ ...(t.duties||{}), suspensionReason:req.body?.reason||'Suspended by admin', suspendedAt:new Date() } }); return ok(res,t,'Teacher suspended successfully'); }catch(e){ return fail(res,500,e.message); } });
 
-router.get('/admin/classes/:classId/students', authorize('admin','super_admin'), async (req,res)=>{ try{ const cls=await Class.findOne({ where:{ id:req.params.classId, schoolCode:req.user.schoolCode } }); if(!cls) return fail(res,404,'Class not found'); const students=await schoolLinkageService.resolveClassStudents([cls], req.user.schoolCode, { userAttributes:['id','name','email','phone','schoolCode','profileImage','profilePicture'] }); return ok(res,students,'Class students loaded'); }catch(e){ return fail(res,500,e.message); } });
 router.post('/admin/students/:studentId/expel', authorize('admin','super_admin'), async (req,res)=>{ try{ const s=await studentById(req.params.studentId, req.user.schoolCode); if(!s) return fail(res,404,'Student not found'); await s.update({ status:'transferred', academicStatus:'critical', preferences:{ ...(s.preferences||{}), exitType:'expelled', exitReason:req.body?.reason||'Expelled by admin', exitedAt:new Date() } }); await s.User.update({ isActive:false }); return ok(res,s,'Student removed from active roll'); }catch(e){ return fail(res,500,e.message); } });
 
 // ============ PARENT/STUDENT ACADEMIC COMPLETION ROUTES ============
@@ -54,7 +44,20 @@ router.get('/super-admin/users', authorize('super_admin'), async (req,res)=>{ tr
 router.get('/super-admin/metrics', authorize('super_admin'), async (req,res)=>{ try{ const [schools,users,teachers,students,parents]=await Promise.all([School.count(),User.count(),Teacher.count(),Student.count(),Parent.count()]); return ok(res,{ schools, users, teachers, students, parents, uptime:process.uptime(), node:process.version, timestamp:new Date().toISOString() }); }catch(e){ return fail(res,500,e.message); } });
 router.get('/super-admin/logs', authorize('super_admin'), async (req,res)=>{ try{ const alerts=await Alert.findAll({ order:[['createdAt','DESC']], limit:100 }); return ok(res, alerts.map(a=>({ id:a.id, type:a.type, title:a.title, role:a.role, createdAt:a.createdAt }))); }catch(e){ return fail(res,500,e.message); } });
 router.get('/super-admin/schools/:schoolId/stats', authorize('super_admin'), async (req,res)=>{ try{ const schoolCode=req.params.schoolId; const [teachers,students,parents,classes,alerts]=await Promise.all([User.count({where:{schoolCode,role:'teacher'}}),User.count({where:{schoolCode,role:'student'}}),User.count({where:{schoolCode,role:'parent'}}),Class.count({where:{schoolCode}}),Alert.count({where:{schoolCode}}).catch(()=>0)]); return ok(res,{ schoolCode, teachers, students, parents, classes, alerts }); }catch(e){ return fail(res,500,e.message); } });
-router.get('/super-admin/requests/history', authorize('super_admin'), async (req,res)=>{ try{ return ok(res, []); }catch(e){ return fail(res,500,e.message); } });
+router.get('/super-admin/requests/history', authorize('super_admin'), async (req,res)=>{ try{
+  const limit=Math.min(Math.max(Number(req.query.limit)||100,1),500);
+  const [nameRequests,approvals,auditEvents]=await Promise.all([
+    SchoolNameRequest.findAll({order:[['createdAt','DESC']],limit}),
+    ApprovalRequest.findAll({order:[['createdAt','DESC']],limit}),
+    AuditLog.findAll({where:{action:{[Op.in]:['school_approved','school_rejected','school_suspended','school_reactivated','name_change_approved','name_change_rejected']}},order:[['createdAt','DESC']],limit}).catch(()=>[])
+  ]);
+  const rows=[
+    ...nameRequests.map(row=>({id:`name-${row.id}`,requestType:'school_name_change',status:row.status||'pending',schoolCode:row.schoolCode||null,requestedBy:row.requestedBy||null,reason:row.reason||null,data:row.toJSON(),createdAt:row.createdAt,updatedAt:row.updatedAt})),
+    ...approvals.map(row=>({id:`approval-${row.id}`,requestType:row.role?`${row.role}_approval`:'approval',status:row.status||'pending',schoolCode:row.schoolId||null,requestedBy:row.userId||null,reason:row.rejectionReason||row.notes||null,data:row.toJSON(),createdAt:row.createdAt,updatedAt:row.updatedAt})),
+    ...auditEvents.map(row=>({id:`audit-${row.id}`,requestType:row.action||'audit',status:row.metadata?.status||'completed',schoolCode:row.schoolCode||null,requestedBy:row.actorUserId||null,reason:row.metadata?.reason||null,data:row.toJSON(),createdAt:row.createdAt,updatedAt:row.updatedAt}))
+  ].sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,limit);
+  return ok(res,rows,'Request history loaded');
+}catch(e){ return fail(res,500,e.message); } });
 
 
 // ============ V17 CURRICULUM + SCHOOL META ============

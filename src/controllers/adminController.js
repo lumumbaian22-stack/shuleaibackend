@@ -5,6 +5,7 @@ const { createAlert } = require('../services/notificationService');
 const { getPagination, buildPaginatedResponse } = require('../utils/pagination');
 const cache = require('../services/cacheService');
 const { findStudentInSchool } = require('../services/studentScopeService');
+const studentProfileIntegrity = require('../services/studentProfileIntegrityService');
 
 
 // Helper for curriculum names
@@ -17,16 +18,20 @@ const getCurriculumName = (curriculum) => {
 exports.getDashboardStats = async (req, res) => {
   try {
     const schoolCode = req.user.schoolCode;
+    const integrity = await studentProfileIntegrity.reconcileSchool(schoolCode, req.user.id);
+    if (integrity.created || integrity.reactivatedClasses) cache.flushSchoolCache(schoolCode);
     const cacheKey = cache.getCacheKey(['school', schoolCode, 'admin-dashboard-stats']);
     const cached = cache.get(cacheKey);
     if (cached) return res.json({ success: true, cached: true, data: cached });
 
     const sevenDaysAgo = new Date(Date.now() - 7*24*60*60*1000);
-    const [teachers, students, parents, classes, pendingApprovals, recentAlerts] = await Promise.all([
+    const [teachers, students, parents, classes, activeClasses, inactiveClasses, pendingApprovals, recentAlerts] = await Promise.all([
       Teacher.count({ include: [{ model: User, where: { schoolCode, role: 'teacher' }, attributes: [] }] }),
       Student.count({ include: [{ model: User, where: { schoolCode, role: 'student' }, attributes: [] }] }),
       Parent.count({ include: [{ model: User, where: { schoolCode, role: 'parent' }, attributes: [] }] }),
+      Class.count({ where: { schoolCode } }),
       Class.count({ where: { schoolCode, isActive: true } }),
+      Class.count({ where: { schoolCode, isActive: false } }),
       Teacher.count({
         include: [{ model: User, where: { schoolCode, role: 'teacher' }, attributes: [] }],
         where: { approvalStatus: 'pending' }
@@ -34,7 +39,7 @@ exports.getDashboardStats = async (req, res) => {
       Alert.count({ where: { role: 'admin', createdAt: { [Op.gte]: sevenDaysAgo } } })
     ]);
 
-    const stats = { teachers, students, parents, classes, pendingApprovals, recentAlerts };
+    const stats = { teachers, students, parents, classes, activeClasses, inactiveClasses, repairedStudentProfiles: integrity.created, pendingApprovals, recentAlerts };
     cache.set(cacheKey, stats, 45);
     res.json({ success: true, cached: false, data: stats });
   } catch (error) {
@@ -133,6 +138,8 @@ exports.deleteTeacher = async (req, res) => {
 // ============ STUDENT MANAGEMENT ============
 exports.getAllStudents = async (req, res) => {
   try {
+    const integrity = await studentProfileIntegrity.reconcileSchool(req.user.schoolCode, req.user.id);
+    if (integrity.created || integrity.reactivatedClasses) cache.flushSchoolCache(req.user.schoolCode);
     const { page, limit, offset } = getPagination(req.query, { defaultLimit: 50, maxLimit: 200 });
     const result = await Student.findAndCountAll({
       include: [{
@@ -145,7 +152,7 @@ exports.getAllStudents = async (req, res) => {
       offset,
       order: [['createdAt', 'DESC']]
     });
-    res.json({ success: true, ...buildPaginatedResponse({ rows: result.rows, count: result.count, page, limit }) });
+    res.json({ success: true, integrity, ...buildPaginatedResponse({ rows: result.rows, count: result.count, page, limit }) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -265,12 +272,16 @@ exports.getAllParents = async (req, res) => {
 // ============ CLASS MANAGEMENT ============
 exports.getClasses = async (req, res) => {
   try {
+    const status = String(req.query.status || 'all').toLowerCase();
+    const where = { schoolCode: req.user.schoolCode };
+    if (status === 'active') where.isActive = true;
+    if (status === 'inactive') where.isActive = false;
     const classes = await Class.findAll({
-      where: { schoolCode: req.user.schoolCode, isActive: true },
+      where,
       include: [{ model: Teacher, include: [{ model: User, attributes: ['id', 'name', 'email'] }] }],
       order: [['grade', 'ASC'], ['name', 'ASC']]
     });
-    res.json({ success: true, data: classes });
+    res.json({ success: true, data: classes, meta: { status, total: classes.length, active: classes.filter(item => item.isActive === true).length, inactive: classes.filter(item => item.isActive === false).length } });
   } catch (error) {
     console.error('Get classes error:', error);
     res.status(500).json({ success: false, message: error.message });

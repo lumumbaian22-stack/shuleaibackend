@@ -210,3 +210,8 @@ exports.getReport = async (req,res) => {
   try { const row=await ReportSnapshot.findOne({where:{id:Number(req.params.id),schoolCode:schoolCode(req)}});if(!(await canRead(req,row)))return res.status(403).json({success:false,message:'You are not allowed to view this report card'});res.json({success:true,data:row}); }
   catch(error){res.status(500).json({success:false,message:error.message});}
 };
+
+// Worker-only exports keep the same canonical report calculation used by the API.
+// They are not HTTP routes and do not bypass role/tenant checks in the worker.
+exports.buildSnapshotForWorker = buildSnapshot;
+exports.teacherOwnsClassForWorker = teacherOwnsClass;
