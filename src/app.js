@@ -203,7 +203,7 @@ function healthPayload(req, extra = {}) {
   return {
     success: true,
     version: require('../package.json').version,
-    build: 'v2044-canonical-identity-roster-lock',
+    build: 'v2045-live-regression-integrity-lock',
     instanceId: req.app.locals.shuleAiInstanceId || loadBalancingConfig.instanceId,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),

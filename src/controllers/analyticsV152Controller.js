@@ -146,7 +146,19 @@ async function resolveSchoolScope(req, options, filters) {
     studentIds = assignedStudents.map(s => Number(s.id));
     const teacherProfile = await Teacher.findOne({ where: { userId: req.user.id } }).catch(() => null);
     teacherId = teacherProfile?.id || null;
-    if (!scopeId && assignedIds.length) scopeId = String(assignedIds[0]);
+    if (!scopeId && assignedIds.length) {
+      // Default to the teacher's populated teaching/class-teacher scope instead
+      // of an arbitrary empty assignment returned first by the database.
+      const studentCounts = new Map();
+      for (const student of options.students) {
+        const id = Number(student.classId);
+        if (assignedIds.includes(id)) studentCounts.set(id, (studentCounts.get(id) || 0) + 1);
+      }
+      const preferredId = [...assignedIds].sort((a, b) =>
+        (studentCounts.get(b) || 0) - (studentCounts.get(a) || 0)
+      )[0];
+      scopeId = String(preferredId);
+    }
   } else {
     scopeType = 'school';
   }

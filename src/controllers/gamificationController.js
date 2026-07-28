@@ -198,17 +198,22 @@ exports.getClassLeaderboard = async (req, res) => {
 
     const students = await Student.findAll({
       where: { classId: classItem.id },
-      include: [{ model: User, required: true, where: { schoolCode: req.user.schoolCode }, attributes: ['name'] }],
+      include: [{ model: User, required: true, where: { schoolCode: req.user.schoolCode }, attributes: ['id', 'name'] }],
       order: [['points', 'DESC']],
       limit: 20
     });
 
-    const leaderboard = students.map((s, index) => ({
-      rank: index + 1,
-      studentId: s.id,
-      name: s.User.name,
-      points: s.points
-    }));
+    const uniqueStudents = [...new Map(students.map(s => [
+      Number(s.userId || s.User?.id || s.id),
+      s
+    ])).values()];
+    const leaderboard = uniqueStudents.map((s, index) => ({
+        rank: index + 1,
+        studentId: s.id,
+        userId: s.userId || s.User?.id,
+        name: s.User.name,
+        points: Number(s.points) || 0
+      }));
 
     res.json({ success: true, data: leaderboard });
   } catch (error) {

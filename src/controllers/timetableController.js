@@ -307,7 +307,10 @@ function resolveClassForStudent(student, classes) {
 function findClassBlock(tt, cls) {
   if (!tt || !cls) return null;
   const blocks = Array.isArray(tt.classes) ? tt.classes : [];
-  return blocks.find(c => String(c.classId ?? c.id ?? '') === String(cls.id)) || blocks.find(c => sameText(c.className || c.name, cls.name)) || blocks.find(c => sameText(c.grade, cls.grade));
+  // Grade-only matching is unsafe when a grade has multiple streams. A learner
+  // must receive the block for their exact class id/name, never a sibling stream.
+  return blocks.find(c => String(c.classId ?? c.id ?? '') === String(cls.id)) ||
+    blocks.find(c => sameText(c.className || c.name, cls.name));
 }
 
 function findUsableClassBlock(tt, cls) {

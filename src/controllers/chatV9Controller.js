@@ -40,7 +40,7 @@ async function getClassStudyParticipants({ schoolCode, classId }) {
     order: [[User, 'name', 'ASC']],
     limit: 120
   });
-  return students.map(s => ({
+  const participants = students.map(s => ({
     id: s.User?.id,
     studentId: s.id,
     name: s.User?.name || s.name || 'Student',
@@ -48,6 +48,7 @@ async function getClassStudyParticipants({ schoolCode, classId }) {
     profileImage: s.User?.profileImage || null,
     admissionNumber: s.admissionNumber || null
   })).filter(x => x.id);
+  return [...new Map(participants.map(item => [Number(item.id), item])).values()];
 }
 
 
@@ -463,7 +464,11 @@ exports.listTeacherDirectory = async (req, res) => {
         }
       }
 
-      classmates = classmates.filter(p => Number(p.id) !== Number(req.user.id));
+      classmates = [...new Map(
+        classmates
+          .filter(p => Number(p.id) !== Number(req.user.id))
+          .map(p => [Number(p.id), p])
+      ).values()];
       return res.json({ success: true, data: classmates });
     }
 

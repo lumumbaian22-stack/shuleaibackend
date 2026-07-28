@@ -180,6 +180,10 @@ async function recordTransaction({ user, schoolCode, studentId, feeId, amount, m
   const normMethod = normalizeMethod(method);
   const normType = normalizeTransactionType(transactionType, normMethod);
   const normStatus = normalizeStatus(status);
+  const remainingBalance = feeBalance(fee);
+  if (isApproved(normStatus) && payAmount > remainingBalance) {
+    throw new Error(`Amount exceeds this student's remaining fee balance of KES ${remainingBalance.toLocaleString()}`);
+  }
   const ref = String(reference || `${normMethod.toUpperCase()}-${Date.now()}-${studentId}`).trim().toUpperCase();
   const duplicate = await Payment.findOne({ where: { schoolCode, reference: ref }, transaction });
   if (duplicate) throw new Error('This payment/reference already exists. Use a unique reference number.');
@@ -226,6 +230,14 @@ async function updateTransactionStatus({ user, schoolCode, paymentId, status, no
     if (!payment) throw new Error('Payment not found');
     const before = payment.toJSON();
     const normStatus = normalizeStatus(status);
+    if (isApproved(normStatus) && !isApproved(payment.status)) {
+      const fee = await Fee.findOne({ where: { id: payment.feeId, studentId: payment.studentId, schoolCode }, transaction });
+      if (!fee) throw new Error('The linked student fee account no longer exists');
+      const remainingBalance = feeBalance(fee);
+      if (asInt(payment.amount) > remainingBalance) {
+        throw new Error(`Amount exceeds this student's remaining fee balance of KES ${remainingBalance.toLocaleString()}`);
+      }
+    }
     const trail = Array.isArray(payment.auditTrail) ? payment.auditTrail : [];
     trail.push({ action: `finance_transaction_${normStatus}`, actorUserId: user?.id || null, actorRole: user?.role || null, at: new Date().toISOString(), notes });
     await payment.update({
@@ -319,7 +331,9 @@ async function getStudentHistory({ schoolCode, studentId, parentUserId = null, s
     include: [
       { model: Student, include: [{ model: User, attributes: ['id', 'name', 'schoolCode'] }, { model: Class, required: false }] },
       { model: Parent, include: [{ model: User, attributes: ['id', 'name', 'email', 'phone'] }], required: false },
-      { model: Fee, required: false }
+      // Orphaned legacy/test transactions must not appear as current school-fee
+      // history. Only payments linked to this exact student's fee account count.
+      { model: Fee, required: true, where: { studentId, schoolCode } }
     ],
     order: [['createdAt', 'DESC']],
     limit: 500

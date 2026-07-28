@@ -167,7 +167,8 @@ exports.getDashboard = async (req, res) => {
           curriculum: student.curriculum || curriculum,
           academicStatus: student.academicStatus,
           admissionNumber: student.admissionNumber,
-          assessmentNumber: student.assessmentNumber
+          assessmentNumber: student.assessmentNumber,
+          points: Number(student.points) || 0
         },
         averageScore: parseFloat(avg),
         stats: {
@@ -179,6 +180,8 @@ exports.getDashboard = async (req, res) => {
             grade: getGradeFromScore(r.score, curriculum, schoolLevel)
         })),
         recentAttendance: attendance,
+        attendanceRate: attendance.length ? Math.round((attendance.filter(a => a.status === 'present').length / attendance.length) * 100) : 0,
+        points: Number(student.points) || 0,
         paymentStatus: student.paymentStatus,
         classId: student.classId || classItem?.id || null,
         school: {
