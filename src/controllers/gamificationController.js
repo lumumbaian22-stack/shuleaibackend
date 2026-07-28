@@ -1,5 +1,7 @@
 const { sequelize, Badge, StudentBadge, Reward, StudentReward, Student, Parent, User, AcademicRecord, Attendance, Class, HomeTaskAssignment, HomeTask, AchievementEvent } = require('../models');
 const { Op } = require('sequelize');
+const linkage = require('../services/schoolLinkageService');
+const { getStudentGamificationSummary } = require('../services/studentGamificationService');
 
 
 function normalizeScore(value) {
@@ -32,6 +34,29 @@ async function canViewStudent(req, student) {
   return false;
 }
 
+async function canViewClassLeaderboard(req, classId) {
+  const role = String(req.user.role || '').toLowerCase();
+  if (['admin', 'super_admin', 'finance_officer'].includes(role)) return true;
+  if (role === 'student') {
+    const student = await getCurrentStudent(req);
+    const cls = student ? await linkage.resolveStudentClass(student, req.user.schoolCode).catch(() => null) : null;
+    return Number(cls?.id) === Number(classId);
+  }
+  if (role === 'parent') {
+    const children = await linkage.resolveParentLinkedStudents(req.user.id, req.user.schoolCode).catch(() => []);
+    for (const child of children) {
+      const cls = await linkage.resolveStudentClass(child, req.user.schoolCode).catch(() => null);
+      if (Number(cls?.id) === Number(classId)) return true;
+    }
+    return false;
+  }
+  if (role === 'teacher') {
+    const classes = await linkage.resolveTeacherAssignedClasses(req.user.id, req.user.schoolCode).catch(() => []);
+    return classes.some(cls => Number(cls.id) === Number(classId));
+  }
+  return false;
+}
+
 function badgeStatus(earned, labelWhenEarned, labelWhenLocked) {
   return earned ? { earned: true, label: labelWhenEarned } : { earned: false, label: labelWhenLocked };
 }
@@ -44,143 +69,12 @@ exports.getMyRewardsSummary = async (req, res) => {
 
     const student = await getCurrentStudent(req);
     if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
-
-    const since30 = new Date();
-    since30.setDate(since30.getDate() - 30);
-
-    const [attendanceRows, homeworkRows, gradeRows, achievementRows] = await Promise.all([
-      Attendance.findAll({
-        where: { studentId: student.id, schoolCode: req.user.schoolCode, date: { [Op.gte]: since30 } },
-        order: [['date', 'DESC']],
-        limit: 60
-      }).catch(() => []),
-      HomeTaskAssignment.findAll({
-        where: { studentId: student.id },
-        include: [{ model: HomeTask, required: false }],
-        order: [['createdAt', 'DESC']],
-        limit: 80
-      }).catch(() => []),
-      AcademicRecord.findAll({
-        where: {
-          studentId: student.id,
-          schoolCode: req.user.schoolCode,
-          [Op.or]: [{ isPublished: true }, { status: 'published' }]
-        },
-        order: [['year', 'DESC'], ['createdAt', 'DESC']],
-        limit: 120
-      }).catch(() => []),
-      AchievementEvent.findAll({
-        where: { studentId: student.id },
-        order: [['createdAt', 'DESC']],
-        limit: 30
-      }).catch(() => [])
-    ]);
-
-    const attendanceMarked = attendanceRows.length;
-    const presentCount = attendanceRows.filter(a => ['present', 'late'].includes(String(a.status || '').toLowerCase())).length;
-    const attendanceRate = attendanceMarked ? Math.round((presentCount / attendanceMarked) * 100) : null;
-
-    const homeworkTotal = homeworkRows.length;
-    const homeworkDone = homeworkRows.filter(h => ['completed', 'submitted', 'graded'].includes(String(h.status || '').toLowerCase())).length;
-    const homeworkRate = homeworkTotal ? Math.round((homeworkDone / homeworkTotal) * 100) : null;
-
-    const scored = gradeRows.map(g => normalizeScore(g.score)).filter(v => v !== null);
-    const averageScore = scored.length ? Math.round(scored.reduce((a, b) => a + b, 0) / scored.length) : null;
-
-    const bySubject = new Map();
-    for (const row of gradeRows) {
-      const score = normalizeScore(row.score);
-      if (score === null) continue;
-      const subject = row.subject || 'General';
-      if (!bySubject.has(subject)) bySubject.set(subject, []);
-      bySubject.get(subject).push({ score, date: row.date || row.createdAt });
-    }
-    let improvedSubjects = 0;
-    for (const scores of bySubject.values()) {
-      if (scores.length >= 2 && scores[0].score > scores[scores.length - 1].score) improvedSubjects += 1;
-    }
-
-    const teacherPoints = achievementRows.reduce((sum, e) => sum + (Number(e.points) || 0), 0);
-    const storedPoints = Number(student.points) || 0;
-    const totalPoints = Math.max(storedPoints, teacherPoints);
-
-    const badges = [
-      {
-        key: 'attendance_star',
-        icon: '⭐',
-        title: 'Attendance Star',
-        description: attendanceRate === null ? 'Attendance badge appears after attendance is marked.' : `${attendanceRate}% attendance in the last 30 days.`,
-        category: 'Attendance',
-        points: attendanceRate !== null && attendanceRate >= 95 ? 25 : 0,
-        ...badgeStatus(attendanceRate !== null && attendanceRate >= 95, 'Earned', attendanceRate === null ? 'Waiting for records' : 'Reach 95%')
-      },
-      {
-        key: 'homework_hero',
-        icon: '📚',
-        title: 'Homework Hero',
-        description: homeworkRate === null ? 'Homework badge appears after assignments are issued.' : `${homeworkRate}% homework completion.`,
-        category: 'Homework',
-        points: homeworkRate !== null && homeworkRate >= 90 ? 25 : 0,
-        ...badgeStatus(homeworkRate !== null && homeworkRate >= 90, 'Earned', homeworkRate === null ? 'Waiting for assignments' : 'Reach 90%')
-      },
-      {
-        key: 'performance_badge',
-        icon: '🏆',
-        title: 'Performance Badge',
-        description: averageScore === null ? 'Performance badge appears after marks are published.' : `Current published average is ${averageScore}%.`,
-        category: 'Academics',
-        points: averageScore !== null && averageScore >= 75 ? 30 : 0,
-        ...badgeStatus(averageScore !== null && averageScore >= 75, 'Earned', averageScore === null ? 'Waiting for marks' : 'Reach 75% average')
-      },
-      {
-        key: 'most_improved',
-        icon: '📈',
-        title: 'Most Improved',
-        description: scored.length < 2 ? 'Improvement badge appears after more than one assessment.' : `${improvedSubjects} subject${improvedSubjects === 1 ? '' : 's'} improving.`,
-        category: 'Improvement',
-        points: improvedSubjects > 0 ? 20 : 0,
-        ...badgeStatus(improvedSubjects > 0, 'Earned', scored.length < 2 ? 'Need more marks' : 'Improve next test')
-      },
-      {
-        key: 'participation_points',
-        icon: '💬',
-        title: 'Participation Points',
-        description: achievementRows.length ? `${achievementRows.length} teacher-awarded achievement event${achievementRows.length === 1 ? '' : 's'}.` : 'Teacher-awarded study participation will appear here.',
-        category: 'Participation',
-        points: teacherPoints,
-        ...badgeStatus(teacherPoints > 0, 'Earned', 'Join study discussions')
-      }
-    ];
-
-    const actions = [];
-    if (attendanceRate !== null && attendanceRate < 95) actions.push('Improve attendance consistency to unlock Attendance Star.');
-    if (homeworkRate !== null && homeworkRate < 90) actions.push('Submit pending homework on time to unlock Homework Hero.');
-    if (averageScore !== null && averageScore < 75) actions.push('Raise your average score to 75% for the Performance Badge.');
-    if (teacherPoints <= 0) actions.push('Participate in study discussions so teachers can award points.');
-    if (actions.length === 0 && badges.some(b => b.earned)) actions.push('Great progress. Keep the streak going.');
-
+    const summary = await getStudentGamificationSummary(student, req.user.schoolCode);
     res.json({
       success: true,
       data: {
-        student: { id: student.id, name: student.User?.name || 'Student', grade: student.grade, classId: student.classId },
-        summary: {
-          totalPoints,
-          earnedBadges: badges.filter(b => b.earned).length,
-          availableBadges: badges.length,
-          attendanceRate,
-          homeworkRate,
-          averageScore,
-          participationEvents: achievementRows.length
-        },
-        badges,
-        recentEvents: achievementRows.slice(0, 8).map(e => ({
-          id: e.id,
-          title: e.title || 'Achievement',
-          note: e.note || '',
-          points: Number(e.points) || 0,
-          createdAt: e.createdAt
-        })),
-        actions
+        student: { id: student.id, name: student.User?.name || 'Student', grade: student.grade, classId: student.classId, elimuid: student.elimuid },
+        ...summary
       }
     });
   } catch (error) {
@@ -195,24 +89,23 @@ exports.getClassLeaderboard = async (req, res) => {
     const { classId } = req.params;
     const classItem = await Class.findOne({ where: { id: Number(classId), schoolCode: req.user.schoolCode } });
     if (!classItem) return res.status(404).json({ success: false, message: 'Class not found' });
+    if (!(await canViewClassLeaderboard(req, classItem.id))) {
+      return res.status(403).json({ success: false, message: 'You cannot view this class leaderboard' });
+    }
 
-    const students = await Student.findAll({
-      where: { classId: classItem.id },
-      include: [{ model: User, required: true, where: { schoolCode: req.user.schoolCode }, attributes: ['id', 'name'] }],
-      order: [['points', 'DESC']],
-      limit: 20
-    });
-
-    const uniqueStudents = [...new Map(students.map(s => [
-      Number(s.userId || s.User?.id || s.id),
-      s
-    ])).values()];
-    const leaderboard = uniqueStudents.map((s, index) => ({
+    const students = await linkage.resolveClassStudents([classItem.id], req.user.schoolCode, { limit: 200 }).catch(() => []);
+    const scored = await Promise.all(students.map(async student => ({
+      student,
+      gamification: await getStudentGamificationSummary(student, req.user.schoolCode)
+    })));
+    scored.sort((a, b) => b.gamification.summary.totalPoints - a.gamification.summary.totalPoints);
+    const leaderboard = scored.slice(0, 20).map(({ student: s, gamification }, index) => ({
         rank: index + 1,
         studentId: s.id,
         userId: s.userId || s.User?.id,
-        name: s.User.name,
-        points: Number(s.points) || 0
+        name: s.User?.name || `Student ${s.id}`,
+        elimuid: s.elimuid || '',
+        points: gamification.summary.totalPoints
       }));
 
     res.json({ success: true, data: leaderboard });
@@ -291,7 +184,8 @@ exports.redeemReward = async (req, res) => {
     const reward = await Reward.findOne({ where: { id: Number(rewardId), schoolId: req.user.schoolCode, isActive: true }, transaction, lock: transaction.LOCK.UPDATE });
     if (!student) { await transaction.rollback(); return res.status(404).json({ success: false, message: 'Student profile not found' }); }
     if (!reward) { await transaction.rollback(); return res.status(404).json({ success: false, message: 'Reward not found in your school' }); }
-    if (student.points < reward.pointsCost) {
+    const gamification = await getStudentGamificationSummary(student, req.user.schoolCode, { transaction });
+    if (gamification.summary.totalPoints < reward.pointsCost) {
       await transaction.rollback();
       return res.status(400).json({ success: false, message: 'Insufficient points' });
     }
@@ -300,7 +194,7 @@ exports.redeemReward = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Reward is out of stock' });
     }
     // Deduct points
-    student.points -= reward.pointsCost;
+    student.points = Math.max(0, Number(student.points || 0) - Number(reward.pointsCost || 0));
     await student.save({ transaction });
     // Create redemption record
     await StudentReward.create({
@@ -314,7 +208,8 @@ exports.redeemReward = async (req, res) => {
       await reward.save({ transaction });
     }
     await transaction.commit();
-    res.json({ success: true, message: 'Reward redeemed', pointsRemaining: student.points });
+    const pointsRemaining = Math.max(0, Number(gamification.summary.totalPoints || 0) - Number(reward.pointsCost || 0));
+    res.json({ success: true, message: 'Reward redeemed', pointsRemaining });
   } catch (error) {
     if (!transaction.finished) await transaction.rollback();
     res.status(500).json({ success: false, message: error.message });

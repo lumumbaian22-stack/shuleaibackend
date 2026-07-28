@@ -1,6 +1,6 @@
 const { Op } = require('sequelize');
 const { resolveClassStudents, resolveStudentClass } = require('../services/schoolLinkageService');
-const { User, UserRoleAssignment, Teacher, Student, StudentEnrollment, Parent, School, Alert, Class, TeacherSubjectAssignment } = require('../models');
+const { User, UserRoleAssignment, Teacher, Student, StudentEnrollment, Parent, School, Alert, Class, TeacherSubjectAssignment, Attendance } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { getPagination, buildPaginatedResponse } = require('../utils/pagination');
 const cache = require('../services/cacheService');
@@ -22,7 +22,8 @@ exports.getDashboardStats = async (req, res) => {
     if (cached) return res.json({ success: true, cached: true, data: cached });
 
     const sevenDaysAgo = new Date(Date.now() - 7*24*60*60*1000);
-    const [teachers, students, parents, classes, pendingApprovals, recentAlerts] = await Promise.all([
+    const thirtyDaysAgo = new Date(Date.now() - 30*24*60*60*1000);
+    const [teachers, students, parents, classes, pendingApprovals, recentAlerts, attendanceTotal, attendancePresent] = await Promise.all([
       Teacher.count({ include: [{ model: User, where: { schoolCode, role: 'teacher' }, attributes: [] }] }),
       Student.count({ include: [{ model: User, where: { schoolCode, role: 'student' }, attributes: [] }] }),
       Parent.count({ include: [{ model: User, where: { schoolCode, role: 'parent' }, attributes: [] }] }),
@@ -31,10 +32,17 @@ exports.getDashboardStats = async (req, res) => {
         include: [{ model: User, where: { schoolCode, role: 'teacher' }, attributes: [] }],
         where: { approvalStatus: 'pending' }
       }),
-      Alert.count({ where: { role: 'admin', createdAt: { [Op.gte]: sevenDaysAgo } } })
+      Alert.count({
+        where: { role: 'admin', createdAt: { [Op.gte]: sevenDaysAgo } },
+        include: [{ model: User, required: true, where: { schoolCode, role: 'admin' }, attributes: [] }],
+        distinct: true
+      }),
+      Attendance.count({ where: { schoolCode, date: { [Op.gte]: thirtyDaysAgo }, status: { [Op.ne]: 'holiday' } } }),
+      Attendance.count({ where: { schoolCode, date: { [Op.gte]: thirtyDaysAgo }, status: { [Op.in]: ['present', 'late'] } } })
     ]);
 
-    const stats = { teachers, students, parents, classes, pendingApprovals, recentAlerts };
+    const attendanceRate = attendanceTotal ? Math.round((attendancePresent / attendanceTotal) * 1000) / 10 : 0;
+    const stats = { teachers, students, parents, classes, pendingApprovals, recentAlerts, attendanceRate, attendanceMarked: attendanceTotal };
     cache.set(cacheKey, stats, 45);
     res.json({ success: true, cached: false, data: stats });
   } catch (error) {

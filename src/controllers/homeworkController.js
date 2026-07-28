@@ -661,6 +661,7 @@ exports.getTeacherAssignments = async (req, res) => {
         ...json,
         attachments: normalizeAttachmentUrlsForResponse(req, json.attachments, json.schoolCode),
         assignedCount: assignments.length,
+        audienceSnapshot: true,
         submittedCount: assignments.filter(a => ['submitted','graded'].includes(String(a.status || '').toLowerCase())).length,
         pendingCount: assignments.filter(a => !['submitted','graded'].includes(String(a.status || '').toLowerCase())).length
       };
@@ -699,26 +700,6 @@ async function ensureHomeworkAssignmentsForTask(task, schoolCode) {
   let students = [];
   if (classItem) students = await getStudentsForClass(classItem, schoolCode);
 
-  // Final fallback: use task text directly when the Class row cannot be resolved.
-  if (!students.length) {
-    const names = [...new Set([task.className, task.gradeLevel].filter(Boolean))];
-    const normalizedNames = names.map(normalizeClassText).filter(Boolean);
-    if (normalizedNames.length) {
-      const candidates = await Student.unscoped().findAll({
-        where: { status: { [Op.ne]: 'inactive' } },
-        include: [{ model: User, attributes: ['id','name','email','schoolCode'], required: false }],
-        attributes: ['id','userId','grade','classId','status'],
-        limit: 10000
-      });
-      students = candidates.filter(student => {
-        const userSchool = student?.User?.schoolCode || student?.User?.dataValues?.schoolCode;
-        if (schoolCode && userSchool && userSchool !== schoolCode) return false;
-        const grade = normalizeClassText(student.grade);
-        return normalizedNames.some(n => grade === n || grade.includes(n) || n.includes(grade));
-      });
-    }
-  }
-
   for (const student of students) {
     await HomeTaskAssignment.findOrCreate({
       where: { taskId: task.id, studentId: student.id },
@@ -740,7 +721,8 @@ exports.getTeacherAssignmentDetails = async (req, res) => {
     await ensureRuntimeSchema().catch(() => null);
     const { task } = await teacherOwnsTask(req, req.params.taskId);
     if (!task) return res.status(404).json({ success: false, message: 'Homework not found' });
-    await ensureHomeworkAssignmentsForTask(task, req.user.schoolCode);
+    const existingAssignmentCount = await HomeTaskAssignment.count({ where: { taskId: task.id } });
+    if (!existingAssignmentCount) await ensureHomeworkAssignmentsForTask(task, req.user.schoolCode);
     const assignments = await HomeTaskAssignment.findAll({
       where: { taskId: task.id },
       include: [{ model: Student, required: false, include: [{ model: User, attributes: ['id','name','email','profileImage','schoolCode'], required: false }] }],
@@ -759,7 +741,7 @@ exports.getTeacherAssignmentDetails = async (req, res) => {
         submissionFiles: normalizeAttachmentUrlsForResponse(req, (json.studentFeedback || {}).submissionFiles || ((json.studentFeedback || {}).fileUrl ? [{ url: (json.studentFeedback || {}).fileUrl }] : []), json.schoolCode || task.schoolCode)
       };
     });
-    res.json({ success: true, data: { task: { ...task.toJSON(), attachments: normalizeAttachmentUrlsForResponse(req, task.attachments, task.schoolCode) }, assignments: enrichedAssignments } });
+    res.json({ success: true, data: { task: { ...task.toJSON(), audienceSnapshot: true, attachments: normalizeAttachmentUrlsForResponse(req, task.attachments, task.schoolCode) }, assignments: enrichedAssignments } });
   } catch (error) {
     console.error('Get homework details error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -808,69 +790,6 @@ exports.reviewSubmission = async (req, res) => {
   }
 };
 
-async function ensureHomeworkAssignmentsForStudent(student, schoolCode) {
-  const studentClass = student.classId ? await Class.findOne({ where: { id: student.classId, schoolCode, isActive: true } }).catch(() => null) : null;
-  const classNames = [...new Set([
-    student.grade,
-    studentClass?.name,
-    studentClass?.grade,
-    `${studentClass?.grade || ''} ${studentClass?.stream || ''}`.trim(),
-    `${studentClass?.name || ''} ${studentClass?.stream || ''}`.trim()
-  ].filter(Boolean))];
-
-  const orRules = [];
-  if (student.classId) {
-    orRules.push({ classId: student.classId });
-    if (classNames.length) {
-      orRules.push({ [Op.and]: [{ classId:null }, { className: { [Op.in]: classNames } }] });
-      orRules.push({ [Op.and]: [{ classId:null }, { gradeLevel: { [Op.in]: classNames } }] });
-    }
-  } else if (classNames.length) {
-    orRules.push({ classId:null, className: { [Op.in]: classNames } });
-    orRules.push({ classId:null, gradeLevel: { [Op.in]: classNames } });
-  }
-  if (!orRules.length) return;
-
-  let tasks = await HomeTask.findAll({
-    where: {
-      isActive: { [Op.ne]: false },
-      [Op.and]: [
-        { [Op.or]: [{ schoolCode }, { schoolCode: null }] },
-        { [Op.or]: orRules }
-      ]
-    },
-    attributes: ['id', 'classId', 'className', 'gradeLevel', 'schoolCode'],
-    limit: 500
-  });
-
-  if (!tasks.length && classNames.length) {
-    const candidates = await HomeTask.findAll({
-      where: { isActive: { [Op.ne]: false }, [Op.or]: [{ schoolCode }, { schoolCode: null }] },
-      attributes: ['id', 'classId', 'className', 'gradeLevel', 'schoolCode'],
-      limit: 1000
-    });
-    tasks = candidates.filter(task => {
-      if (student.classId && task.classId) return Number(task.classId) === Number(student.classId);
-      if (task.classId) return false;
-      return classNames.some(name => classTextsMatch(task.className, name) || classTextsMatch(task.gradeLevel, name));
-    });
-  }
-
-  for (const task of tasks) {
-    await HomeTaskAssignment.findOrCreate({
-      where: { taskId: task.id, studentId: student.id },
-      defaults: {
-        studentId: student.id,
-        taskId: task.id,
-        classId: task.classId || student.classId || null,
-        schoolCode: schoolCode || task.schoolCode || null,
-        assignedAt: new Date(),
-        status: 'pending'
-      }
-    }).catch(() => null);
-  }
-}
-
 exports.getStudentAssignments = async (req, res) => {
   try {
     await ensureRuntimeSchema().catch(() => null);
@@ -879,8 +798,6 @@ exports.getStudentAssignments = async (req, res) => {
       attributes: ['id', 'userId', 'grade', 'classId', 'status']
     });
     if (!student) return res.status(403).json({ success: false, message: 'Not a student' });
-
-    await ensureHomeworkAssignmentsForStudent(student, req.user.schoolCode);
 
     const assignments = await HomeTaskAssignment.findAll({
       where: {

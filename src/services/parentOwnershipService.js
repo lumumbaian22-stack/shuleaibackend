@@ -9,10 +9,10 @@ function linkStatusSql(alias = 'sp') {
   return `COALESCE(${alias}."status", 'active') IN ('active','approved','verified','linked')`;
 }
 
-async function getParentForUser(parentUserId) {
+async function getParentForUser(parentUserId, options = {}) {
   const uid = asId(parentUserId);
   if (!uid) return null;
-  return Parent.findOne({ where: { userId: uid } });
+  return Parent.findOne({ where: { userId: uid }, transaction: options.transaction || undefined });
 }
 
 async function getStudentInSchool(studentId, schoolCode, options = {}) {
@@ -31,7 +31,7 @@ async function ownsStudentId({ parentUserId, parentId, studentId, schoolCode, tr
   let pid = asId(parentId);
   if (!sid || (!uid && !pid)) return false;
   if (!pid && uid) {
-    const parent = await Parent.findOne({ where: { userId: uid }, transaction }).catch(() => null);
+    const parent = await getParentForUser(uid, { transaction }).catch(() => null);
     pid = asId(parent?.id);
   }
   if (!pid) return false;
@@ -53,7 +53,7 @@ async function ownsStudentId({ parentUserId, parentId, studentId, schoolCode, tr
 }
 
 async function assertParentOwnsStudent({ parentUserId, parentId, studentId, schoolCode, transaction, includeUser = true } = {}) {
-  const parent = parentId ? await Parent.findByPk(parentId, { transaction }).catch(() => null) : await getParentForUser(parentUserId);
+  const parent = parentId ? await Parent.findByPk(parentId, { transaction }).catch(() => null) : await getParentForUser(parentUserId, { transaction });
   if (!parent) {
     const err = new Error('Parent profile not found'); err.status = 404; throw err;
   }
@@ -69,7 +69,7 @@ async function assertParentOwnsStudent({ parentUserId, parentId, studentId, scho
 }
 
 async function listOwnedStudentIds({ parentUserId, schoolCode, transaction } = {}) {
-  const parent = await getParentForUser(parentUserId);
+  const parent = await getParentForUser(parentUserId, { transaction });
   if (!parent) return [];
   const rows = await sequelize.query(
     `SELECT DISTINCT s."id"

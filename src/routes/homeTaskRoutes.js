@@ -5,7 +5,7 @@ const homeTaskController = require('../controllers/homeTaskController');
 
 router.use(protect);
 
-router.get('/today', authorize('parent'), homeTaskController.getTodayTasks);
-router.post('/:id/complete', authorize('parent'), homeTaskController.completeTask);
+router.get('/today', authorize('parent', 'student'), homeTaskController.getTodayTasks);
+router.post('/:id/complete', authorize('parent', 'student'), homeTaskController.completeTask);
 
 module.exports = router;

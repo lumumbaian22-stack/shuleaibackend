@@ -4,6 +4,7 @@ const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 const schoolFeatureService = require('../services/schoolFeatureService');
 const { resolveStudentClass, resolveClassStudents } = require('../services/schoolLinkageService');
+const { getStudentGamificationSummary } = require('../services/studentGamificationService');
 
 // Helper: get grade from score using the school's curriculum (simplified)
 function getGradeFromScore(score, curriculum, level) {
@@ -148,6 +149,10 @@ exports.getDashboard = async (req, res) => {
     const curriculum = school ? school.system : 'cbc';
     const schoolLevel = school?.settings?.schoolLevel || 'secondary';
     const accessInfo = school ? await schoolFeatureService.getSchoolFeatures(school.schoolId).catch(() => null) : null;
+    const gamification = await getStudentGamificationSummary(student, req.user.schoolCode).catch(() => ({
+      summary: { totalPoints: Number(student.points) || 0, earnedBadges: 0, availableBadges: 0 },
+      badges: [], recentEvents: [], actions: []
+    }));
 
     const avg = records.length ? (records.reduce((a, b) => a + b.score, 0) / records.length).toFixed(1) : 0;
 
@@ -168,20 +173,23 @@ exports.getDashboard = async (req, res) => {
           academicStatus: student.academicStatus,
           admissionNumber: student.admissionNumber,
           assessmentNumber: student.assessmentNumber,
-          points: Number(student.points) || 0
+          points: Number(gamification.summary.totalPoints) || 0
         },
         averageScore: parseFloat(avg),
         stats: {
             averageScore: parseFloat(avg),
-            attendanceRate: attendance.length ? Math.round((attendance.filter(a => a.status === 'present').length / attendance.length) * 100) : 0
+            attendanceRate: gamification.summary.attendanceRate
+              ?? (attendance.length ? Math.round((attendance.filter(a => ['present', 'late'].includes(String(a.status).toLowerCase())).length / attendance.length) * 100) : 0)
         },
         recentRecords: records.map(r => ({
             ...r.toJSON(),
             grade: getGradeFromScore(r.score, curriculum, schoolLevel)
         })),
         recentAttendance: attendance,
-        attendanceRate: attendance.length ? Math.round((attendance.filter(a => a.status === 'present').length / attendance.length) * 100) : 0,
-        points: Number(student.points) || 0,
+        attendanceRate: gamification.summary.attendanceRate
+          ?? (attendance.length ? Math.round((attendance.filter(a => ['present', 'late'].includes(String(a.status).toLowerCase())).length / attendance.length) * 100) : 0),
+        points: Number(gamification.summary.totalPoints) || 0,
+        gamification,
         paymentStatus: student.paymentStatus,
         classId: student.classId || classItem?.id || null,
         school: {

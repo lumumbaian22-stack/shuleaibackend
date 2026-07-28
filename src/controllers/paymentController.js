@@ -323,16 +323,11 @@ exports.getAdminPaymentRecords = async (req, res) => {
       include: [
         { model: Student, required: false, attributes: ['id','grade','classId','elimuid','admissionNumber'], include: [{ model: User, required: false, attributes: ['id','name'] }, { model: Class, required: false, attributes: ['id','name','grade','stream'] }] },
         { model: Parent, required: false, attributes: ['id'], include: [{ model: User, required: false, attributes: ['id','name','phone','email'] }] },
-        { model: Fee, required: false, attributes: ['id','term','year','totalAmount','paidAmount','parentPaidAmount','creditAmount'] }
+        { model: Fee, required: false, attributes: ['id','studentId','schoolCode','term','year','totalAmount','paidAmount','parentPaidAmount','creditAmount'] }
       ],
       order: [['createdAt','DESC']], limit, offset, distinct: true
     });
-    const records = rows.map(payment => {
-      const row = payment.toJSON ? payment.toJSON() : payment;
-      const fee = row.Fee || {};
-      const total = Number(fee.totalAmount || 0), parentPaid = Number(fee.parentPaidAmount ?? fee.paidAmount ?? 0), credit = Number(fee.creditAmount || 0);
-      return { ...row, studentName: row.Student?.User?.name || row.metadata?.studentName || null, parentName: row.Parent?.User?.name || row.metadata?.parentName || null, className: row.Student?.Class?.name || row.Student?.grade || row.metadata?.className || null, feeTerm: fee.term || row.metadata?.term || null, feeYear: fee.year || row.metadata?.year || null, feeTotalAmount: total, feeParentPaidAmount: parentPaid, feeCreditAmount: credit, feePaidAmount: parentPaid + credit, feeBalance: Math.max(0, total - parentPaid - credit), recordType: 'payment' };
-    });
+    const records = rows.map(payment => ({ ...financeLedger.decoratePayment(payment), recordType: 'payment' }));
     res.json({ success: true, data: records, records, pagination: { page, limit, total: count, pages: Math.max(1, Math.ceil(count / limit)) } });
   } catch (error) {
     console.error('Admin payment records error:', error);
@@ -352,7 +347,12 @@ exports.getManualVerificationQueue = async (req, res) => {
       order: [['createdAt','DESC']],
       limit: 200
     });
-    res.json({ success:true, data: rows.map(financeLedger.decoratePayment) });
+    const decorated = rows.map(financeLedger.decoratePayment);
+    res.json({
+      success:true,
+      data: decorated.filter(row => row.verificationActionable),
+      quarantined: decorated.filter(row => !row.integrityValid)
+    });
   } catch(error){ res.status(500).json({ success:false, message:error.message }); }
 };
 

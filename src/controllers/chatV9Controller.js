@@ -34,16 +34,15 @@ async function getStudentProfile(userId) {
 
 async function getClassStudyParticipants({ schoolCode, classId }) {
   if (!classId) return [];
-  const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
-    where: { classId, status: 'active' },
-    include: [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }],
-    order: [[User, 'name', 'ASC']],
+  const students = await schoolLinkageService.resolveClassStudents([classId], schoolCode, {
+    userAttributes: ['id','name','role','profileImage'],
     limit: 120
   });
   const participants = students.map(s => ({
     id: s.User?.id,
     studentId: s.id,
     name: s.User?.name || s.name || 'Student',
+    elimuid: s.elimuid || '',
     role: 'student',
     profileImage: s.User?.profileImage || null,
     admissionNumber: s.admissionNumber || null
@@ -58,36 +57,27 @@ async function resolveStudentClassContext(req) {
   let grade = student?.grade || req.user?.grade || req.user?.student?.grade || req.user?.Student?.grade || req.user?.className || null;
   let classRecord = null;
 
-  if (classId) {
-    classRecord = await Class.findOne({ where: { id: Number(classId), schoolCode: schoolCodeOf(req) } }).catch(() => null);
-  }
-
-  if (!classRecord && grade) {
-    const cleanGrade = String(grade).trim();
-    classRecord = await Class.findOne({
-      where: {
-        schoolCode: schoolCodeOf(req),
-        [Op.or]: [
-          { name: cleanGrade },
-          { grade: cleanGrade },
-          { stream: cleanGrade }
-        ]
-      }
-    }).catch(() => null);
-    if (classRecord?.id) classId = classRecord.id;
-  }
+  classRecord = student
+    ? await schoolLinkageService.resolveStudentClass(student, schoolCodeOf(req)).catch(() => null)
+    : null;
+  if (!classRecord && classId) classRecord = await Class.findOne({ where: { id: Number(classId), schoolCode: schoolCodeOf(req) } }).catch(() => null);
+  if (classRecord?.id) classId = classRecord.id;
 
   return { student, classId: classId ? Number(classId) : null, grade, classRecord };
 }
 
 function threadMatchesStudentContext(thread, ctx) {
   if (!thread) return false;
-  if (!thread.classId) return true;
-  if (ctx.classId && Number(thread.classId) === Number(ctx.classId)) return true;
+  if (thread.classId !== undefined && thread.classId !== null) {
+    return Boolean(ctx.classId && Number(thread.classId) === Number(ctx.classId));
+  }
   const meta = thread.metadata || {};
-  const possibleNames = [ctx.grade, ctx.classRecord?.name, ctx.classRecord?.grade, ctx.classRecord?.stream].filter(Boolean).map(v => String(v).toLowerCase().trim());
-  const threadNames = [meta.className, meta.grade, meta.stream].filter(Boolean).map(v => String(v).toLowerCase().trim());
-  return possibleNames.some(name => threadNames.includes(name));
+  if (meta.classId !== undefined && meta.classId !== null) {
+    return Boolean(ctx.classId && Number(meta.classId) === Number(ctx.classId));
+  }
+  const expectedName = String(ctx.classRecord?.name || '').toLowerCase().trim();
+  const legacyName = String(meta.className || '').toLowerCase().trim();
+  return Boolean(expectedName && legacyName && expectedName === legacyName);
 }
 
 async function buildStudyMeta(req, threads, student, studentCtx = null) {
@@ -100,32 +90,8 @@ async function buildStudyMeta(req, threads, student, studentCtx = null) {
     participantsByClass[classId] = await getClassStudyParticipants({ schoolCode, classId });
   }
 
-  // If the student has a grade/class name but no linked classId yet, still return
-  // same-grade classmates so private peer chats and the members panel do not appear empty.
-  if (!classIds.length && req.user?.role === 'student') {
-    const grade = studentCtx?.grade || student?.grade || req.user?.grade || req.user?.className || null;
-    if (grade) {
-      const cleanGrade = String(grade).trim();
-      const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
-        where: { schoolCode, status: 'active', [Op.or]: [{ grade: cleanGrade }, { className: cleanGrade }] },
-        include: [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode, role: 'student', isActive: true } }],
-        order: [[User, 'name', 'ASC']],
-        limit: 120
-      }).catch(() => []);
-      participantsByClass[0] = students.map(s => ({
-        id: s.User?.id,
-        studentId: s.id,
-        name: s.User?.name || s.name || 'Student',
-        role: 'student',
-        profileImage: s.User?.profileImage || null,
-        admissionNumber: s.admissionNumber || null
-      })).filter(x => x.id);
-      return {
-        groups: [{ id: 'class-0', classId: null, name: cleanGrade || 'My Study Group', grade: cleanGrade, stream: '', type: 'class-study-group', participantCount: participantsByClass[0].length, participants: participantsByClass[0] }],
-        participantsByClass
-      };
-    }
-  }
+  // Do not guess a study group from a grade label when the active class link is
+  // missing. In schools with multiple streams that would expose the wrong peers.
 
   const groups = classIds.map(classId => {
     const c = classMap.get(Number(classId));
@@ -435,33 +401,6 @@ exports.listTeacherDirectory = async (req, res) => {
       let classmates = [];
       if (ctx.classId) {
         classmates = await getClassStudyParticipants({ schoolCode: schoolCodeOf(req), classId: ctx.classId });
-      }
-
-      // Some older student rows are linked by grade/className instead of classId.
-      // Use a same-grade fallback so the student private participant list does not go empty.
-      if (!classmates.length) {
-        const grade = ctx.grade || ctx.student?.grade || ctx.student?.className || req.user?.grade || req.user?.className || null;
-        if (grade) {
-          const cleanGrade = String(grade).trim();
-          const students = await (Student.unscoped ? Student.unscoped() : Student).findAll({
-            where: {
-              schoolCode: schoolCodeOf(req),
-              status: 'active',
-              [Op.or]: [{ grade: cleanGrade }, { className: cleanGrade }]
-            },
-            include: [{ model: User, attributes: ['id','name','role','profileImage'], where: { schoolCode: schoolCodeOf(req), role: 'student', isActive: true } }],
-            order: [[User, 'name', 'ASC']],
-            limit: 120
-          }).catch(() => []);
-          classmates = students.map(st => ({
-            id: st.User?.id,
-            studentId: st.id,
-            name: st.User?.name || st.name || 'Student',
-            role: 'student',
-            profileImage: st.User?.profileImage || null,
-            admissionNumber: st.admissionNumber || null
-          })).filter(x => x.id);
-        }
       }
 
       classmates = [...new Map(
@@ -805,12 +744,9 @@ exports.listClassroomThreads = async (req, res) => {
 
     if (req.user.role === 'student') {
       threads = threads.filter(t => {
+        if (Number(t.createdBy) === Number(req.user.id)) return true;
         if (threadMatchesStudentContext(t, studentCtx || {})) return true;
-        const meta = t.metadata || {};
-        const approvalStatus = String(meta.approvalStatus || 'approved').toLowerCase();
-        // Legacy rollout safeguard: keep old approved study-room threads visible
-        // when classId was not saved correctly, instead of making the chat look empty.
-        return approvalStatus === 'approved' && (!t.classId || !studentCtx?.classId || Number(t.classId) !== Number(studentCtx.classId));
+        return false;
       });
     }
 
@@ -848,8 +784,11 @@ exports.createClassroomThread = async (req, res) => {
 
     const teacher = req.user.role === 'teacher' ? await getTeacherProfile(req.user.id) : null;
     const student = req.user.role === 'student' ? await getStudentProfile(req.user.id) : null;
+    const studentCtx = req.user.role === 'student' ? await resolveStudentClassContext(req) : null;
     const approvalStatus = req.user.role === 'student' ? 'pending' : (metadata.approvalStatus || 'approved');
-    let targetClassId = classId || student?.classId || null;
+    let targetClassId = req.user.role === 'student'
+      ? (studentCtx?.classId || student?.classId || null)
+      : (classId || null);
     if (!targetClassId && req.user.role === 'teacher') {
       const allowedClassIds = await getTeacherAllowedClassIds(req.user.id);
       targetClassId = allowedClassIds[0] || null;

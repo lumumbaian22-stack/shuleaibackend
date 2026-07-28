@@ -48,8 +48,9 @@ test('v2045 finance history requires a valid matching fee and blocks overpayment
 test('v2045 student progress and rewards use canonical dashboard values', () => {
   const controller = readBackend('src/controllers/studentController.js');
   const ui = readFrontend('js/student-dashboard-extended.js');
-  assert.match(controller, /points: Number\(student\.points\) \|\| 0/);
-  assert.match(controller, /attendanceRate:/);
+  assert.match(controller, /getStudentGamificationSummary\(student,\s*req\.user\.schoolCode\)/);
+  assert.match(controller, /points: Number\(gamification\.summary\.totalPoints\) \|\| 0/);
+  assert.match(controller, /gamification\.summary\.attendanceRate/);
   assert.match(ui, /\/api\/gamification\/my-summary/);
   assert.match(ui, /data\.stats\?\.attendanceRate/);
 });
@@ -60,4 +61,3 @@ test('v2045 analytics follows parent child choice and populated teacher class', 
   assert.match(ui, /params\.set\('childId', selectedChildId\)/);
   assert.match(controller, /studentCounts\.get\(b\)/);
 });
-

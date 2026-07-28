@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const { sequelize, Payment, Fee, Student, Parent, User, Class, AuditLog, UserRoleAssignment } = require('../models');
 const realtimeSync = require('./realtimeSyncService');
 const { createAlert } = require('./notificationService');
+const { classifyPaymentIntegrity } = require('./paymentIntegrityService');
 
 const APPROVED = new Set(['completed', 'success', 'successful', 'approved', 'paid']);
 const PENDING = new Set(['pending', 'processing', 'pending_verification']);
@@ -136,7 +137,7 @@ async function recalculateFeeAccount(feeId, { transaction } = {}) {
   const fee = await Fee.findByPk(feeId, { transaction });
   if (!fee) return null;
   const rows = await Payment.findAll({
-    where: { feeId, schoolCode: fee.schoolCode, paymentType: { [Op.in]: ['fee', 'school_fee'] } },
+    where: { feeId, studentId: fee.studentId, schoolCode: fee.schoolCode, paymentType: { [Op.in]: ['fee', 'school_fee'] } },
     order: [['createdAt', 'ASC']],
     transaction
   });
@@ -145,6 +146,7 @@ async function recalculateFeeAccount(feeId, { transaction } = {}) {
   let credits = 0;
   const ledger = [];
   for (const row of rows) {
+    if (!classifyPaymentIntegrity({ ...row.toJSON(), Fee: fee.toJSON() }).integrityValid) continue;
     const status = normalizeStatus(row.status);
     const type = normalizeTransactionType(row.transactionType, row.method);
     const amt = asInt(row.amount);
@@ -280,8 +282,10 @@ function decorateFeeAccount(fee, student = null) {
 function decoratePayment(payment) {
   const row = payment.toJSON ? payment.toJSON() : payment;
   const txType = normalizeTransactionType(row.transactionType, row.method);
+  const integrity = classifyPaymentIntegrity(row);
   return {
     ...row,
+    ...integrity,
     statusLabel: row.status === 'completed' ? 'Approved / Successful' : row.status,
     transactionTypeLabel: isCreditType(txType) ? 'Bursary / Credit' : txType,
     studentName: studentName(row.Student),
@@ -301,7 +305,7 @@ async function getStudentFinance({ schoolCode, studentId, parentUserId = null })
   let parent = null;
   let student = null;
   if (parentUserId) {
-    ({ parent, student } = await assertParentOwnsStudent({ parentUserId, studentId }));
+    ({ parent, student } = await assertParentOwnsStudent({ parentUserId, studentId, schoolCode }));
     schoolCode = student.schoolCode || student.User?.schoolCode;
   }
   else student = await findStudentInSchool({ schoolCode, studentId });
@@ -321,7 +325,7 @@ async function getStudentFinance({ schoolCode, studentId, parentUserId = null })
 
 async function getStudentHistory({ schoolCode, studentId, parentUserId = null, status = 'all', transactionType = 'all', method = 'all', feeId = null }) {
   if (parentUserId) {
-    const owned = await assertParentOwnsStudent({ parentUserId, studentId });
+    const owned = await assertParentOwnsStudent({ parentUserId, studentId, schoolCode });
     schoolCode = owned.student.schoolCode || owned.student.User?.schoolCode;
   }
   const where = { schoolCode, studentId, paymentType: { [Op.in]: ['fee', 'school_fee'] }, paidTo: 'school' };
@@ -339,6 +343,7 @@ async function getStudentHistory({ schoolCode, studentId, parentUserId = null, s
     limit: 500
   });
   return rows.map(decoratePayment).filter(row => {
+    if (parentUserId && !row.parentVisible) return false;
     const s = String(status || 'all').toLowerCase();
     const t = String(transactionType || 'all').toLowerCase();
     const m = String(method || 'all').toLowerCase();
@@ -367,7 +372,11 @@ async function getAdminSummary({ schoolCode }) {
     if (a.balance > 0) acc.defaulters += 1;
     return acc;
   }, { totalExpected: 0, parentPaidAmount: 0, creditAmount: 0, totalCovered: 0, outstanding: 0, defaulters: 0 });
-  const pendingPayments = await Payment.count({ where: { schoolCode, paymentType: { [Op.in]: ['fee', 'school_fee'] }, paidTo: 'school', status: { [Op.in]: ['pending', 'pending_verification', 'pending_customer_action', 'pending_provider_confirmation'] } } });
+  const pendingRows = await Payment.findAll({
+    where: { schoolCode, paymentType: { [Op.in]: ['fee', 'school_fee'] }, paidTo: 'school', status: { [Op.in]: ['pending', 'pending_verification'] } },
+    include: [{ model: Fee, required: false }]
+  });
+  const pendingPayments = pendingRows.map(decoratePayment).filter(row => row.verificationActionable).length;
   const failedPayments = await Payment.count({ where: { schoolCode, paymentType: { [Op.in]: ['fee', 'school_fee'] }, paidTo: 'school', status: { [Op.in]: ['failed', 'rejected', 'pending_provider_error'] } } });
   return { ...summary, pendingPayments, failedPayments, studentsWithBalances: rows.filter(a => a.balance > 0), accounts: rows };
 }
@@ -391,5 +400,6 @@ module.exports = {
   getStudentHistory,
   getAdminSummary,
   decorateFeeAccount,
-  decoratePayment
+  decoratePayment,
+  classifyPaymentIntegrity
 };

@@ -8,7 +8,29 @@ const { getSchoolFeatures } = require('../services/schoolFeatureService');
 const { normalizeRole, canUseEffectiveRoleAsync } = require('../services/roleAccessService');
 const curriculumEngine = require('../services/curriculumStructureEngine');
 const classGeneration = require('../services/classGenerationService');
-async function canLoginAs(user, requestedRole) { return canUseEffectiveRoleAsync(user, requestedRole); }function publicProfileForRole(user,effectiveRole){const payload=user.getPublicProfile(effectiveRole);payload.primaryRole=user.getDataValue?.('primaryRole')||user.primaryRole||user.role;payload.role=normalizeRole(effectiveRole || user.role);const financeMeta=user.getDataValue?.('financeAssignment')||user.financeAssignment||user.preferences?.finance||{};payload.financeTitle=financeMeta.title||null;payload.financePermissions=Array.isArray(financeMeta.permissions)?financeMeta.permissions:[];return payload;}
+async function canLoginAs(user, requestedRole) { return canUseEffectiveRoleAsync(user, requestedRole); }
+function publicProfileForRole(user, effectiveRole, profile = null) {
+  const payload = user.getPublicProfile(effectiveRole);
+  payload.primaryRole = user.getDataValue?.('primaryRole') || user.primaryRole || user.role;
+  payload.role = normalizeRole(effectiveRole || user.role);
+  const financeMeta = user.getDataValue?.('financeAssignment') || user.financeAssignment || user.preferences?.finance || {};
+  payload.financeTitle = financeMeta.title || null;
+  payload.financePermissions = Array.isArray(financeMeta.permissions) ? financeMeta.permissions : [];
+  if (payload.role === 'student' && profile) {
+    const student = profile.toJSON ? profile.toJSON() : profile;
+    const studentProfile = {
+      id: student.id,
+      studentId: student.id,
+      elimuid: student.elimuid || '',
+      classId: student.classId || null,
+      className: student.className || student.Class?.name || student.grade || '',
+      grade: student.grade || '',
+      admissionNumber: student.admissionNumber || ''
+    };
+    Object.assign(payload, studentProfile, { student: studentProfile });
+  }
+  return payload;
+}
 
 function getRefreshSecret() { return process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET; }
 function generateRefreshToken(user, effectiveRole = null) {
@@ -335,7 +357,7 @@ const authController = {
       }
 
       // Check if school is active
-      if (school.status !== 'active') {
+      if (!school || school.status !== 'active') {
         return res.status(403).json({ success: false, message: 'School is not yet approved' });
       }
 
@@ -506,7 +528,7 @@ const authController = {
         include: [{ model: User }]
       });
 
-      if (!student || !(await student.User.comparePassword(password))) {
+      if (!student || !student.User || !(await student.User.comparePassword(password))) {
         return res.status(401).json({ success: false, message: 'Invalid credentials' });
       }
 
@@ -518,7 +540,7 @@ const authController = {
 
       // Check if school is active
       const school = await School.findOne({ where: { schoolId: user.schoolCode } });
-      if (school.status !== 'active') {
+      if (!school || school.status !== 'active') {
         return res.status(403).json({ success: false, message: 'School is not active' });
       }
 
@@ -530,7 +552,7 @@ const authController = {
 
       res.json({
         success: true,
-        data: { token, refreshToken: generateRefreshToken(user, 'student'), user: user.getPublicProfile(), student }
+        data: { token, refreshToken: generateRefreshToken(user, 'student'), user: publicProfileForRole(user, 'student', student), student }
       });
     } catch (error) {
       console.error('Student login error:', error);
@@ -574,7 +596,7 @@ const authController = {
 
       res.json({
         success: true,
-        data: { token, refreshToken: generateRefreshToken(user, effectiveRole), user: publicProfileForRole(user,effectiveRole), profile, school: schoolPayload }
+        data: { token, refreshToken: generateRefreshToken(user, effectiveRole), user: publicProfileForRole(user,effectiveRole,profile), profile, school: schoolPayload }
       });
     } catch (error) {
       console.error('Login error:', error);
@@ -614,18 +636,19 @@ const authController = {
   getMe: async (req, res) => {
     try {
       const user = req.user;
+      const effectiveRole = normalizeRole(req.effectiveRole || user.role);
       let profile = null;
-      if (user.role === 'teacher') profile = await Teacher.findOne({ where: { userId: user.id } });
-      else if (user.role === 'student') profile = await Student.findOne({ where: { userId: user.id } });
-      else if (user.role === 'parent') profile = await Parent.findOne({ where: { userId: user.id } });
-      else if (user.role === 'admin') profile = await Admin.findOne({ where: { userId: user.id } });
+      if (effectiveRole === 'teacher') profile = await Teacher.findOne({ where: { userId: user.id } });
+      else if (effectiveRole === 'student') profile = await Student.findOne({ where: { userId: user.id } });
+      else if (effectiveRole === 'parent') profile = await Parent.findOne({ where: { userId: user.id } });
+      else if (effectiveRole === 'admin') profile = await Admin.findOne({ where: { userId: user.id } });
 
       const school = user.schoolCode ? await School.findOne({ where: { schoolId: user.schoolCode } }) : null;
       const schoolPayload = await buildSchoolSessionPayload(school);
 
       res.json({
         success: true,
-        data: { user: publicProfileForRole(user,req.effectiveRole||user.role), profile, school: schoolPayload }
+        data: { user: publicProfileForRole(user,effectiveRole,profile), profile, school: schoolPayload }
       });
     } catch (error) {
       console.error('Get me error:', error);

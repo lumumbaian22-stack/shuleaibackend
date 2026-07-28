@@ -3,6 +3,7 @@ const { Fee, Payment, Student, User, Class, FinanceExpense, AuditLog } = require
 const { getAlertsForUser } = require('../services/alertReceiverEngine');
 const { createAlert } = require('../services/notificationService');
 const realtime = require('../services/realtimeService');
+const financeLedger = require('../services/financeLedgerService');
 
 const FULL_FINANCE = ['overview','fee_structures','invoices','payments','verification','balances','defaulters','receipts','bursaries','expenses','reconciliation','analytics','reports','settings','alerts','audit'];
 const BURSAR = ['overview','fee_structures','invoices','payments','verification','balances','defaulters','receipts','bursaries','reports','alerts'];
@@ -84,14 +85,25 @@ exports.getOverview = async (req, res) => {
       const m = feeMoney(fee); expected += m.total; paid += m.paid; credits += m.credit; outstanding += m.balance;
       if (m.balance > 0) defaulters.push({ feeId:fee.id, studentId:fee.studentId, studentName:fee.Student?.User?.name || `Student ${fee.studentId}`, profileImage:fee.Student?.User?.profileImage || fee.Student?.User?.profilePicture || null, elimuid:fee.Student?.elimuid || null, classId:fee.Student?.classId || null, className:fee.Student?.Class?.name || fee.Student?.grade || 'Unassigned', term:fee.term, year:fee.year, totalAmount:m.total, parentPaidAmount:m.paid, creditAmount:m.credit, balance:m.balance, status:fee.status || m.status });
     }
-    const payments = await Payment.findAll({ where:{ schoolCode }, order:[['createdAt','DESC']], limit:200 }).catch(() => []);
-    const pendingVerification = payments.filter(p => String(p.status || '').toLowerCase() === 'pending' && ['school_fee','fee','fees'].includes(String(p.paymentType || '').toLowerCase())).length;
-    const ok = payments.filter(completedPayment);
+    const rawPayments = await Payment.findAll({
+      where:{ schoolCode, paymentType:{ [Op.in]:['fee','school_fee'] }, paidTo:'school' },
+      include:[{ model:Fee, required:false }],
+      order:[['createdAt','DESC']],
+      limit:200
+    }).catch(() => []);
+    const payments = rawPayments.map(financeLedger.decoratePayment);
+    const validPayments = payments.filter(p =>
+      p.integrityValid &&
+      (!year || Number(p.Fee?.year) === Number(year)) &&
+      (!term || String(p.Fee?.term) === String(term))
+    );
+    const pendingVerification = validPayments.filter(p => p.verificationActionable).length;
+    const ok = validPayments.filter(completedPayment);
     const now = new Date(); const day = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const week = new Date(day); week.setDate(week.getDate() - ((week.getDay() + 6) % 7)); const month = new Date(now.getFullYear(), now.getMonth(), 1);
     const sumSince = (d) => ok.filter(p => new Date(p.paymentDate || p.transactionDate || p.createdAt) >= d).reduce((a,p) => a + Number(p.amount || 0), 0);
     const expenses = await FinanceExpense.findAll({ where:{ schoolCode, status:{ [Op.notIn]:['rejected','void'] } }, order:[['expenseDate','DESC'],['id','DESC']], limit:500 }).catch(() => []);
     const totalExpenses = expenses.reduce((a,x) => a + Number(x.amount || 0), 0);
-    res.json({ success:true, data:{ schoolCode, filters:{ year:year || null, term:term || null }, totals:{ expected, paid, credits, outstanding, collectionPercentage:expected ? Math.round((paid / expected) * 10000) / 100 : 0, defaulterCount:defaulters.length, pendingVerification, totalExpenses, netCollected:paid - totalExpenses, todayCollections:sumSince(day), weekCollections:sumSince(week), monthCollections:sumSince(month) }, defaulters:defaulters.sort((a,b) => b.balance - a.balance), recentPayments:payments.slice(0,20).map(p => ({ id:p.id, studentId:p.studentId, amount:Number(p.amount || 0), status:p.status, method:p.method || p.paymentGateway, reference:p.reference || p.mpesaReceiptNumber, paymentDate:p.paymentDate || p.transactionDate || p.createdAt, payerPhone:p.payerPhone })), recentExpenses:expenses.slice(0,20), permissions:effectivePermissions(req.user), financeTitle:financeTitle(req.user) } });
+    res.json({ success:true, data:{ schoolCode, filters:{ year:year || null, term:term || null }, totals:{ expected, paid, credits, outstanding, collectionPercentage:expected ? Math.round((paid / expected) * 10000) / 100 : 0, defaulterCount:defaulters.length, pendingVerification, quarantinedRecords:payments.filter(p=>!p.integrityValid).length, totalExpenses, netCollected:paid - totalExpenses, todayCollections:sumSince(day), weekCollections:sumSince(week), monthCollections:sumSince(month) }, defaulters:defaulters.sort((a,b) => b.balance - a.balance), recentPayments:validPayments.slice(0,20).map(p => ({ id:p.id, studentId:p.studentId, amount:Number(p.amount || 0), status:p.status, method:p.method || p.paymentGateway, reference:p.reference || p.mpesaReceiptNumber, paymentDate:p.paymentDate || p.transactionDate || p.createdAt, payerPhone:p.payerPhone })), recentExpenses:expenses.slice(0,20), permissions:effectivePermissions(req.user), financeTitle:financeTitle(req.user) } });
   } catch (error) { res.status(error.status || 500).json({ success:false, message:error.message }); }
 };
 
@@ -166,7 +178,18 @@ exports.getAnalytics = async (req, res) => {
     const byClass = {}; const byMethod = {}; const expenseByCategory = {}; const trend = {};
     let expected = 0, paid = 0, credits = 0, outstanding = 0;
     for (const fee of fees) { const m = feeMoney(fee); const cls = fee.Student?.Class?.name || fee.Student?.grade || 'Unassigned'; expected += m.total; paid += m.paid; credits += m.credit; outstanding += m.balance; byClass[cls] = byClass[cls] || { className:cls, expected:0, paid:0, credits:0, outstanding:0, count:0 }; byClass[cls].expected += m.total; byClass[cls].paid += m.paid; byClass[cls].credits += m.credit; byClass[cls].outstanding += m.balance; byClass[cls].count += 1; }
-    const payments = await Payment.findAll({ where:{ schoolCode }, limit:1000, order:[['createdAt','DESC']] }).catch(() => []);
+    const rawPayments = await Payment.findAll({
+      where:{ schoolCode, paymentType:{ [Op.in]:['fee','school_fee'] }, paidTo:'school' },
+      include:[{ model:Fee, required:false }],
+      limit:1000,
+      order:[['createdAt','DESC']]
+    }).catch(() => []);
+    const payments = rawPayments.map(financeLedger.decoratePayment).filter(p =>
+      p.integrityValid &&
+      completedPayment(p) &&
+      (!year || Number(p.Fee?.year) === Number(year)) &&
+      (!term || String(p.Fee?.term) === String(term))
+    );
     for (const p of payments) { const method = p.method || p.paymentGateway || 'manual'; byMethod[method] = (byMethod[method] || 0) + Number(p.amount || 0); const d = String(p.paymentDate || p.transactionDate || p.createdAt || '').slice(0,10); if (d) trend[d] = (trend[d] || 0) + Number(p.amount || 0); }
     for (const e of expenses) expenseByCategory[e.category || 'Other'] = (expenseByCategory[e.category || 'Other'] || 0) + Number(e.amount || 0);
     const totalExpenses = expenses.reduce((a,x) => a + Number(x.amount || 0), 0);

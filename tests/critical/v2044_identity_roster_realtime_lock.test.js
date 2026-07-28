@@ -14,7 +14,8 @@ test('v2044 student dashboard returns and renders canonical identity', () => {
   const ui = readFront('js/student-dashboard-extended.js');
   assert.match(controller, /elimuid:\s*student\.elimuid/);
   assert.match(controller, /resolveStudentClass\(student,\s*req\.user\.schoolCode\)/);
-  assert.match(auth, /studentProfile\.elimuid/);
+  assert.match(auth, /userData\.elimuid = profile\.elimuid/);
+  assert.match(auth, /userData\.studentId = profile\.id/);
   assert.doesNotMatch(ui, /\|\|\s*'ELI-2024-001'/);
 });
 

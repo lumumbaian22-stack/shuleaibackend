@@ -21,6 +21,7 @@ const realtime = require('../services/realtimeService');
 const moment = require('moment');
 const { Op } = require('sequelize');
 const schoolLinkageService = require('../services/schoolLinkageService');
+const parentOwnership = require('../services/parentOwnershipService');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
@@ -302,7 +303,8 @@ function findActiveTimetable(schoolId, query = {}) {
 function resolveClassForStudent(student, classes) {
   if (!student || !classes) return null;
   const g = norm(student.grade || student.className || student.currentClass);
-  return classes.find(c => String(c.id) === String(student.classId)) || classes.find(c => sameText(c.name, g) || sameText(c.grade, g) || norm(c.name).includes(g) || g.includes(norm(c.name)));
+  return classes.find(c => String(c.id) === String(student.classId)) ||
+    classes.find(c => sameText(c.name, g));
 }
 function findClassBlock(tt, cls) {
   if (!tt || !cls) return null;
@@ -341,7 +343,10 @@ function classBlockFromGlobalSlots(tt, cls) {
   tt.slots.forEach(dayBlock => {
     const day = normalizeDay(dayBlock.day);
     (dayBlock.periods || []).forEach((period, pi) => {
-      const matches = (period.classes || []).filter(l => String(l.classId ?? '') === String(cls.id) || sameText(l.className, cls.name) || sameText(l.grade, cls.grade));
+      const matches = (period.classes || []).filter(l =>
+        String(l.classId ?? '') === String(cls.id) ||
+        (!l.classId && sameText(l.className, cls.name))
+      );
       if (!matches.length) return;
       const d = block.timetable.find(x => x.day === day);
       if (!d || !d.periods[pi]) return;
@@ -750,7 +755,7 @@ exports.getForClass = async (req, res) => { try {
   const found = findUsableClassBlock(tt, cls);
   const data = found ? filterClassTimetable(found) : [];
   res.json({ success: true, data, meta: { term: tt.term, year: tt.year, scope: tt.scope, published: !!tt.isPublished, classInfo: found || cls || null, lessonCount: countLessonsFromSlots(data) } });
-} catch (error) { res.status(500).json({ success: false, message: error.message }); } };
+} catch (error) { res.status(error.status || 500).json({ success: false, message: error.message }); } };
 exports.getForTeacher = async (req,res)=>{ try{
   let teacher;
   if(req.user.role==='teacher') teacher=await Teacher.findOne({where:{userId:req.user.id},include:[{model:User,where:{schoolCode:req.user.schoolCode},required:true,attributes:['id','name','schoolCode']}]});
@@ -804,10 +809,11 @@ exports.getForParentChild = async (req, res) => { try {
   const parent = await Parent.findOne({ where: { userId: req.user.id } }); if (!parent) return res.status(404).json({ success: false, message: 'Parent profile not found' });
   const student = await Student.unscoped().findOne({ where: { id: req.params.studentId }, include: [{ model: User, attributes: ['id', 'name', 'email', 'phone', 'schoolCode'] }] });
   if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
-  if (parent.hasStudent) { const ok = await parent.hasStudent(student); if (!ok) return res.status(403).json({ success: false, message: 'Child not linked to this parent' }); }
+  await parentOwnership.assertParentOwnsStudent({ parentUserId: req.user.id, studentId: student.id, schoolCode: req.user.schoolCode });
   const schoolId = student.User?.schoolCode || req.user.schoolCode;
+  if (String(schoolId) !== String(req.user.schoolCode)) return res.status(403).json({ success: false, message: 'Child is outside your school account' });
   const classes = await Class.findAll({ where: { schoolCode: schoolId, [Op.or]: [{ isActive: true }, { isActive: null }] } }); const cls = await schoolLinkageService.resolveStudentClass(student, schoolId) || resolveClassForStudent(student, classes);
   const tt = await findActiveTimetable(schoolId, req.query);
   const block = findUsableClassBlock(tt, cls); const slots = enrichTimetableSlots(block ? filterClassTimetable(block) : []); const status = timetableStatusPayload(slots);
   res.json({ success: true, data: { child: student, classInfo: cls, timetable: slots, updates: studyUpdates(slots), todayLessons:status.todayLessons, currentLesson:status.currentLesson, nextLesson:status.nextLesson, term: tt?.term, year: tt?.year, scope: tt?.scope, published: !!tt?.isPublished, premiumStatusPreview: true } });
-} catch (error) { res.status(500).json({ success: false, message: error.message }); } };
+} catch (error) { res.status(error.status || 500).json({ success: false, message: error.message }); } };

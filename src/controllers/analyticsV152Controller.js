@@ -4,6 +4,8 @@ const { sequelize, School, Student, Parent, Teacher, User } = require('../models
 const linkage = require('../services/schoolLinkageService');
 const { getAlertsForUser } = require('../services/alertReceiverEngine');
 const curriculumHelper = require('../utils/curriculumHelper');
+const financeLedger = require('../services/financeLedgerService');
+const { getStudentGamificationSummary } = require('../services/studentGamificationService');
 
 const { QueryTypes } = require('sequelize');
 
@@ -49,7 +51,18 @@ function analyticsFinanceAlertOnly(alert) {
 }
 function alertInsightRow(alert) {
   const row = alert?.toJSON ? alert.toJSON() : (alert || {});
-  return insight(row.title || 'School alert', row.message || '', row.severity || 'info', new Date(row.createdAt || Date.now()).toLocaleString(), row.type || 'info');
+  const rawType = text(row.type, 'info').toLowerCase();
+  const icon = {
+    attendance: 'calendar-check',
+    message: 'message-circle',
+    homework: 'clipboard-check',
+    fee: 'receipt',
+    payment: 'wallet',
+    report: 'file-text',
+    timetable: 'calendar-days',
+    announcement: 'megaphone'
+  }[rawType] || 'info';
+  return insight(row.title || 'School alert', row.message || '', row.severity || 'info', new Date(row.createdAt || Date.now()).toLocaleString(), icon);
 }
 function uniqueNumbers(values = []) { return [...new Set(values.map(Number).filter(Boolean))]; }
 function average(values = []) { const valid = values.map(Number).filter(Number.isFinite); return valid.length ? round(valid.reduce((a, b) => a + b, 0) / valid.length, 1) : 0; }
@@ -285,7 +298,26 @@ async function paymentRows(scope, filters) {
   if (scope.studentIds.length) { where.push('(p."studentId" IN (:studentIds) OR p."feeId" IN (SELECT id FROM "Fees" WHERE "studentId" IN (:studentIds) AND "schoolCode"=:schoolCode))'); replacements.studentIds = scope.studentIds; }
   if (filters.dateFrom) { where.push('COALESCE(p."paymentDate",p."transactionDate",p."createdAt")::date>=:dateFrom'); replacements.dateFrom = filters.dateFrom; }
   if (filters.dateTo) { where.push('COALESCE(p."paymentDate",p."transactionDate",p."createdAt")::date<=:dateTo'); replacements.dateTo = filters.dateTo; }
-  return safeQuery(`SELECT p.* FROM "Payments" p WHERE ${where.join(' AND ')} ORDER BY COALESCE(p."paymentDate",p."transactionDate",p."createdAt") ASC`, replacements);
+  const rows = await safeQuery(`
+    SELECT p.*,
+           f.id AS "invoiceId",
+           f."studentId" AS "invoiceStudentId",
+           f."schoolCode" AS "invoiceSchoolCode",
+           f."totalAmount" AS "invoiceTotalAmount"
+      FROM "Payments" p
+      LEFT JOIN "Fees" f ON f.id = p."feeId"
+     WHERE ${where.join(' AND ')}
+     ORDER BY COALESCE(p."paymentDate",p."transactionDate",p."createdAt") ASC
+  `, replacements);
+  return rows.filter(row => financeLedger.classifyPaymentIntegrity({
+    ...row,
+    Fee: row.invoiceId ? {
+      id: row.invoiceId,
+      studentId: row.invoiceStudentId,
+      schoolCode: row.invoiceSchoolCode,
+      totalAmount: row.invoiceTotalAmount
+    } : null
+  }).integrityValid);
 }
 function attendanceRate(rows) { const valid = rows.filter(r => text(r.status).toLowerCase() !== 'holiday'); const present = valid.filter(r => ['present', 'late'].includes(text(r.status).toLowerCase())).length; return pct(present, valid.length); }
 function groupAverage(rows, keyFn, valueFn = r => r.score) {
@@ -314,10 +346,30 @@ function feeSummary(rows) {
   return { expected: round(expected), paid: round(paid), credits: round(credits), outstanding: round(outstanding), collectionRate: pct(paid + credits, expected) };
 }
 function taskSummary(rows) {
-  const completed = rows.filter(r => ['completed', 'submitted', 'reviewed'].includes(text(r.status).toLowerCase())).length;
-  const overdue = rows.filter(r => r.dueDate && new Date(r.dueDate) < new Date() && !['completed', 'submitted', 'reviewed'].includes(text(r.status).toLowerCase())).length;
+  const terminal = ['completed', 'submitted', 'graded', 'reviewed'];
+  const completed = rows.filter(r => terminal.includes(text(r.status).toLowerCase())).length;
+  const overdue = rows.filter(r => r.dueDate && new Date(r.dueDate) < new Date() && !terminal.includes(text(r.status).toLowerCase())).length;
   const pending = Math.max(0, rows.length - completed - overdue);
   return { total: rows.length, completed, pending, overdue, rate: pct(completed, rows.length) };
+}
+
+function exactStudentTimetableSlots(rawSlots, cls, fallbackClassName = '') {
+  if (!cls?.id) return [];
+  const expectedId = String(cls.id);
+  const expectedName = text(cls.name || fallbackClassName).toLowerCase();
+  const days = Array.isArray(rawSlots) ? rawSlots : [];
+  return days.map(day => {
+    const periods = (Array.isArray(day?.periods) ? day.periods : []).map(period => {
+      const classes = (Array.isArray(period?.classes) ? period.classes : []).filter(lesson => {
+        if (lesson?.classId !== undefined && lesson?.classId !== null && lesson?.classId !== '') {
+          return String(lesson.classId) === expectedId;
+        }
+        return expectedName && text(lesson?.className || lesson?.class).toLowerCase() === expectedName;
+      });
+      return { ...period, classes };
+    }).filter(period => period.break || period.classes.length);
+    return { ...day, periods };
+  }).filter(day => day.periods.length).slice(0, 12);
 }
 function attendanceHeatmap(rows) {
   const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
@@ -541,11 +593,12 @@ async function buildChildStudentAnalytics(req) {
   const role = text(req.user.role).toLowerCase();
   const filters = filtersFrom(req);
   let student;
+  let linkedStudents = [];
   if (role === 'student') student = await Student.findOne({ where: { userId: req.user.id }, include: [{ model: User }] }).catch(() => null);
   else {
     const parent = await Parent.findOne({ where: { userId: req.user.id } }).catch(() => null);
-    const linked = parent ? await linkage.resolveParentLinkedStudents(req.user.id, req.user.schoolCode).catch(() => []) : [];
-    student = linked.find(s => Number(s.id) === Number(req.query.childId || req.body?.childId || (filters.scopeType === 'student' ? filters.scopeId : null))) || linked[0];
+    linkedStudents = parent ? await linkage.resolveParentLinkedStudents(req.user.id, req.user.schoolCode).catch(() => []) : [];
+    student = linkedStudents.find(s => Number(s.id) === Number(req.query.childId || req.body?.childId || (filters.scopeType === 'student' ? filters.scopeId : null))) || linkedStudents[0];
   }
   if (!student) throw Object.assign(new Error('Student not found in your authorized account.'), { status: 404 });
   const schoolCode = student.User?.schoolCode || req.user.schoolCode;
@@ -554,11 +607,10 @@ async function buildChildStudentAnalytics(req) {
   const [school, options] = await Promise.all([getSchool(schoolCode), getSchoolOptions(schoolCode)]);
   const scope = { schoolCode, studentIds: [Number(student.id)], classIds: cls ? [Number(cls.id)] : [], scopeType: 'student', scopeId: String(student.id), label: student.User?.name || 'Student', subject: filters.scopeType === 'subject' ? filters.scopeId : null, teacherId: null };
   const academicContext = resolveCurriculumContext(school, { classIds: cls?.id ? [cls.id] : [], studentIds: [student.id] }, options);
-  const [records, attendance, tasks, reports, badges, achievements, alerts, timetableRows] = await Promise.all([
+  const [records, attendance, tasks, reports, gamification, alerts, timetableRows] = await Promise.all([
     academicRecords(scope, filters, true), attendanceRecords(scope, filters), taskRows(scope), reportRows(scope, filters),
-    safeQuery(`SELECT sb."awardedAt", b.name, b.description, b.icon FROM "StudentBadges" sb JOIN "Badges" b ON b.id=sb."badgeId" WHERE sb."studentId"=:studentId ORDER BY sb."awardedAt" DESC`, { studentId: student.id }),
-    safeQuery(`SELECT title,note,points,"streakDelta","createdAt" FROM "AchievementEvents" WHERE "schoolCode"=:schoolCode AND ("studentId"=:studentId OR "userId"=:userId) ORDER BY "createdAt" DESC LIMIT 20`, { schoolCode, studentId: student.id, userId: student.userId }),
-    getAlertsForUser(req.user, { studentId: student.id, limit: 10 }).catch(() => []),
+    getStudentGamificationSummary(student, schoolCode).catch(() => ({ summary: { totalPoints: num(student.points), earnedBadges: 0 }, badges: [], recentEvents: [], actions: [] })),
+    getAlertsForUser(req.user, role === 'parent' ? { studentId: student.id, limit: 10 } : { limit: 10 }).catch(() => []),
     safeQuery(`SELECT slots,classes,term,year,"publishedAt" FROM "Timetables" WHERE "schoolId"=:schoolCode AND "isPublished"=true AND (:term::text IS NULL OR term=:term) AND (:year::int IS NULL OR year=:year) ORDER BY version DESC LIMIT 1`, { schoolCode, term: filters.term, year: filters.year })
   ]);
   const subjectPerf = groupAverage(records, r => r.subject);
@@ -567,21 +619,30 @@ async function buildChildStudentAnalytics(req) {
   const classStudents = cls ? await linkage.resolveClassStudents([cls.id], schoolCode, { limit: 5000 }).catch(() => []) : [];
   const classIds = classStudents.map(s => Number(s.id));
   const classRecords = classIds.length ? await academicRecords({ ...scope, studentIds: classIds, subject: null }, filters, true) : [];
-  const leaderboard = classStudents.map(s => ({ id:s.id, name:s.User?.name || `Student ${s.id}`, average:average(classRecords.filter(r=>Number(r.studentId)===Number(s.id)).map(r=>r.score)) })).sort((a,b)=>b.average-a.average).slice(0,10);
-  const rank = leaderboard.findIndex(x=>Number(x.id)===Number(student.id));
+  const fullLeaderboard = classStudents.map(s => ({ id:s.id, name:s.User?.name || `Student ${s.id}`, elimuid:s.elimuid || '', average:average(classRecords.filter(r=>Number(r.studentId)===Number(s.id)).map(r=>r.score)) })).sort((a,b)=>b.average-a.average);
+  const rank = fullLeaderboard.findIndex(x=>Number(x.id)===Number(student.id));
+  const leaderboard = fullLeaderboard.slice(0,10);
   const timetable = timetableRows[0];
   const rawSlots = Array.isArray(timetable?.slots) ? timetable.slots : [];
   const className = cls?.name || student.grade;
-  const slots = rawSlots.filter(slot => Number(slot.classId) === Number(cls?.id) || text(slot.className || slot.class).toLowerCase() === text(className).toLowerCase()).slice(0,12);
+  const slots = exactStudentTimetableSlots(rawSlots, cls, className);
   const lastReport = [...reports].filter(r=>r.status==='published').sort((a,b)=>new Date(b.publishedAt||0)-new Date(a.publishedAt||0))[0] || null;
   const avg = average(records.map(r=>r.score));
+  const badges = gamification.badges || [];
+  const achievements = gamification.recentEvents || [];
+  const rewardPoints = num(gamification.summary?.totalPoints, num(student.points));
+  const earnedBadges = num(gamification.summary?.earnedBadges, badges.filter(row => row.earned).length);
   const response = {
     variant: role === 'parent' ? 'child' : 'student', title: role === 'parent' ? 'Child Progress Analytics' : 'My Analytics', subtitle: role === 'parent' ? "Monitor your child's learning progress, attendance and wellbeing" : 'Your learning insights. Track your progress and keep improving every day.', filters, scope:{type:'student',id:String(student.id),label:student.User?.name||'Student'}, academicContext,
     student:{id:student.id,name:student.User?.name,elimuid:student.elimuid,grade:student.grade,className,photo:student.User?.profileImage||student.User?.profilePicture},
-    options:{ children: role==='parent' ? (await linkage.resolveParentLinkedStudents(req.user.id, schoolCode).catch(()=>[])).map(s=>({id:s.id,name:s.User?.name||`Student ${s.id}`})) : [], subjects:subjectPerf.map(s=>({id:s.name,name:s.name})) },
-    kpis:[kpi('Average Score',`${avg}%`,'star','purple'),kpi('Attendance',`${attendanceRate(attendance)}%`,'calendar-check','teal'),kpi('Homework Completion',`${task.rate}%`,'clipboard-check','blue'),kpi('Badges Earned',badges.length,'award','orange'),kpi('Progress Score',`${round((avg+attendanceRate(attendance)+task.rate)/3)} / 100`,'gauge','green'),kpi(role==='parent'?'Active Alerts':'Class Rank',role==='parent'?alerts.length:(rank>=0?`${rank+1} / ${classStudents.length}`:'—'),role==='parent'?'bell':'bar-chart-2','red')],
+    options:{
+      children: role==='parent' ? linkedStudents.map(s=>({id:s.id,name:s.User?.name||`Student ${s.id}`,elimuid:s.elimuid||''})) : [],
+      students: [{ id:student.id, name:student.User?.name||`Student ${student.id}`, elimuid:student.elimuid||'', classId:cls?.id||student.classId||null, className }],
+      subjects:subjectPerf.map(s=>({id:s.name,name:s.name}))
+    },
+    kpis:[kpi('Average Score',`${avg}%`,'star','purple'),kpi('Attendance',`${attendanceRate(attendance)}%`,'calendar-check','teal'),kpi('Homework Completion',`${task.rate}%`,'clipboard-check','blue'),kpi('Badges Earned',earnedBadges,'award','orange'),kpi('Reward Points',rewardPoints,'gem','green'),kpi(role==='parent'?'Active Alerts':'Class Rank',role==='parent'?alerts.length:(rank>=0?`${rank+1} / ${classStudents.length}`:'—'),role==='parent'?'bell':'bar-chart-2','red')],
     charts:{ performanceTrend:{labels:subjectPerf.map(s=>s.name),values:subjectPerf.map(s=>s.average)}, attendanceTrend:monthlyTrend(attendance,'date',()=>1,'attendance'), strengthsSplit:{labels:['Strengths','Needs Support'],values:[subjectPerf.filter(s=>s.average>=70).length,subjectPerf.filter(s=>s.average>0&&s.average<60).length]}, homeworkSplit:{labels:['Completed','Pending','Overdue'],values:[task.completed,task.pending,task.overdue]} },
-    lists:{ subjectPerformance:subjectPerf,recentAssessments,badges,achievements,leaderboard,tasks:tasks.slice(0,10).map(t=>({title:t.title,subject:t.subject,status:t.status,dueDate:t.dueDate})),timetable:slots,recentAlerts:alerts.map(alertInsightRow),recommendations:[...subjectPerf.filter(s=>s.average>0&&s.average<60).slice(0,3).map(s=>insight(`Focus on ${s.name}`,`Current average is ${s.average}%. Review recent assessments and practise this subject.`,'warning','', 'book-open')),...subjectPerf.filter(s=>s.average>=80).slice(0,2).map(s=>insight(`Strong performance in ${s.name}`,`Current average is ${s.average}%. Keep building on this strength.`,'success','', 'trending-up'))],reportSummary:lastReport?{status:lastReport.status,term:lastReport.term,year:lastReport.year,version:lastReport.version,publishedAt:lastReport.publishedAt,average:avg,grade:gradeForScore(avg, academicContext)}:null,learningStreak:consecutiveAttendanceStreak(attendance) },
+    lists:{ subjectPerformance:subjectPerf,recentAssessments,badges,achievements,leaderboard,tasks:tasks.slice(0,10).map(t=>({title:t.title,subject:t.subject,status:t.status,dueDate:t.dueDate})),timetable:slots,recentAlerts:alerts.map(alertInsightRow),recommendations:[...gamification.actions.map(action=>insight('Next reward milestone',action,'info','Updated now','target')),...subjectPerf.filter(s=>s.average>0&&s.average<60).slice(0,3).map(s=>insight(`Focus on ${s.name}`,`Current average is ${s.average}%. Review recent assessments and practise this subject.`,'warning','', 'book-open')),...subjectPerf.filter(s=>s.average>=80).slice(0,2).map(s=>insight(`Strong performance in ${s.name}`,`Current average is ${s.average}%. Keep building on this strength.`,'success','', 'trending-up'))],reportSummary:lastReport?{status:lastReport.status,term:lastReport.term,year:lastReport.year,version:lastReport.version,publishedAt:lastReport.publishedAt,average:avg,grade:gradeForScore(avg, academicContext)}:null,learningStreak:consecutiveAttendanceStreak(attendance) },
     taskSummary:task,updatedAt:new Date().toISOString(),realData:true,tenantScoped:schoolCode
   };
   response.exportSections = exportSectionsFor(response);
@@ -854,7 +915,7 @@ function htmlEscape(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;',
 function buildPrintHtml(data, sections){
   const kpiCards=(data.kpis||[]).slice(0,8).map(k=>`<article><small>${htmlEscape(k.label)}</small><strong>${htmlEscape(k.value)}</strong><em>${htmlEscape(k.hint||'')}</em></article>`).join('');
   const intel=data.intelligence||{};
-  const intelHtml=`<section class="intel"><h2>Executive School Intelligence</h2><div class="score"><strong>${htmlEscape(intel.healthScore||'—')}<small>/100</small></strong><span>${htmlEscape(intel.status||'Current status')}</span></div><div class="intel-grid"><p><b>Strongest area</b>${htmlEscape(intel.strongestArea||'—')}</p><p><b>Main concern</b>${htmlEscape(intel.mainConcern||'—')}</p><p><b>Trend</b>${htmlEscape(intel.trend||'—')}</p><p><b>Top action</b>${htmlEscape(intel.topAction||'—')}</p></div></section>`;
+  const intelHtml=data.showIntelligencePanel?`<section class="intel"><h2>Executive School Intelligence</h2><div class="score"><strong>${htmlEscape(intel.healthScore||'—')}<small>/100</small></strong><span>${htmlEscape(intel.status||'Current status')}</span></div><div class="intel-grid"><p><b>Strongest area</b>${htmlEscape(intel.strongestArea||'—')}</p><p><b>Main concern</b>${htmlEscape(intel.mainConcern||'—')}</p><p><b>Trend</b>${htmlEscape(intel.trend||'—')}</p><p><b>Top action</b>${htmlEscape(intel.topAction||'—')}</p></div></section>`:'';
   const blocks=sections.filter(key=>key!=='kpis').map(key=>{const rows=normalizeRows(rowsForSection(data,key));const display=rows.length?rows:[{Status:'No data available'}];const cols=rowColumns(display);return `<section><h2>${htmlEscape(humanSection(key))}</h2><table><thead><tr>${cols.map(c=>`<th>${htmlEscape(c)}</th>`).join('')}</tr></thead><tbody>${display.slice(0,80).map(r=>`<tr>${cols.map(c=>`<td>${htmlEscape(typeof r[c]==='object'?JSON.stringify(r[c]):r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></section>`;}).join('');
   return `<!doctype html><html><head><meta charset="utf-8"><title>${htmlEscape(data.title||'Analytics Report')}</title><style>body{font-family:Inter,Arial,sans-serif;color:#0f172a;margin:0;background:#f8fafc}header{background:linear-gradient(135deg,#083A85,#11B5B1);color:white;padding:32px 42px}h1{margin:0;font-size:28px}header p{margin:8px 0 0;opacity:.9}.meta{font-size:12px;margin-top:12px;opacity:.86}.wrap{padding:28px 42px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}.kpis article,.intel,section{background:white;border:1px solid #dbe4ee;border-radius:14px;padding:14px;box-shadow:0 8px 24px rgba(15,23,42,.06)}.kpis small{display:block;color:#64748b;font-weight:800}.kpis strong{display:block;margin-top:5px;font-size:20px;color:#083A85}.kpis em{display:block;margin-top:4px;font-style:normal;color:#11B5B1;font-size:11px}.intel{margin:0 0 20px}.score{display:flex;align-items:end;gap:12px}.score strong{font-size:42px;color:#083A85}.score small{font-size:16px;color:#64748b}.score span{font-weight:900;color:#11B5B1}.intel-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px}.intel-grid p{border-left:4px solid #11B5B1;background:#f8fafc;padding:10px;margin:0}.intel-grid b{display:block;color:#083A85}section{margin:18px 0;page-break-inside:avoid}h2{margin:0 0 12px;color:#083A85;font-size:18px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #dbe4ee;padding:8px;text-align:left;vertical-align:top}th{background:#083A85;color:white}button{position:fixed;right:24px;bottom:24px;border:0;background:#11B5B1;color:white;border-radius:999px;padding:12px 18px;font-weight:800}@media print{button{display:none}body{background:white}.wrap{padding:18px}.kpis{grid-template-columns:repeat(2,1fr)}}@media(max-width:800px){.kpis,.intel-grid{grid-template-columns:1fr}}</style></head><body><header><h1>${htmlEscape(data.title||'Analytics Report')}</h1><p>${htmlEscape(data.subtitle||'')}</p><div class="meta">Scope: ${htmlEscape(data.scope?.label||data.tenantScoped||'Current scope')} · Generated ${new Date().toLocaleString()} · Year: ${htmlEscape(data.filters?.year||'All')} · Term: ${htmlEscape(data.filters?.term||'All')}</div></header><main class="wrap"><div class="kpis">${kpiCards}</div>${intelHtml}${blocks}</main><button onclick="window.print()">Print report</button></body></html>`;
 }
@@ -888,9 +949,11 @@ function pdfInsightBox(doc, label, value, x, y, w, tone='#11B5B1') { doc.rounded
 function buildPdf(data,sections){return new Promise((resolve,reject)=>{const doc=new PDFDocument({size:'A4',margin:50,bufferPages:true});const chunks=[];doc.on('data',c=>chunks.push(c));doc.on('end',()=>resolve(Buffer.concat(chunks)));doc.on('error',reject);
   const intel=data.intelligence||{};
   doc.rect(0,0,595,126).fill('#083A85');doc.fillColor('#FFFFFF').fontSize(24).text(data.title||'Analytics Report',50,30,{width:495});doc.fontSize(10).text(`${data.subtitle||''}\nScope: ${data.scope?.label||data.tenantScoped||''}`,50,66,{width:495});doc.fillColor('#0F172A').fontSize(9).text(`Generated: ${new Date().toLocaleString()} | Year: ${data.filters?.year||'All'} | Term: ${data.filters?.term||'All'}`,50,142);doc.y=166;
-  doc.fontSize(16).fillColor('#083A85').text('Executive School Intelligence');doc.moveDown(.4);
-  const y0=doc.y;pdfInsightBox(doc,'School Health Score',`${intel.healthScore||'—'} / 100`,50,y0,118,'#083A85');pdfInsightBox(doc,'Status',intel.status||'—',178,y0,118,'#11B5B1');pdfInsightBox(doc,'Trend',intel.trend||'—',306,y0,118,'#2F80ED');pdfInsightBox(doc,'Confidence',intel.confidence||'—',434,y0,118,'#F59E0B');doc.y=y0+78;
-  [['Strongest Area',intel.strongestArea],['Main Concern',intel.mainConcern],['Recommended Action',intel.topAction]].forEach(([label,value])=>{ensurePdfSpace(doc,40);doc.fillColor('#083A85').fontSize(10).text(label,{continued:false});doc.fillColor('#0F172A').fontSize(9).text(String(value||'—'),{width:495});doc.moveDown(.35);});
+  if(data.showIntelligencePanel){
+    doc.fontSize(16).fillColor('#083A85').text('Executive School Intelligence');doc.moveDown(.4);
+    const y0=doc.y;pdfInsightBox(doc,'School Health Score',`${intel.healthScore||'—'} / 100`,50,y0,118,'#083A85');pdfInsightBox(doc,'Status',intel.status||'—',178,y0,118,'#11B5B1');pdfInsightBox(doc,'Trend',intel.trend||'—',306,y0,118,'#2F80ED');pdfInsightBox(doc,'Confidence',intel.confidence||'—',434,y0,118,'#F59E0B');doc.y=y0+78;
+    [['Strongest Area',intel.strongestArea],['Main Concern',intel.mainConcern],['Recommended Action',intel.topAction]].forEach(([label,value])=>{ensurePdfSpace(doc,40);doc.fillColor('#083A85').fontSize(10).text(label,{continued:false});doc.fillColor('#0F172A').fontSize(9).text(String(value||'—'),{width:495});doc.moveDown(.35);});
+  }
   const kpis=(data.kpis||[]).slice(0,6);if(kpis.length){ensurePdfSpace(doc,95);doc.fontSize(14).fillColor('#083A85').text('KPI Summary');doc.moveDown(.4);let x=50,y=doc.y;kpis.forEach((k,i)=>{if(i&&i%3===0){x=50;y+=56;}doc.roundedRect(x,y,160,44,8).fill('#F8FAFC').stroke('#DBE4EE');doc.fillColor('#64748B').fontSize(7).text(k.label,x+10,y+8,{width:140});doc.fillColor('#083A85').fontSize(12).text(String(k.value),x+10,y+22,{width:140});x+=170;});doc.y=y+62;}
   const ordered=[...new Set(['list:dataQualityWarnings','list:recommendedActions',...sections.filter(k=>k!=='kpis')])];
   ordered.forEach(key=>pdfTable(doc,humanSection(key),rowsForSection(data,key),{maxRows:key.includes('Warnings')||key.includes('Actions')?12:35}));
