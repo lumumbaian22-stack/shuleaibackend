@@ -1,6 +1,6 @@
 {
-  "build": "2043-full-system-completion-lock",
-  "count": 619,
+  "build": "2044-canonical-identity-roster-lock",
+  "count": 628,
   "routes": [
     {
       "file": "adminRoutes.js",
@@ -1679,35 +1679,35 @@
       "file": "jobRoutes.js",
       "method": "POST",
       "localPath": "/csv-import",
-      "line": 42,
+      "line": 8,
       "path": "/api/jobs/csv-import"
     },
     {
       "file": "jobRoutes.js",
       "method": "POST",
       "localPath": "/marks-import",
-      "line": 52,
+      "line": 13,
       "path": "/api/jobs/marks-import"
     },
     {
       "file": "jobRoutes.js",
       "method": "POST",
       "localPath": "/report-cards",
-      "line": 62,
+      "line": 18,
       "path": "/api/jobs/report-cards"
     },
     {
       "file": "jobRoutes.js",
       "method": "GET",
       "localPath": "/",
-      "line": 75,
+      "line": 23,
       "path": "/api/jobs"
     },
     {
       "file": "jobRoutes.js",
       "method": "GET",
       "localPath": "/:jobId",
-      "line": 85,
+      "line": 28,
       "path": "/api/jobs/:value"
     },
     {
@@ -1965,141 +1965,204 @@
     {
       "file": "nationalRolloutRoutes.js",
       "method": "POST",
-      "localPath": "/admin/teachers/:teacherId/activate",
+      "localPath": "/payments/parent/fee/stk",
+      "line": 22,
+      "path": "/api/payments/parent/fee/stk"
+    },
+    {
+      "file": "nationalRolloutRoutes.js",
+      "method": "POST",
+      "localPath": "/payments/parent/subscription/stk",
       "line": 23,
+      "path": "/api/payments/parent/subscription/stk"
+    },
+    {
+      "file": "nationalRolloutRoutes.js",
+      "method": "POST",
+      "localPath": "/payments/admin/name-change/stk",
+      "line": 24,
+      "path": "/api/payments/admin/name-change/stk"
+    },
+    {
+      "file": "nationalRolloutRoutes.js",
+      "method": "POST",
+      "localPath": "/payments/platform/stk",
+      "line": 25,
+      "path": "/api/payments/platform/stk"
+    },
+    {
+      "file": "nationalRolloutRoutes.js",
+      "method": "POST",
+      "localPath": "/parent/pay",
+      "line": 26,
+      "path": "/api/parent/pay"
+    },
+    {
+      "file": "nationalRolloutRoutes.js",
+      "method": "POST",
+      "localPath": "/parent/upgrade-plan",
+      "line": 27,
+      "path": "/api/parent/upgrade-plan"
+    },
+    {
+      "file": "nationalRolloutRoutes.js",
+      "method": "POST",
+      "localPath": "/subscription/upgrade",
+      "line": 28,
+      "path": "/api/subscription/upgrade"
+    },
+    {
+      "file": "nationalRolloutRoutes.js",
+      "method": "POST",
+      "localPath": "/subscription/initiate-payment",
+      "line": 29,
+      "path": "/api/subscription/initiate-payment"
+    },
+    {
+      "file": "nationalRolloutRoutes.js",
+      "method": "POST",
+      "localPath": "/admin/teachers/:teacherId/activate",
+      "line": 32,
       "path": "/api/admin/teachers/:value/activate"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "POST",
       "localPath": "/admin/teachers/:teacherId/reactivate",
-      "line": 24,
+      "line": 33,
       "path": "/api/admin/teachers/:value/reactivate"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "POST",
       "localPath": "/admin/teachers/:teacherId/deactivate",
-      "line": 25,
+      "line": 34,
       "path": "/api/admin/teachers/:value/deactivate"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "POST",
       "localPath": "/admin/teachers/:teacherId/suspend",
-      "line": 26,
+      "line": 35,
       "path": "/api/admin/teachers/:value/suspend"
+    },
+    {
+      "file": "nationalRolloutRoutes.js",
+      "method": "GET",
+      "localPath": "/admin/classes/:classId/students",
+      "line": 37,
+      "path": "/api/admin/classes/:value/students"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "POST",
       "localPath": "/admin/students/:studentId/expel",
-      "line": 28,
+      "line": 38,
       "path": "/api/admin/students/:value/expel"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/parent/child/:studentId/marks",
-      "line": 33,
+      "line": 43,
       "path": "/api/parent/child/:value/marks"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/parent/child/:studentId/class-performance",
-      "line": 34,
+      "line": 44,
       "path": "/api/parent/child/:value/class-performance"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/parent/child/:studentId/subject-performance",
-      "line": 35,
+      "line": 45,
       "path": "/api/parent/child/:value/subject-performance"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/student/marks/all",
-      "line": 37,
+      "line": 47,
       "path": "/api/student/marks/all"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/student/class-performance",
-      "line": 38,
+      "line": 48,
       "path": "/api/student/class-performance"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/student/subject-performance",
-      "line": 39,
+      "line": 49,
       "path": "/api/student/subject-performance"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/student/gpa",
-      "line": 40,
+      "line": 50,
       "path": "/api/student/gpa"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/super-admin/users",
-      "line": 43,
+      "line": 53,
       "path": "/api/super-admin/users"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/super-admin/metrics",
-      "line": 44,
+      "line": 54,
       "path": "/api/super-admin/metrics"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/super-admin/logs",
-      "line": 45,
+      "line": 55,
       "path": "/api/super-admin/logs"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/super-admin/schools/:schoolId/stats",
-      "line": 46,
+      "line": 56,
       "path": "/api/super-admin/schools/:value/stats"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/super-admin/requests/history",
-      "line": 47,
+      "line": 57,
       "path": "/api/super-admin/requests/history"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/school/curriculum",
-      "line": 64,
+      "line": 61,
       "path": "/api/school/curriculum"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "POST",
       "localPath": "/teacher/students/:studentId/report-absence",
-      "line": 73,
+      "line": 70,
       "path": "/api/teacher/students/:value/report-absence"
     },
     {
       "file": "nationalRolloutRoutes.js",
       "method": "GET",
       "localPath": "/teacher/students/:studentId/parent-contact",
-      "line": 82,
+      "line": 79,
       "path": "/api/teacher/students/:value/parent-contact"
     },
     {

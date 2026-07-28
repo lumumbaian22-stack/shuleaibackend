@@ -1,6 +1,6 @@
 # V2030 Integration Check Report
 
-Build: 2042-database-truth-roster-integrity-lock
+Build: 2040-consolidated-schema-reconciler-lock
 
 - POST /api/payments/parent/initiate added for parent school-fee checkout amount flow.
 - frontend api.payments.initiateParentFee added.

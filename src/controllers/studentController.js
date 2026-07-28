@@ -141,9 +141,7 @@ exports.getDashboard = async (req, res) => {
         limit: 20
     });
 
-    const classItem = await Class.findOne({
-        where: { name: student.grade, schoolCode: req.user.schoolCode }
-    });
+    const classItem = await resolveStudentClass(student, req.user.schoolCode);
 
     // Fetch school settings for curriculum / grading
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
@@ -158,9 +156,14 @@ exports.getDashboard = async (req, res) => {
       data: {
         student: {
           ...req.user.getPublicProfile(),
+          userId: req.user.id,
           studentId: student.id,
+          id: student.id,
+          name: req.user.name,
+          elimuid: student.elimuid,
           grade: student.grade,
           classId: student.classId || classItem?.id || null,
+          className: classItem?.name || student.grade || null,
           curriculum: student.curriculum || curriculum,
           academicStatus: student.academicStatus,
           admissionNumber: student.admissionNumber,
@@ -177,7 +180,7 @@ exports.getDashboard = async (req, res) => {
         })),
         recentAttendance: attendance,
         paymentStatus: student.paymentStatus,
-        classId: classItem?.id || null,
+        classId: student.classId || classItem?.id || null,
         school: {
             name: school?.name || null,
             schoolName: school?.name || null,

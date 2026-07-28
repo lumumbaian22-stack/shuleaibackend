@@ -147,7 +147,9 @@ exports.getMyStudents = async (req, res) => {
     const classTeacherClasses = req.classTeacherClasses?.length ? req.classTeacherClasses : (assignmentState.classTeacherClasses || []);
     const classItem = classTeacherClasses[0] || null;
     const subjectAssignments = assignmentState.subjectAssignments || [];
-    const assignedClasses = await v66AssignedClassesForTeacher(teacher, req.user.schoolCode);
+    // Dashboard "My Students" represents the teacher's own class only.
+    // Subject-teaching assignments must not inflate the class-teacher roster.
+    const assignedClasses = await v66AssignedClassesForTeacher(teacher, req.user.schoolCode, { classTeacherOnly: true });
     const classScope = classItem ? classTeacherClasses : assignedClasses;
     const classNames = classScope.map(cls => cls.name);
 
@@ -819,7 +821,9 @@ exports.getTeacherStats = async (req, res) => {
     const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
     if (!teacher) return res.status(404).json({ success: false, message: 'Teacher not found' });
 
-    const assignedClasses = await v66AssignedClassesForTeacher(teacher, req.user.schoolCode);
+    // The teacher dashboard's "My Students" count must match the class-teacher
+    // roster used by the My Students/report-review screen.
+    const assignedClasses = await v66AssignedClassesForTeacher(teacher, req.user.schoolCode, { classTeacherOnly: true });
     const students = await v66CurrentStudentsForClasses(assignedClasses, req.user.schoolCode, {
       userAttributes: ['id','name','profileImage','profilePicture']
     });

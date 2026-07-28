@@ -1,11 +1,10 @@
 const { Op } = require('sequelize');
 const { resolveClassStudents, resolveStudentClass } = require('../services/schoolLinkageService');
-const { User, UserRoleAssignment, Teacher, Student, Parent, School, Alert, Class, TeacherSubjectAssignment } = require('../models');
+const { User, UserRoleAssignment, Teacher, Student, StudentEnrollment, Parent, School, Alert, Class, TeacherSubjectAssignment } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { getPagination, buildPaginatedResponse } = require('../utils/pagination');
 const cache = require('../services/cacheService');
 const { findStudentInSchool } = require('../services/studentScopeService');
-const studentProfileIntegrity = require('../services/studentProfileIntegrityService');
 
 
 // Helper for curriculum names
@@ -18,20 +17,16 @@ const getCurriculumName = (curriculum) => {
 exports.getDashboardStats = async (req, res) => {
   try {
     const schoolCode = req.user.schoolCode;
-    const integrity = await studentProfileIntegrity.reconcileSchool(schoolCode, req.user.id);
-    if (integrity.created || integrity.reactivatedClasses) cache.flushSchoolCache(schoolCode);
     const cacheKey = cache.getCacheKey(['school', schoolCode, 'admin-dashboard-stats']);
     const cached = cache.get(cacheKey);
     if (cached) return res.json({ success: true, cached: true, data: cached });
 
     const sevenDaysAgo = new Date(Date.now() - 7*24*60*60*1000);
-    const [teachers, students, parents, classes, activeClasses, inactiveClasses, pendingApprovals, recentAlerts] = await Promise.all([
+    const [teachers, students, parents, classes, pendingApprovals, recentAlerts] = await Promise.all([
       Teacher.count({ include: [{ model: User, where: { schoolCode, role: 'teacher' }, attributes: [] }] }),
       Student.count({ include: [{ model: User, where: { schoolCode, role: 'student' }, attributes: [] }] }),
       Parent.count({ include: [{ model: User, where: { schoolCode, role: 'parent' }, attributes: [] }] }),
-      Class.count({ where: { schoolCode } }),
       Class.count({ where: { schoolCode, isActive: true } }),
-      Class.count({ where: { schoolCode, isActive: false } }),
       Teacher.count({
         include: [{ model: User, where: { schoolCode, role: 'teacher' }, attributes: [] }],
         where: { approvalStatus: 'pending' }
@@ -39,7 +34,7 @@ exports.getDashboardStats = async (req, res) => {
       Alert.count({ where: { role: 'admin', createdAt: { [Op.gte]: sevenDaysAgo } } })
     ]);
 
-    const stats = { teachers, students, parents, classes, activeClasses, inactiveClasses, repairedStudentProfiles: integrity.created, pendingApprovals, recentAlerts };
+    const stats = { teachers, students, parents, classes, pendingApprovals, recentAlerts };
     cache.set(cacheKey, stats, 45);
     res.json({ success: true, cached: false, data: stats });
   } catch (error) {
@@ -138,21 +133,75 @@ exports.deleteTeacher = async (req, res) => {
 // ============ STUDENT MANAGEMENT ============
 exports.getAllStudents = async (req, res) => {
   try {
-    const integrity = await studentProfileIntegrity.reconcileSchool(req.user.schoolCode, req.user.id);
-    if (integrity.created || integrity.reactivatedClasses) cache.flushSchoolCache(req.user.schoolCode);
     const { page, limit, offset } = getPagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+    const schoolCode = req.user.schoolCode;
+    const userInclude = {
+      model: User,
+      where: { schoolCode, role: 'student' },
+      attributes: ['id','name','email','phone','profileImage','profilePicture','createdAt','isActive']
+    };
     const result = await Student.findAndCountAll({
-      include: [{
-        model: User,
-        where: { schoolCode: req.user.schoolCode },
-        attributes: ['id','name','email','phone','profileImage','profilePicture','createdAt']
-      }],
+      include: [userInclude],
       distinct: true,
       limit,
       offset,
       order: [['createdAt', 'DESC']]
     });
-    res.json({ success: true, integrity, ...buildPaginatedResponse({ rows: result.rows, count: result.count, page, limit }) });
+    const studentIds = result.rows.map(row => Number(row.id)).filter(Boolean);
+    const enrollments = studentIds.length ? await StudentEnrollment.findAll({
+      where: { schoolCode, studentId: { [Op.in]: studentIds }, status: 'active' },
+      order: [['effectiveFrom','DESC'],['id','DESC']]
+    }) : [];
+    const enrollmentByStudent = new Map();
+    for (const enrollment of enrollments) {
+      if (!enrollmentByStudent.has(Number(enrollment.studentId))) enrollmentByStudent.set(Number(enrollment.studentId), enrollment);
+    }
+    const classIds = [...new Set(enrollments.map(row => Number(row.classId)).filter(Boolean))];
+    const classes = classIds.length ? await Class.findAll({
+      where: { schoolCode, id: { [Op.in]: classIds } },
+      attributes: ['id','name','grade','stream','isActive']
+    }) : [];
+    const classById = new Map(classes.map(row => [Number(row.id), row.toJSON ? row.toJSON() : row]));
+    const rows = result.rows.map(row => {
+      const student = row.toJSON ? row.toJSON() : row;
+      const enrollment = enrollmentByStudent.get(Number(student.id));
+      const classId = Number(enrollment?.classId || student.classId) || null;
+      const currentClass = classId ? classById.get(classId) || null : null;
+      return {
+        ...student,
+        classId,
+        grade: currentClass?.name || student.grade || null,
+        activeEnrollment: enrollment ? {
+          id: enrollment.id,
+          classId,
+          academicYear: enrollment.academicYear,
+          stream: enrollment.stream,
+          effectiveFrom: enrollment.effectiveFrom,
+          status: enrollment.status
+        } : null,
+        Class: currentClass
+      };
+    });
+    const statusRows = await Student.findAll({
+      include: [userInclude],
+      attributes: ['id','status','classId','activeEnrollmentId'],
+      raw: false
+    });
+    const statusStudentIds = statusRows.map(row => Number(row.id)).filter(Boolean);
+    const activeEnrollmentStudentIds = statusStudentIds.length ? new Set((await StudentEnrollment.findAll({
+      where: { schoolCode, studentId: { [Op.in]: statusStudentIds }, status: 'active' },
+      attributes: ['studentId','classId']
+    })).filter(row => row.classId).map(row => Number(row.studentId))) : new Set();
+    const normalizedStatus = value => String(value || 'active').toLowerCase();
+    const counts = {
+      total: statusRows.length,
+      active: statusRows.filter(row => ['active',''].includes(normalizedStatus(row.status))).length,
+      inactive: statusRows.filter(row => normalizedStatus(row.status) === 'inactive').length,
+      suspended: statusRows.filter(row => normalizedStatus(row.status) === 'suspended').length,
+      graduated: statusRows.filter(row => normalizedStatus(row.status) === 'graduated').length,
+      unassigned: statusRows.filter(row => !activeEnrollmentStudentIds.has(Number(row.id))).length
+    };
+    res.json({ success: true, ...buildPaginatedResponse({ rows, count: result.count, page, limit }), counts });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -272,16 +321,30 @@ exports.getAllParents = async (req, res) => {
 // ============ CLASS MANAGEMENT ============
 exports.getClasses = async (req, res) => {
   try {
-    const status = String(req.query.status || 'all').toLowerCase();
-    const where = { schoolCode: req.user.schoolCode };
-    if (status === 'active') where.isActive = true;
-    if (status === 'inactive') where.isActive = false;
+    const schoolCode = req.user.schoolCode;
     const classes = await Class.findAll({
-      where,
+      where: { schoolCode, isActive: true },
       include: [{ model: Teacher, include: [{ model: User, attributes: ['id', 'name', 'email'] }] }],
       order: [['grade', 'ASC'], ['name', 'ASC']]
     });
-    res.json({ success: true, data: classes, meta: { status, total: classes.length, active: classes.filter(item => item.isActive === true).length, inactive: classes.filter(item => item.isActive === false).length } });
+    const ids = classes.map(row => Number(row.id)).filter(Boolean);
+    const enrollmentCounts = ids.length ? await StudentEnrollment.findAll({
+      where: { schoolCode, classId: { [Op.in]: ids }, status: 'active' },
+      attributes: ['classId', [require('sequelize').fn('COUNT', require('sequelize').col('studentId')), 'studentCount']],
+      group: ['classId'],
+      raw: true
+    }) : [];
+    const countByClass = new Map(enrollmentCounts.map(row => [Number(row.classId), Number(row.studentCount || 0)]));
+    const normalize = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const data = classes.map(row => {
+      const cls = row.toJSON ? row.toJSON() : row;
+      return {
+        ...cls,
+        studentCount: countByClass.get(Number(cls.id)) || 0,
+        canonicalKey: [normalize(cls.grade || cls.name), normalize(cls.stream)].join('::')
+      };
+    });
+    res.json({ success: true, data });
   } catch (error) {
     console.error('Get classes error:', error);
     res.status(500).json({ success: false, message: error.message });
