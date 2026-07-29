@@ -6,7 +6,13 @@ function calculateStudentAge(dateOfBirth, now = new Date()) {
   let days = now.getDate() - dob.getDate();
   if (days < 0) { const previousMonth = new Date(now.getFullYear(), now.getMonth(), 0); days += previousMonth.getDate(); months -= 1; }
   if (months < 0) { months += 12; years -= 1; }
-  const compactDays = Math.floor((now - new Date(now.getFullYear() - years, dob.getMonth(), dob.getDate())) / 86400000);
+  const lastBirthdayYear = (
+    now.getMonth() > dob.getMonth()
+    || (now.getMonth() === dob.getMonth() && now.getDate() >= dob.getDate())
+  ) ? now.getFullYear() : now.getFullYear() - 1;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const lastBirthday = new Date(lastBirthdayYear, dob.getMonth(), dob.getDate());
+  const compactDays = Math.floor((today - lastBirthday) / 86400000);
   return { years, months, days, compactDays:Math.max(0,compactDays), full:`${years} year${years===1?'':'s'}, ${months} month${months===1?'':'s'}, ${days} day${days===1?'':'s'} old`, compact:`${years} year${years===1?'':'s'}, ${Math.max(0,compactDays)} day${compactDays===1?'':'s'} old` };
 }
 module.exports = (sequelize, DataTypes) => {
@@ -66,3 +72,4 @@ module.exports = (sequelize, DataTypes) => {
   Student.prototype.upgradeSubscription = async function(newPlan, paymentAmount) { this.subscriptionPlan = newPlan; this.subscriptionStatus = 'active'; this.subscriptionStartDate = new Date(); this.subscriptionExpiry = new Date(Date.now() + 30*86400000); this.paymentStatus = { ...this.paymentStatus, plan: newPlan, status: 'active', startDate: this.subscriptionStartDate, expiryDate: this.subscriptionExpiry, lastPayment: paymentAmount, lastPaymentDate: new Date() }; await this.save(); return this; };
   return Student;
 };
+module.exports.calculateStudentAge = calculateStudentAge;

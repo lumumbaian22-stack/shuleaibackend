@@ -25,9 +25,9 @@ module.exports = (sequelize, DataTypes) => {
   }, {
     timestamps: true,
     indexes: [
-      { unique: true, fields: ['schoolCode', 'studentId', 'term', 'year', 'reportType', 'assessmentKey', 'version'] },
-      { fields: ['schoolCode', 'term', 'year'] },
-      { fields: ['studentId'] }
+      { name: 'report_snapshots_scope_version_uq', unique: true, fields: ['schoolCode', 'studentId', 'term', 'year', 'reportType', 'assessmentKey', 'version'] },
+      { name: 'report_snapshots_term_year_idx', fields: ['schoolCode', 'term', 'year'] },
+      { name: 'report_snapshots_student_idx', fields: ['studentId'] }
     ]
   });
   return ReportSnapshot;

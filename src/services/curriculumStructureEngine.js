@@ -1,4 +1,5 @@
 'use strict';
+const { buildAcademicSummary, normalizeAssessmentSettings } = require('./academicSummaryService');
 
 const CURRICULUM_ALIASES = {
   cbe: 'cbc',
@@ -307,7 +308,7 @@ function getCurriculumConfig(school) {
   const enabledLevels = expandEnabledLevelCodes(curriculum, rawLevels);
   const groups = groupsFromEnabledLevels(curriculum, rawLevels);
   const schoolSubjects = Array.isArray(engine.schoolSubjects) ? engine.schoolSubjects : [];
-  const assessmentSettings = Array.isArray(engine.assessmentSettings) && engine.assessmentSettings.length ? engine.assessmentSettings : defaultAssessmentSettings();
+  const assessmentSettings = normalizeAssessmentSettings(Array.isArray(engine.assessmentSettings) && engine.assessmentSettings.length ? engine.assessmentSettings : defaultAssessmentSettings());
   return { curriculum, structureType, enabledLevels, enabledLevelGroups:groups, levelGroups:getLevelGroups(curriculum), schoolSubjects, assessmentSettings, engine };
 }
 
@@ -398,6 +399,8 @@ function validateClassLevel(school, gradeOrName) {
 
 function buildSubjectRowsForReport({ school, classItem, student, records = [], studentSubjectSelections = [] }) {
   const eligible = getEligibleSubjectsForClass(school, classItem);
+  const academicSummary = buildAcademicSummary(records, { assessmentSettings: getCurriculumConfig(school).assessmentSettings });
+  const summaryBySubject = new Map(academicSummary.subjects.map(row => [String(row.subject || '').trim().toLowerCase(), row]));
   const bySubject = new Map();
   for (const r of records || []) {
     const key = String(r.subject || '').trim().toLowerCase();
@@ -409,16 +412,16 @@ function buildSubjectRowsForReport({ school, classItem, student, records = [], s
     const selected = selectionByName.get(String(subject.name).toLowerCase());
     const statusFromSelection = selected?.status || (subject.isCore ? 'taking' : 'not_taken');
     const recs = bySubject.get(String(subject.name).toLowerCase()) || [];
-    const validScores = recs.map(r => Number(r.score)).filter(Number.isFinite);
-    const hasScore = validScores.length > 0;
-    const average = hasScore ? Math.round(validScores.reduce((sum, score) => sum + score, 0) / validScores.length) : null;
+    const subjectSummary = summaryBySubject.get(String(subject.name).toLowerCase());
+    const average = subjectSummary?.average ?? null;
+    const hasScore = average !== null;
     let status = 'Pending';
     if (statusFromSelection === 'not_taken') status = 'Not Taken';
     else if (statusFromSelection === 'exempted') status = 'Exempted';
     else if (statusFromSelection === 'not_offered') status = 'Not Offered';
     else if (hasScore) status = 'Completed';
     const counted = status === 'Completed' && statusFromSelection !== 'not_taken' && statusFromSelection !== 'exempted' && statusFromSelection !== 'not_offered' && subject.countsInFinalByDefault !== false;
-    return { subject: subject.name, subjectId: subject.id, category: subject.category, score: average, grade: null, status, counted, isCore: !!subject.isCore, pathway: subject.pathway || null, track: subject.track || null, assessments: recs };
+    return { subject: subject.name, subjectId: subject.id, category: subject.category, score: average, grade: null, status, counted, isCore: !!subject.isCore, pathway: subject.pathway || null, track: subject.track || null, assessments: recs, components: subjectSummary?.components || [] };
   });
   return rows;
 }

@@ -4,6 +4,7 @@ const fs = require('fs');
 const { saveUploadAsset } = require('../services/mediaAssetService');
 const realtime = require('../services/realtimeService');
 const schoolLinkageService = require('../services/schoolLinkageService');
+const departmentMembershipService = require('../services/departmentMembershipService');
 const {
   User, Teacher, Student, Parent, StudentParent, Class,
   Department, DepartmentMember, TeacherSubjectAssignment,
@@ -357,7 +358,7 @@ exports.listDepartments = async (req, res) => {
 exports.createDepartment = async (req, res) => {
   try {
     if (!canManageSchool(req)) return res.status(403).json({ success: false, message: 'Only admin can create departments' });
-    const { name, description, teacherIds = [] } = req.body;
+    const { name, description, headTeacherId = null, teacherIds = [] } = req.body;
     if (!name) return res.status(400).json({ success: false, message: 'Department name is required' });
 
     const requestedTeacherIds = Array.isArray(teacherIds) ? [...new Set(teacherIds.map(Number).filter(Boolean))] : [];
@@ -366,9 +367,12 @@ exports.createDepartment = async (req, res) => {
       const teacher = await findTeacherInCurrentSchool(req, teacherId);
       if (teacher) validTeachers.push(teacher);
     }
-    const headTeacherId = validTeachers[0]?.id || null;
+    const validIds = new Set(validTeachers.map(teacher => Number(teacher.id)));
+    const resolvedHeadTeacherId = validIds.has(Number(headTeacherId))
+      ? Number(headTeacherId)
+      : (validTeachers[0]?.id || null);
 
-    const department = await Department.create({ schoolCode: schoolCodeOf(req), name, description, headTeacherId });
+    const department = await Department.create({ schoolCode: schoolCodeOf(req), name, description, headTeacherId: resolvedHeadTeacherId });
     const group = await ChatGroup.create({
       schoolCode: schoolCodeOf(req),
       name: `${name} Department`,
@@ -379,10 +383,11 @@ exports.createDepartment = async (req, res) => {
     });
 
     for (const teacher of validTeachers) {
-      const isHead = Number(teacher.id) === Number(headTeacherId);
+      const isHead = Number(teacher.id) === Number(resolvedHeadTeacherId);
       await DepartmentMember.findOrCreate({ where: { departmentId: department.id, teacherId: teacher.id }, defaults: { role: isHead ? 'head' : 'member' } });
       await ChatGroupMember.findOrCreate({ where: { groupId: group.id, userId: teacher.userId }, defaults: { role: isHead ? 'admin' : 'member' } });
     }
+    await departmentMembershipService.syncTeacherLabels(validTeachers.map(teacher => teacher.id), schoolCodeOf(req));
 
     res.status(201).json({ success: true, data: { department, group } });
   } catch (error) {
@@ -1116,6 +1121,7 @@ exports.updateDepartment = async (req, res) => {
 
     const department = await Department.findOne({ where: { id: departmentId, schoolCode: schoolCodeOf(req) } });
     if (!department) return res.status(404).json({ success: false, message: 'Department not found' });
+    const previousMembers = await DepartmentMember.findAll({ where: { departmentId }, attributes: ['teacherId'] }).catch(() => []);
 
     if (name) department.name = name;
     if (description !== undefined) department.description = description;
@@ -1150,6 +1156,10 @@ exports.updateDepartment = async (req, res) => {
         await DepartmentMember.create({ departmentId, teacherId: teacher.id, role: isHead ? 'head' : 'member' });
         if (group) await ChatGroupMember.create({ groupId: group.id, userId: teacher.userId, role: isHead ? 'admin' : 'member' });
       }
+      await departmentMembershipService.syncTeacherLabels(
+        [...previousMembers.map(row => row.teacherId), ...validTeachers.map(teacher => teacher.id)],
+        schoolCodeOf(req)
+      );
     }
 
     res.json({ success: true, data: department });
@@ -1165,10 +1175,12 @@ exports.deleteDepartment = async (req, res) => {
     const departmentId = Number(req.params.departmentId);
     const department = await Department.findOne({ where: { id: departmentId, schoolCode: schoolCodeOf(req) } });
     if (!department) return res.status(404).json({ success: false, message: 'Department not found' });
+    const members = await DepartmentMember.findAll({ where: { departmentId }, attributes: ['teacherId'] }).catch(() => []);
     department.isActive = false;
     await department.save();
 
     await ChatGroup.update({ isActive: false }, { where: { departmentId: department.id, type: 'department' } });
+    await departmentMembershipService.syncTeacherLabels(members.map(row => row.teacherId), schoolCodeOf(req));
     res.json({ success: true, message: 'Department archived' });
   } catch (error) {
     console.error('deleteDepartment error:', error);

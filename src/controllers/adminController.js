@@ -5,6 +5,7 @@ const { createAlert } = require('../services/notificationService');
 const { getPagination, buildPaginatedResponse } = require('../utils/pagination');
 const cache = require('../services/cacheService');
 const { findStudentInSchool } = require('../services/studentScopeService');
+const departmentMembershipService = require('../services/departmentMembershipService');
 
 
 // Helper for curriculum names
@@ -67,6 +68,7 @@ exports.getAllTeachers = async (req, res) => {
     });
     const teachers = result.rows;
     const teacherIds = teachers.map(t => Number(t.id)).filter(Boolean);
+    const departmentLabels = await departmentMembershipService.labelsForTeachers(teacherIds, req.user.schoolCode);
     const legacyClassIds = teachers.map(t => Number(t.classId)).filter(Boolean);
     let classes = [];
     if (teacherIds.length || legacyClassIds.length) {
@@ -77,6 +79,7 @@ exports.getAllTeachers = async (req, res) => {
     }
     const data = teachers.map(row => {
       const teacher = row.toJSON ? row.toJSON() : row;
+      teacher.department = departmentMembershipService.displayLabel(departmentLabels, teacher);
       teacher.TeacherSubjectAssignments = (teacher.TeacherSubjectAssignments || []).filter(a => !a.Class || a.Class.schoolCode === req.user.schoolCode);
       teacher.Classes = classes.filter(c => Number(c.teacherId) === Number(teacher.id) || Number(c.id) === Number(teacher.classId)).map(c => c.toJSON ? c.toJSON() : c);
       teacher.Class = teacher.Classes[0] || null;
@@ -621,6 +624,7 @@ exports.updateStudent = async (req, res) => {
 
 // ============ V102 LOCKED ACCESS + CURRICULUM STRUCTURE ENGINE ============
 const curriculumEngine = require('../services/curriculumStructureEngine');
+const { normalizeAssessmentSettings } = require('../services/academicSummaryService');
 const classGeneration = require('../services/classGenerationService');
 const { listStudentSubjectSelections, replaceStudentSubjectSelections } = require('../services/studentSubjectSelectionService');
 const { sequelize } = require('../models');
@@ -1092,7 +1096,8 @@ exports.getAssessmentSettings = async (req, res) => {
     const school = await v102GetSchool(req.user.schoolCode);
     if (!school) return res.status(404).json({ success:false, message:'School not found' });
     const cfg = curriculumEngine.getCurriculumConfig(school);
-    res.json({ success:true, data:{ assessmentSettings: cfg.assessmentSettings, config: cfg, reportCardSettings: school.settings?.reportCardSettings || school.reportCardSettings || {} } });
+    const assessmentSettings = normalizeAssessmentSettings(cfg.assessmentSettings);
+    res.json({ success:true, data:{ assessmentSettings, config: { ...cfg, assessmentSettings }, reportCardSettings: school.settings?.reportCardSettings || school.reportCardSettings || {} } });
   } catch(error) { res.status(500).json({ success:false, message:error.message }); }
 };
 
@@ -1122,6 +1127,7 @@ exports.updateAssessmentSettings = async (req, res) => {
         isActive: row.isActive !== false
       };
     }).filter(x => x.label && x.isActive !== false);
+    const normalizedAssessments = normalizeAssessmentSettings(sanitized.length ? sanitized : defaults);
     const existingReportSettings = school.settings?.reportCardSettings || school.reportCardSettings || {};
     const incomingReportSettings = req.body && typeof req.body.reportCardSettings === 'object' && !Array.isArray(req.body.reportCardSettings) ? req.body.reportCardSettings : {};
     const bool = (value, fallback=true) => value === undefined ? fallback : value === true || value === 'true' || value === 'on' || value === 1 || value === '1';
@@ -1172,7 +1178,7 @@ exports.updateAssessmentSettings = async (req, res) => {
       showClassPosition: bool(incomingReportSettings.showClassPosition, existingReportSettings.showClassPosition === true),
       showStreamPosition: bool(incomingReportSettings.showStreamPosition, existingReportSettings.showStreamPosition === true)
     };
-    const settings = v102BuildCurriculumSettings(school, { assessmentSettings: sanitized.length ? sanitized : defaults });
+    const settings = v102BuildCurriculumSettings(school, { assessmentSettings: normalizedAssessments });
     settings.reportCardSettings = reportCardSettings;
     school.settings = settings;
     school.reportCardSettings = reportCardSettings;

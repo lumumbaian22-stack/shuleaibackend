@@ -215,6 +215,11 @@ exports.sendMessage = async (req, res) => {
       severity: 'info',
       title: `Message from parent of ${student.User?.name || 'student'}`,
       message: (cleanMessage || attachmentMeta?.originalName || attachmentMeta?.filename || 'Attachment').substring(0, 100) + ((cleanMessage || '').length > 100 ? '...' : ''),
+      categoryLabel: 'Messages',
+      sourceType: 'parent_message',
+      sourceLabel: 'Parent message',
+      actionUrl: '/dashboard#parent-messages',
+      actionLabel: 'Open Messages',
       data: { schoolCode, scope: 'user', targetUserIds: [recipientId], conversationType, conversationKey, studentId: student.id, classId, messageId: newMessage.id }
     });
 
@@ -308,7 +313,7 @@ exports.replyToParent = async (req, res) => {
       content: cleanMessage,
       metadata: { ...originalMeta, schoolCode: req.user.schoolCode, inReplyTo: originalMessageId || null, senderRole: req.user.role, senderName:req.user.name, clientMessageId:clientMessageId?String(clientMessageId):null, type: `${req.user.role}_reply` }
     });
-    await createAlert({ userId: parentId, role: 'parent', type: 'message', severity: 'info', title: `Reply from ${req.user.name}`, message: cleanMessage.substring(0, 100), data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: originalMeta.conversationType || 'parent_reply', conversationKey: originalMeta.conversationKey || null, messageId: reply.id } });
+    await createAlert({ userId: parentId, role: 'parent', type: 'message', severity: 'info', title: `Reply from ${req.user.name}`, message: cleanMessage.substring(0, 100), categoryLabel:'Messages', sourceType:'teacher_message', sourceLabel:'Teacher reply', actionUrl:'/dashboard#chat', actionLabel:'Open Messages', data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: originalMeta.conversationType || 'parent_reply', conversationKey: originalMeta.conversationKey || null, messageId: reply.id } });
     const conversationKey = originalMeta.conversationKey || buildConversationKey({ type:originalMeta.conversationType||'parent_reply', schoolCode:req.user.schoolCode, parentUserId:parentId, studentId:originalMeta.studentId, classId:originalMeta.classId, receiverId:req.user.id });
     const canonicalReply = { ...reply.toJSON(), messageId:reply.id, conversationId:conversationKey, conversationKey, senderId:req.user.id, senderRole:req.user.role, senderName:req.user.name,senderProfileImage:req.user.profileImage||req.user.profilePicture||null,receiverId:Number(parentId), receiverRole:'parent', body:cleanMessage, content:cleanMessage, clientMessageId:clientMessageId?String(clientMessageId):null, createdAt:reply.createdAt, deliveryStatus:'sent', metadata:{ ...reply.metadata, conversationKey } };
     await realtime.emit({ type:'chat:message_created', schoolCode:req.user.schoolCode, audience:{ school:false, userIds:[req.user.id,Number(parentId)], conversations:[conversationKey] }, entityType:'Message', entityId:reply.id, version:1, data:canonicalReply }).catch(error=>console.error('[parent teacher reply realtime]',error.message));
@@ -368,7 +373,7 @@ exports.adminReplyToParent = async (req, res) => {
     if (!baseMessage) return res.status(403).json({ success: false, message: 'This parent-admin conversation does not belong to this school admin.' });
     const baseMeta = meta(baseMessage);
     const reply = await Message.create({ senderId: req.user.id, receiverId: parentId, content: cleanMessage, metadata: { ...baseMeta, schoolCode: req.user.schoolCode, inReplyTo: originalMessageId || baseMessage.id, type: 'admin_reply', adminUserId: req.user.id, senderRole:'admin', senderName:req.user.name, clientMessageId:clientMessageId?String(clientMessageId):null } });
-    await createAlert({ userId: parentId, role: 'parent', type: 'message', severity: 'info', title: `Reply from ${req.user.name}`, message: cleanMessage.substring(0,100), data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: 'parent_admin', conversationKey: baseMeta.conversationKey, messageId: reply.id } });
+    await createAlert({ userId: parentId, role: 'parent', type: 'message', severity: 'info', title: `Reply from ${req.user.name}`, message: cleanMessage.substring(0,100), categoryLabel:'Messages', sourceType:'admin_message', sourceLabel:'School reply', actionUrl:'/dashboard#chat', actionLabel:'Open Messages', data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: 'parent_admin', conversationKey: baseMeta.conversationKey, messageId: reply.id } });
     const conversationKey = baseMeta.conversationKey || buildConversationKey({ type:'parent_admin', schoolCode:req.user.schoolCode, parentUserId:parentId, studentId:baseMeta.studentId, classId:baseMeta.classId, receiverId:req.user.id });
     const canonicalReply = { ...reply.toJSON(), messageId:reply.id, conversationId:conversationKey, conversationKey, senderId:req.user.id, senderRole:'admin', senderName:req.user.name,senderProfileImage:req.user.profileImage||req.user.profilePicture||null,receiverId:Number(parentId), receiverRole:'parent', body:cleanMessage, content:cleanMessage, clientMessageId:clientMessageId?String(clientMessageId):null, createdAt:reply.createdAt, deliveryStatus:'sent', metadata:{ ...reply.metadata, conversationKey } };
     await realtime.emit({ type:'chat:message_created', schoolCode:req.user.schoolCode, audience:{ school:false, userIds:[req.user.id,Number(parentId)], conversations:[conversationKey] }, entityType:'Message', entityId:reply.id, version:1, data:canonicalReply }).catch(error=>console.error('[parent admin reply realtime]',error.message));

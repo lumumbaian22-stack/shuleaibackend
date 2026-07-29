@@ -96,6 +96,9 @@ module.exports = (sequelize, DataTypes) => {
       signatureUrl: this.preferences?.signatureUrl || this.preferences?.signatureAbsoluteUrl || this.preferences?.signatureDataUrl || null,
       schoolCode: this.schoolCode,
       isActive: this.isActive,
+      createdAt: this.createdAt,
+      updatedAt: this.updatedAt,
+      lastLogin: this.lastLogin,
       firstLogin: this.firstLogin,
       mustChangePassword: this.mustChangePassword
     };

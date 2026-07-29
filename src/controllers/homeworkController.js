@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { saveUploadAsset } = require('../services/mediaAssetService');
 const { HomeTask, HomeTaskAssignment, Student, Teacher, Class, User, TeacherSubjectAssignment, ClassroomThread } = require('../models');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
+const schoolLinkageService = require('../services/schoolLinkageService');
 
 function cleanString(value, fallback = '') {
   const s = String(value ?? '').trim();
@@ -498,7 +499,39 @@ exports.createAssignment = async (req, res) => {
     if (!safeInstructions) return res.status(400).json({ success: false, message: 'Homework instructions are required' });
 
     const classItem = await resolveClass({ classId, className, grade, schoolCode: req.user.schoolCode });
-    const resolvedClassId = classItem?.id || classId || null;
+    if (!classItem) {
+      return res.status(400).json({ success: false, message: 'Choose an active class from your assigned classes.' });
+    }
+    const assignedClasses = await schoolLinkageService.resolveTeacherAssignedClasses(
+      req.user.id,
+      req.user.schoolCode,
+      { classTeacherOnly: false }
+    );
+    if (!assignedClasses.some(row => Number(row.id) === Number(classItem.id))) {
+      return res.status(403).json({ success: false, message: 'You can assign homework only to a class assigned to you.' });
+    }
+    const classTeacherClasses = await schoolLinkageService.resolveTeacherAssignedClasses(
+      req.user.id,
+      req.user.schoolCode,
+      { classTeacherOnly: true }
+    );
+    const isClassTeacherForTarget = classTeacherClasses.some(row => Number(row.id) === Number(classItem.id));
+    if (!isClassTeacherForTarget) {
+      const tableAssignments = await TeacherSubjectAssignment.findAll({
+        where: { teacherId: teacher.id, classId: classItem.id },
+        attributes: ['subject']
+      }).catch(() => []);
+      const jsonAssignments = (Array.isArray(classItem.subjectTeachers) ? classItem.subjectTeachers : [])
+        .filter(row => Number(row.teacherId) === Number(teacher.id))
+        .map(row => row.subject);
+      const permittedSubjects = [...tableAssignments.map(row => row.subject), ...jsonAssignments]
+        .map(normalizeClassText)
+        .filter(Boolean);
+      if (!permittedSubjects.includes(normalizeClassText(safeSubject))) {
+        return res.status(403).json({ success: false, message: 'You can assign homework only for a subject assigned to you in this class.' });
+      }
+    }
+    const resolvedClassId = classItem.id;
     const resolvedClassName = classItem?.name || className || grade || null;
 
     const requestedStudentIds = Array.isArray(studentIds)

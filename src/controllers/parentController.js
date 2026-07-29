@@ -1,8 +1,10 @@
-const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, Class, Settings, SubscriptionPlan, Admin, sequelize } = require('../models');
+const { Student, User, AcademicRecord, Attendance, Fee, Payment, Alert, Parent, Teacher, School, Message, Class, Settings, SubscriptionPlan, ReportSnapshot, Admin, sequelize } = require('../models');
 const { createAlert } = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { ensureRuntimeSchema } = require('../utils/schemaSafety');
 const ownership = require('../services/parentOwnershipService');
+const curriculumHelper = require('../utils/curriculumHelper');
+const { buildAcademicSummary, normalizeAssessmentSettings } = require('../services/academicSummaryService');
 
 
 function legacyPaymentEndpointDisabled(req, res) {
@@ -202,18 +204,29 @@ exports.getChildSummary = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not your child' });
     }
 
-    // Get child's class teacher
-    const classTeacher = await Teacher.findOne({
-      where: { classTeacher: student.grade },
-      include: [{ model: User, attributes: ['id','name','email','phone','profileImage','profilePicture'] }]
-    });
+    // Resolve the class teacher through the exact class and school, never a same-grade fallback.
+    const studentSchoolCode = student.User?.schoolCode || req.user.schoolCode;
+    const studentClass = student.classId ? await Class.findOne({
+      where: { id: student.classId, schoolCode: studentSchoolCode, isActive: true }
+    }).catch(() => null) : null;
+    const classTeacher = studentClass?.teacherId ? await Teacher.findOne({
+      where: { id: studentClass.teacherId },
+      include: [{ model: User, where: { schoolCode: studentSchoolCode, role: 'teacher' }, required: true, attributes: ['id','name','email','phone','profileImage','profilePicture'] }]
+    }).catch(() => null) : null;
 
     // Fetch only PUBLISHED academic records
-    const records = await AcademicRecord.findAll({ 
-      where: { studentId, isPublished: true }, 
-      order: [['date', 'DESC']], 
-      limit: 10 
+    const publishedRecords = await AcademicRecord.findAll({
+      where: { studentId, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
+      order: [['year', 'DESC'], ['term', 'DESC'], ['date', 'DESC']],
+      limit: 500
     });
+    const latestAcademicRecord = publishedRecords[0] || null;
+    const records = latestAcademicRecord
+      ? publishedRecords.filter(record =>
+          String(record.year || '') === String(latestAcademicRecord.year || '')
+          && String(record.term || '') === String(latestAcademicRecord.term || '')
+        )
+      : [];
     
     const attendance = await Attendance.findAll({ 
       where: { studentId }, 
@@ -224,8 +237,16 @@ exports.getChildSummary = async (req, res) => {
     const outstandingFees = await Fee.findOne({ 
       where: { studentId, status: { [Op.ne]: 'paid' } } 
     });
-
-    const avg = records.length ? records.reduce((a,b) => a + b.score, 0) / records.length : 0;
+    const latestPublishedReport = await ReportSnapshot.findOne({
+      where: {
+        schoolCode: student.User?.schoolCode || req.user.schoolCode,
+        studentId: student.id,
+        status: 'published',
+        isCurrent: true
+      },
+      order: [['year', 'DESC'], ['publishedAt', 'DESC'], ['version', 'DESC']],
+      attributes: ['id', 'term', 'year', 'publishedAt', 'version']
+    }).catch(() => null);
 
     // Get school info – include curriculum and level so frontend can compute correct grades
     const school = await School.findOne({ 
@@ -234,6 +255,15 @@ exports.getChildSummary = async (req, res) => {
     });
 
     const schoolBranding = school?.settings?.branding || {};
+    const academicSummary = buildAcademicSummary(records, {
+      assessmentSettings: school?.settings?.curriculumEngine?.assessmentSettings,
+      gradeFromScore: score => curriculumHelper.getGradeFromScore(
+        score,
+        school?.system || student.curriculum || 'cbc',
+        school?.settings?.schoolLevel || 'secondary',
+        school?.settings?.gradingScale || null
+      )
+    });
     const schoolPayload = school ? {
       name: school.name,
       schoolName: school.name,
@@ -273,7 +303,10 @@ exports.getChildSummary = async (req, res) => {
           email: classTeacher.User.email,
           phone: classTeacher.User.phone
         } : null,
-        averageScore: avg,
+        averageScore: academicSummary.overallAverage ?? 0,
+        academicSummary,
+        hasPublishedReport: !!latestPublishedReport,
+        latestPublishedReport,
         recentRecords: records,
         recentAttendance: attendance,
         outstandingFees: fee ? {
@@ -329,29 +362,34 @@ exports.getChildReportCardDetails = async (req, res) => {
     }).catch(() => null);
     const safeSig = (model, user) => user?.preferences?.signatureDataUrl || model?.signatureUrl || model?.signature || user?.preferences?.signatureUrl || user?.preferences?.signatureAbsoluteUrl || '';
 
-    const records = await AcademicRecord.findAll({
+    const publishedRecords = await AcademicRecord.findAll({
       where: { studentId: student.id, [Op.or]: [{ isPublished: true }, { status: 'published' }] },
       order: [['year','DESC'], ['term','DESC'], ['date','DESC']]
     }).catch(() => []);
+    const latestAcademicRecord = publishedRecords[0] || null;
+    const records = latestAcademicRecord
+      ? publishedRecords.filter(record =>
+          String(record.year || '') === String(latestAcademicRecord.year || '')
+          && String(record.term || '') === String(latestAcademicRecord.term || '')
+        )
+      : [];
     const assessmentSettings = await sequelize.query(`
       SELECT * FROM "SchoolAssessmentSettings" WHERE "schoolCode" = :schoolCode ORDER BY "displayOrder" ASC, "id" ASC
     `, { replacements:{ schoolCode }, type:sequelize.QueryTypes.SELECT }).catch(() => []);
-    const defaultTests = [
-      { assessmentType:'cat', label:'CAT', showOnReport:true, countInFinal:true, weight:20, displayOrder:1 },
-      { assessmentType:'midterm', label:'Midterm', showOnReport:true, countInFinal:true, weight:30, displayOrder:2 },
-      { assessmentType:'end_term', label:'End Term', showOnReport:true, countInFinal:true, weight:50, displayOrder:3 },
-      { assessmentType:'sba', label:'SBA', showOnReport:false, countInFinal:false, weight:0, displayOrder:4 },
-      { assessmentType:'project', label:'Project', showOnReport:false, countInFinal:false, weight:0, displayOrder:5 },
-      { assessmentType:'practical', label:'Practical', showOnReport:false, countInFinal:false, weight:0, displayOrder:6 }
-    ];
-    const testSettings = assessmentSettings.length ? assessmentSettings : defaultTests;
+    const configuredAssessments = school?.settings?.curriculumEngine?.assessmentSettings;
+    const testSettings = normalizeAssessmentSettings(
+      Array.isArray(configuredAssessments) && configuredAssessments.length
+        ? configuredAssessments
+        : assessmentSettings
+    );
     const settingMap = new Map(testSettings.map(t => [String(t.assessmentType || t.type || '').toLowerCase(), t]));
     const normalizedType = (r) => String(r.assessmentType || r.testType || r.examType || r.assessmentName || r.assessment || 'end_term').toLowerCase().replace(/\s+/g, '_');
-    const gradeFromScore = (score) => {
-      const n = Number(score || 0);
-      if (String(curriculum).toLowerCase() === 'cbc' || String(curriculum).toLowerCase() === 'cbe') { if (n >= 80) return 'EE'; if (n >= 60) return 'ME'; if (n >= 40) return 'AE'; return n > 0 ? 'BE' : '-'; }
-      if (n >= 80) return 'A'; if (n >= 70) return 'B'; if (n >= 60) return 'C'; if (n >= 50) return 'D'; return n > 0 ? 'E' : '-';
-    };
+    const gradeFromScore = score => curriculumHelper.getGradeFromScore(
+      score,
+      curriculum,
+      schoolLevel,
+      school?.settings?.gradingScale || null
+    );
     const subjectMap = {};
     records.forEach(r => {
       const subject = r.subject || 'Subject';
@@ -367,10 +405,17 @@ exports.getChildReportCardDetails = async (req, res) => {
       }
       subjectMap[subject].components.push({ type, label:setting.label || r.assessmentName || r.assessment || type, score, weight, countInFinal:setting.countInFinal !== false && r.countInFinal !== false, displayOrder:Number(setting.displayOrder || 99), date:r.date, term:r.term, year:r.year });
     });
-    const subjects = Object.values(subjectMap).map((d) => {
+    const legacySubjects = Object.values(subjectMap).map((d) => {
       const average = d.weight > 0 ? Math.round(d.weighted / d.weight) : Math.round(d.rawTotal / Math.max(1, d.rawCount));
       return { subject:d.subject, average, grade:gradeFromScore(average), components:d.components.sort((a,b)=>a.displayOrder-b.displayOrder) };
     });
+    const canonicalAcademicSummary = buildAcademicSummary(records, {
+      assessmentSettings: testSettings,
+      gradeFromScore
+    });
+    const subjects = canonicalAcademicSummary.subjects.length
+      ? canonicalAcademicSummary.subjects
+      : legacySubjects;
     const attendance = await Attendance.findAll({ where: { studentId: student.id, schoolCode }, order: [['date','DESC']] }).catch(() => []);
     const present = attendance.filter(a => a.status === 'present').length;
     const absent = attendance.filter(a => a.status === 'absent').length;
@@ -409,7 +454,13 @@ exports.getChildReportCardDetails = async (req, res) => {
       headteacher: adminSigner?.User ? { name:adminSigner.User.name, email:adminSigner.User.email, phone:adminSigner.User.phone, signature:safeSig(adminSigner, adminSigner.User), signatureUrl:safeSig(adminSigner, adminSigner.User) } : null,
       principal: adminSigner?.User ? { name:adminSigner.User.name, email:adminSigner.User.email, phone:adminSigner.User.phone, signature:safeSig(adminSigner, adminSigner.User), signatureUrl:safeSig(adminSigner, adminSigner.User) } : null,
       reportSignatures: { classTeacher:safeSig(classTeacher, classTeacher?.User), headteacher:safeSig(adminSigner, adminSigner?.User), principal:safeSig(adminSigner, adminSigner?.User) },
-      academicSummary: { overallAverage: records.length ? Math.round(records.reduce((sum, r) => sum + Number(r.score || 0), 0) / records.length) : 0, subjects },
+      academicSummary: {
+        overallAverage: canonicalAcademicSummary.overallAverage ?? 0,
+        overallGrade: canonicalAcademicSummary.overallGrade,
+        countedSubjects: canonicalAcademicSummary.countedSubjects,
+        calculationRule: canonicalAcademicSummary.calculationRule,
+        subjects
+      },
       attendanceSummary: { rate, present, absent, late },
       feeBalance,
       ranking,

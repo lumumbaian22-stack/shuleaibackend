@@ -253,7 +253,11 @@ Student.hasMany(Attendance, { foreignKey: 'studentId' });
 // Fee Structure
 FeeStructure.belongsTo(School, { foreignKey: 'schoolCode', targetKey: 'schoolId' });
 School.hasMany(FeeStructure, { foreignKey: 'schoolCode', sourceKey: 'schoolId' });
-FeeStructure.hasMany(Fee, { foreignKey: 'feeStructureId', sourceKey: 'id' });
+// Fee.feeStructureId is intentionally stored as a string for compatibility with
+// historical/imported account records, while FeeStructure.id is an integer.
+// Keep this as a logical Sequelize association without asking PostgreSQL to
+// create an incompatible integer-to-string foreign-key constraint.
+FeeStructure.hasMany(Fee, { foreignKey: 'feeStructureId', sourceKey: 'id', constraints: false });
 
 // Fee
 Fee.belongsTo(Student, { foreignKey: 'studentId' });

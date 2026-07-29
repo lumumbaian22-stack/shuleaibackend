@@ -11,10 +11,12 @@ function v87IsValidISODate(value) {
 
 const { User, Teacher, School, DutyRoster } = require('../models');
 const moment = require('moment');
+const { calculateFairness } = require('../services/systemNormalizationService');
 const { DUTY_AREAS, DUTY_TIME_SLOTS } = require('../config/constants');
 const { createAlert, createBulkAlerts } = require('../services/notificationService');
 const realtime = require('../services/realtimeService');
 const dutyFairness = require('../utils/dutyFairness');
+const departmentMembershipService = require('../services/departmentMembershipService');
 
 // ============ HELPER FUNCTIONS ============
 
@@ -330,15 +332,16 @@ exports.getFairnessReport = async (req, res) => {
       where: { schoolId: school.schoolId, date: { [Op.between]: [startOfMonth, endOfMonth] } }
     });
 
+    const departmentLabels = await departmentMembershipService.labelsForTeachers(teachers.map(teacher => teacher.id), school.schoolId);
     const teacherStats = teachers.map(teacher => {
-      const teacherDuties = rosters.flatMap(r => r.duties.filter(d => d.teacherId === teacher.id));
+      const teacherDuties = rosters.flatMap(r => r.duties.filter(d => String(d.teacherId) === String(teacher.id)));
       const completed = teacherDuties.filter(d => d.status === 'completed').length;
       const missed = teacherDuties.filter(d => d.status === 'missed').length;
       const scheduled = teacherDuties.length;
       return {
         teacherId: teacher.id,
         teacherName: teacher.User?.name || 'Unknown',
-        department: teacher.department || 'general',
+        department: departmentMembershipService.displayLabel(departmentLabels, teacher),
         scheduled,
         completed,
         missed,
@@ -360,11 +363,7 @@ exports.getFairnessReport = async (req, res) => {
       departmentStats[dept].missedDuties += stat.missed;
     });
 
-    const dutyCounts = teacherStats.map(t => t.scheduled);
-    const mean = dutyCounts.reduce((a, b) => a + b, 0) / dutyCounts.length || 0;
-    const variance = dutyCounts.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / dutyCounts.length;
-    const stdDev = Math.sqrt(variance);
-    const fairnessScore = Math.max(0, Math.min(100, 100 - (stdDev / mean * 100) || 100));
+    const fairness = calculateFairness(teacherStats.map(t => t.scheduled));
 
     res.json({
       success: true,
@@ -373,7 +372,8 @@ exports.getFairnessReport = async (req, res) => {
         summary: {
           totalTeachers: teachers.length,
           totalDuties: rosters.reduce((acc, r) => acc + r.duties.length, 0),
-          fairnessScore: fairnessScore.toFixed(1),
+          fairnessScore: fairness.score,
+          hasDutyData: fairness.hasDutyData,
           understaffedDays: await checkUnderstaffedDays(school.schoolId, startOfMonth, endOfMonth)
         },
         departmentStats,
@@ -413,7 +413,7 @@ exports.manualAdjustDuty = async (req, res) => {
     roster.changed('duties', true);
     await roster.save();
 
-    await dutyFairness.updateTeacherDutyStats(oldTeacherId, 'unassign');
+    await dutyFairness.updateTeacherDutyStats(oldTeacherId, 'unassign', dutyType);
     await dutyFairness.updateTeacherDutyStats(replacementTeacher.id, 'assign', dutyType);
 
     await createBulkAlerts([
@@ -459,17 +459,62 @@ exports.getTeacherWorkload = async (req, res) => {
       include: [{ model: User, where: { schoolCode: school.schoolId }, attributes: ['name', 'email'] }]
     });
 
-    const workload = teachers.map(teacher => ({
-      teacherId: teacher.id,
-      teacherName: teacher.User?.name || 'Unknown',
-      department: teacher.department || 'general',
-      monthlyDutyCount: teacher.statistics?.monthlyDutyCount || 0,
-      weeklyDutyCount: teacher.statistics?.weeklyDutyCount || 0,
-      reliabilityScore: teacher.statistics?.reliabilityScore || 100,
-      points: teacher.statistics?.points || 0,
-      preferences: teacher.dutyPreferences,
-      status: teacher.statistics?.monthlyDutyCount > 10 ? 'overworked' : teacher.statistics?.monthlyDutyCount < 3 ? 'underworked' : 'balanced'
-    }));
+    const startOfMonth = moment().startOf('month').format('YYYY-MM-DD');
+    const endOfMonth = moment().endOf('month').format('YYYY-MM-DD');
+    const startOfWeek = moment().startOf('isoWeek').format('YYYY-MM-DD');
+    const endOfWeek = moment().endOf('isoWeek').format('YYYY-MM-DD');
+    const queryStart = startOfWeek < startOfMonth ? startOfWeek : startOfMonth;
+    const queryEnd = endOfWeek > endOfMonth ? endOfWeek : endOfMonth;
+    const rosters = await DutyRoster.findAll({
+      where: { schoolId: school.schoolId, date: { [Op.between]: [queryStart, queryEnd] } }
+    });
+
+    const actual = new Map(teachers.map(teacher => [String(teacher.id), {
+      monthly: 0,
+      weekly: 0,
+      completed: 0,
+      missed: 0
+    }]));
+    rosters.forEach(roster => {
+      const rosterDate = String(roster.date || '').slice(0, 10);
+      (Array.isArray(roster.duties) ? roster.duties : []).forEach(duty => {
+        const counts = actual.get(String(duty.teacherId));
+        if (!counts) return;
+        if (rosterDate >= startOfMonth && rosterDate <= endOfMonth) {
+          counts.monthly += 1;
+          if (duty.status === 'completed' || duty.checkedOut) counts.completed += 1;
+          if (duty.status === 'missed' || duty.status === 'rejected') counts.missed += 1;
+        }
+        if (rosterDate >= startOfWeek && rosterDate <= endOfWeek) counts.weekly += 1;
+      });
+    });
+    const totalMonthly = [...actual.values()].reduce((sum, counts) => sum + counts.monthly, 0);
+    const averageMonthly = teachers.length ? totalMonthly / teachers.length : 0;
+    const departmentLabels = await departmentMembershipService.labelsForTeachers(teachers.map(teacher => teacher.id), school.schoolId);
+
+    const workload = teachers.map(teacher => {
+      const counts = actual.get(String(teacher.id)) || { monthly: 0, weekly: 0, completed: 0, missed: 0 };
+      const decided = counts.completed + counts.missed;
+      const reliabilityScore = decided ? Math.round((counts.completed / decided) * 100) : null;
+      const status = totalMonthly === 0
+        ? 'not_scheduled'
+        : counts.monthly > averageMonthly + 1
+          ? 'overworked'
+          : counts.monthly < Math.max(0, averageMonthly - 1)
+            ? 'underworked'
+            : 'balanced';
+      return {
+        teacherId: teacher.id,
+        teacherName: teacher.User?.name || 'Unknown',
+        department: departmentMembershipService.displayLabel(departmentLabels, teacher),
+        monthlyDutyCount: counts.monthly,
+        weeklyDutyCount: counts.weekly,
+        reliabilityScore,
+        points: teacher.statistics?.points || 0,
+        preferences: teacher.dutyPreferences,
+        status
+      };
+    });
 
     res.json({ success: true, data: workload.sort((a, b) => b.monthlyDutyCount - a.monthlyDutyCount) });
   } catch (error) {

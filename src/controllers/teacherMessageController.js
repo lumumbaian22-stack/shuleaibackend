@@ -6,14 +6,23 @@ const realtime=require('../services/realtimeService');
 const { getCursorPagination, buildCursorResponse } = require('../utils/pagination');
 
 function messageMeta(message) { return (message?.toJSON ? message.toJSON() : (message || {})).metadata || {}; }
-function isTeacherParentConversation(message, user) {
+function isTeacherParentConversation(message, user, { parentId = null, studentId = null } = {}) {
   const md = messageMeta(message);
   return (!md.schoolCode || String(md.schoolCode) === String(user.schoolCode))
     && md.conversationType === 'parent_class_teacher'
-    && Number(md.classTeacherUserId) === Number(user.id);
+    && Number(md.classTeacherUserId) === Number(user.id)
+    && (!parentId || (
+      [Number(message.senderId), Number(message.receiverId)].includes(Number(parentId))
+      && [Number(message.senderId), Number(message.receiverId)].includes(Number(user.id))
+    ))
+    && (!studentId || String(md.studentId || '') === String(studentId));
 }
 
-async function resolveClassTeacherParentContext(req, parentUserId) {
+function canonicalConversationKey({ schoolCode, parentUserId, studentId, teacherUserId }) {
+  return ['parent_class_teacher', schoolCode || 'school', studentId || 'student', parentUserId || 'parent', teacherUserId || 'teacher'].join(':');
+}
+
+async function resolveClassTeacherParentContext(req, parentUserId, studentId = null) {
   const teacher = await Teacher.findOne({ where: { userId: req.user.id } });
   if (!teacher) return null;
   let classIds = Array.isArray(req.classTeacherClassIds) ? req.classTeacherClassIds.map(Number).filter(Boolean) : [];
@@ -35,6 +44,7 @@ async function resolveClassTeacherParentContext(req, parentUserId) {
   }
   if (!classIds.length) return null;
 
+  const studentFilter = Number(studentId) ? ' AND s."id" = :studentId' : '';
   const rows = await sequelize.query(
     `SELECT pu."id" AS "parentUserId", pu."name" AS "parentName", p."id" AS "parentProfileId",
             s."id" AS "studentId", su."name" AS "studentName",
@@ -52,13 +62,19 @@ async function resolveClassTeacherParentContext(req, parentUserId) {
         AND pu."id" = :parentUserId
         AND s."classId" IN (:classIds)
         AND COALESCE(sp."status", 'active') IN ('active','approved','verified','linked')
+        ${studentFilter}
       ORDER BY s."id" ASC
       LIMIT 1`,
-    { replacements: { schoolCode: req.user.schoolCode, parentUserId, classIds }, type: sequelize.QueryTypes.SELECT }
+    { replacements: { schoolCode: req.user.schoolCode, parentUserId, classIds, ...(Number(studentId) ? { studentId: Number(studentId) } : {}) }, type: sequelize.QueryTypes.SELECT }
   ).catch(() => []);
   const row = rows[0];
   if (!row) return null;
-  const conversationKey = [req.user.schoolCode, 'parent_class_teacher', row.parentUserId, row.studentId || 'student', row.classId || 'class', req.user.id].join(':');
+  const conversationKey = canonicalConversationKey({
+    schoolCode: req.user.schoolCode,
+    parentUserId: row.parentUserId,
+    studentId: row.studentId,
+    teacherUserId: req.user.id
+  });
   return {
     schoolCode: req.user.schoolCode,
     conversationType: 'parent_class_teacher',
@@ -149,7 +165,10 @@ exports.getMessages = async (req, res) => {
             order: [['createdAt', 'DESC']]
         });
 
-        const scoped = rawMessages.filter(message => isTeacherParentConversation(message, req.user)).reverse();
+        const scoped = rawMessages.filter(message => isTeacherParentConversation(message, req.user, {
+            parentId,
+            studentId: req.query.studentId || req.query.childId || null
+        })).reverse();
 
         const scopedIds = scoped.filter(message => Number(message.senderId) === Number(parentId) && !message.isRead).map(message => message.id);
         if (scopedIds.length) await Message.update(
@@ -194,7 +213,7 @@ exports.markMessagesAsRead = async (req, res) => {
 // @access  Private/Teacher
 exports.replyToParent = async (req, res) => {
     try {
-        const { parentId, message, originalMessageId, clientMessageId } = req.body;
+        const { parentId, studentId, message, originalMessageId, clientMessageId } = req.body;
 
         if (!parentId || !String(message || '').trim()) {
             return res.status(400).json({ success: false, message: 'Parent ID and message are required' });
@@ -202,7 +221,8 @@ exports.replyToParent = async (req, res) => {
 
         let baseMessage = null;
         if (originalMessageId) {
-            baseMessage = await Message.findByPk(originalMessageId).catch(() => null);
+            const candidate = await Message.findByPk(originalMessageId).catch(() => null);
+            baseMessage = candidate && isTeacherParentConversation(candidate, req.user, { parentId, studentId }) ? candidate : null;
         }
         if (!baseMessage) {
             const recent = await Message.findAll({
@@ -215,15 +235,22 @@ exports.replyToParent = async (req, res) => {
                 order: [['createdAt', 'DESC']],
                 limit: 20
             });
-            baseMessage = recent.find(m => isTeacherParentConversation(m, req.user)) || null;
+            baseMessage = recent.find(m => isTeacherParentConversation(m, req.user, { parentId, studentId })) || null;
         }
         let baseMeta = baseMessage ? messageMeta(baseMessage) : null;
         if (!baseMeta || baseMeta.conversationType !== 'parent_class_teacher') {
-            baseMeta = await resolveClassTeacherParentContext(req, parentId);
+            baseMeta = await resolveClassTeacherParentContext(req, parentId, studentId);
         }
         if (!baseMeta) {
             return res.status(403).json({ success: false, message: 'This parent is not linked to a student in your class teacher class.' });
         }
+        const conversationKey = canonicalConversationKey({
+            schoolCode: req.user.schoolCode,
+            parentUserId: parentId,
+            studentId: baseMeta.studentId,
+            teacherUserId: req.user.id
+        });
+        baseMeta = { ...baseMeta, conversationKey };
 
         if (clientMessageId) {
             const recentSent = await Message.findAll({ where: { senderId:req.user.id, receiverId:parentId }, order:[['createdAt','DESC']], limit:50 });
@@ -258,7 +285,7 @@ exports.replyToParent = async (req, res) => {
             data: { schoolCode: req.user.schoolCode, scope: 'user', targetUserIds: [parentId], conversationType: baseMeta.conversationType, conversationKey: baseMeta.conversationKey, messageId: reply.id }
         });
 
-        const conversationKey=baseMeta.conversationKey;const canonicalReply={...reply.toJSON(),messageId:reply.id,conversationId:conversationKey,conversationKey,senderId:req.user.id,senderRole:'teacher',senderName:req.user.name,senderProfileImage:req.user.profileImage||req.user.profilePicture||null,receiverId:Number(parentId),receiverRole:'parent',body:String(message).trim(),content:String(message).trim(),clientMessageId:clientMessageId?String(clientMessageId):null,createdAt:reply.createdAt,deliveryStatus:'sent',metadata:{...reply.metadata,conversationKey}};await realtime.emit({type:'chat:message_created',schoolCode:req.user.schoolCode,audience:{school:false,userIds:[req.user.id,Number(parentId)],conversations:[conversationKey]},entityType:'Message',entityId:reply.id,version:1,data:canonicalReply}).catch(e=>console.error(e.message));res.status(201).json({success:true,message:'Reply sent successfully',data:canonicalReply});
+        const canonicalReply={...reply.toJSON(),messageId:reply.id,conversationId:conversationKey,conversationKey,senderId:req.user.id,senderRole:'teacher',senderName:req.user.name,senderProfileImage:req.user.profileImage||req.user.profilePicture||null,receiverId:Number(parentId),receiverRole:'parent',body:String(message).trim(),content:String(message).trim(),clientMessageId:clientMessageId?String(clientMessageId):null,createdAt:reply.createdAt,deliveryStatus:'sent',metadata:{...reply.metadata,conversationKey}};await realtime.emit({type:'chat:message_created',schoolCode:req.user.schoolCode,audience:{school:false,userIds:[req.user.id,Number(parentId)],conversations:[conversationKey]},entityType:'Message',entityId:reply.id,version:1,data:canonicalReply}).catch(e=>console.error(e.message));res.status(201).json({success:true,message:'Reply sent successfully',data:canonicalReply});
     } catch (error) {
         console.error('Reply error:', error);
         res.status(500).json({ success: false, message: error.message });

@@ -62,14 +62,12 @@ const getTeachersByFairness = async (schoolCode, date, excludeTeacherIds = []) =
   const teachersWithCount = teachers.map(teacher => ({
     ...teacher.toJSON(),
     dutyCount: teacherDutyCounts[teacher.id] || 0,
-    monthlyDutyCount: teacher.statistics?.monthlyDutyCount || 0
+    monthlyDutyCount: teacherDutyCounts[teacher.id] || 0
   }));
 
-  // Sort by: monthly count (ascending) > total duties (ascending) > reliability (descending)
+  // The roster is the source of truth. Cached teacher statistics can outlive
+  // deleted or replaced rosters and previously caused uneven assignments.
   return teachersWithCount.sort((a, b) => {
-    if (a.monthlyDutyCount !== b.monthlyDutyCount) {
-      return a.monthlyDutyCount - b.monthlyDutyCount;
-    }
     if (a.dutyCount !== b.dutyCount) {
       return a.dutyCount - b.dutyCount;
     }
@@ -175,6 +173,11 @@ const updateTeacherDutyStats = async (teacherId, action, dutyType = null) => {
     stats.weeklyDutyCount = (stats.weeklyDutyCount || 0) + 1;
     stats.totalDutiesAssigned = (stats.totalDutiesAssigned || 0) + 1;
     stats.lastDutyDate = new Date();
+  } else if (action === 'unassign') {
+    stats.monthlyDutyCount = Math.max(0, (stats.monthlyDutyCount || 0) - 1);
+    stats.weeklyDutyCount = Math.max(0, (stats.weeklyDutyCount || 0) - 1);
+    stats.totalDutiesAssigned = Math.max(0, (stats.totalDutiesAssigned || 0) - 1);
+    if (dutyType) stats.points = Math.max(0, (stats.points || 0) - (pointsMap[dutyType] || 10));
   } else if (action === 'complete') {
     stats.dutiesCompleted = (stats.dutiesCompleted || 0) + 1;
   } else if (action === 'miss') {

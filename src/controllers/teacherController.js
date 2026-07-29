@@ -16,6 +16,8 @@ const sequelize = require('../config/database');
 const { generateTemporaryPassword } = require('../utils/passwords');
 const cache = require('../services/cacheService');
 const { findStudentInSchool, findTeacherInSchool, teacherCanAccessStudentClass } = require('../services/studentScopeService');
+const { buildAcademicSummary } = require('../services/academicSummaryService');
+const departmentMembershipService = require('../services/departmentMembershipService');
 
 
 
@@ -100,6 +102,7 @@ exports.getDashboard = async (req, res) => {
 
     const classTeacherClasses = await v66AssignedClassesForTeacher(teacher, req.user.schoolCode, { classTeacherOnly: true });
     const students = await v66CurrentStudentsForClasses(classTeacherClasses, req.user.schoolCode);
+    const departmentLabels = await departmentMembershipService.labelsForTeachers([teacher.id], req.user.schoolCode);
 
     const todayDuty = await exports.getTodayDuty(req.user.id);
     const unreadCount = await Message.count({
@@ -114,7 +117,7 @@ exports.getDashboard = async (req, res) => {
           employeeId: teacher.employeeId,
           subjects: teacher.subjects,
           classTeacher: teacher.classTeacher,
-          department: teacher.department
+          department: departmentMembershipService.displayLabel(departmentLabels, teacher)
         },
         user: req.user.getPublicProfile(),
         students: students,
@@ -163,10 +166,17 @@ exports.getMyStudents = async (req, res) => {
 
     const studentIds = students.map(s => s.id);
 
-    // Get ALL academic records for these students (not filtered by term/year)
-    const academicRecords = await AcademicRecord.findAll({
-      where: { studentId: { [Op.in]: studentIds } }
+    const requestedYear = Number(req.query.year || new Date().getFullYear());
+    const recordWhere = { studentId: { [Op.in]: studentIds }, year: requestedYear };
+    if (req.query.term) recordWhere.term = req.query.term;
+    const periodRecords = await AcademicRecord.findAll({
+      where: recordWhere,
+      order: [['year', 'DESC'], ['term', 'DESC'], ['date', 'DESC']]
     });
+    const resolvedTerm = req.query.term || periodRecords[0]?.term || null;
+    const academicRecords = resolvedTerm
+      ? periodRecords.filter(record => String(record.term || '') === String(resolvedTerm))
+      : periodRecords;
     
     const attendanceRecords = await Attendance.findAll({
       where: { studentId: { [Op.in]: studentIds } }
@@ -175,17 +185,20 @@ exports.getMyStudents = async (req, res) => {
     // Determine subjects to display
     const school = await School.findOne({ where: { schoolId: req.user.schoolCode } });
     const curriculum = school?.system || 'cbc';
-    const curriculumHelper = require('../utils/curriculumHelper');
-    const allSubjects = new Set();
-    
-    if (classItem) {
-      const curriculumSubjects = curriculumHelper.getSubjectsForCurriculum(curriculum, school?.settings?.schoolLevel || 'both');
-      curriculumSubjects.forEach(s => allSubjects.add(s));
-      const customSubjects = school?.settings?.customSubjects || [];
-      customSubjects.forEach(s => allSubjects.add(s));
-    }
-
-    const displaySubjects = classItem ? Array.from(allSubjects) : subjectAssignments.map(a => a.subject);
+    const eligibleSubjects = classItem && school ? v102CurriculumEngine.getEligibleSubjectsForClass(school, classItem) : [];
+    const recordedSubjects = [...new Set(academicRecords.map(record => record.subject).filter(Boolean))];
+    const displaySubjects = classItem
+      ? (eligibleSubjects.length ? eligibleSubjects.map(subject => subject.name) : recordedSubjects)
+      : [...new Set(subjectAssignments.map(assignment => assignment.subject).filter(Boolean))];
+    const selections = classItem
+      ? await v102SelectionsForStudents({ schoolCode:req.user.schoolCode, studentIds, classId:classItem.id }).catch(() => [])
+      : [];
+    const selectionsByStudent = new Map();
+    selections.forEach(selection => {
+      const key = String(selection.studentId);
+      if (!selectionsByStudent.has(key)) selectionsByStudent.set(key, []);
+      selectionsByStudent.get(key).push(selection);
+    });
 
     // Build student data with subject scores
     const studentData = students.map(student => {
@@ -196,29 +209,31 @@ exports.getMyStudents = async (req, res) => {
       const present = studentAttendance.filter(a => a.status === 'present').length;
       const attendanceRate = studentAttendance.length ? Math.round((present / studentAttendance.length) * 100) : 100;
 
-      const subjectScores = {};
-      if (classItem) {
-        for (const subject of allSubjects) {
-          const subjectRecords = studentRecords.filter(r => r.subject === subject);
-          const avg = subjectRecords.length
-            ? Math.round(subjectRecords.reduce((sum, r) => sum + r.score, 0) / subjectRecords.length)
-            : null;
-          subjectScores[subject] = avg;
-        }
-      } else {
-        for (const assignment of subjectAssignments) {
-          const subjectRecords = studentRecords.filter(r => r.subject === assignment.subject);
-          const avg = subjectRecords.length
-            ? Math.round(subjectRecords.reduce((sum, r) => sum + r.score, 0) / subjectRecords.length)
-            : null;
-          subjectScores[assignment.subject] = avg;
-        }
-      }
-
-      const allScores = Object.values(subjectScores).filter(s => s !== null);
-      const overallAvg = allScores.length
-        ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length)
-        : null;
+      const gradeFromScore = score => getGradeFromScore(
+        score,
+        curriculum,
+        classItem?.curriculumLevel || school?.settings?.schoolLevel || 'primary',
+        school?.settings?.gradingScale || null
+      );
+      const academicSummary = buildAcademicSummary(studentRecords, {
+        assessmentSettings: school?.settings?.curriculumEngine?.assessmentSettings,
+        gradeFromScore
+      });
+      const summaryBySubject = new Map(academicSummary.subjects.map(subject => [String(subject.subject).toLowerCase(), subject]));
+      const selectedRows = selectionsByStudent.get(String(student.id)) || [];
+      const excluded = new Set(selectedRows
+        .filter(selection => ['not_taken','exempted','not_offered','pending_rejected'].includes(String(selection.status || '').toLowerCase()))
+        .map(selection => String(selection.subjectName || selection.subject || '').toLowerCase()));
+      const subjectScores = Object.fromEntries(displaySubjects.map(subject => {
+        const key = String(subject).toLowerCase();
+        return [subject, excluded.has(key) ? null : (summaryBySubject.get(key)?.average ?? null)];
+      }));
+      const countedScores = Object.entries(subjectScores)
+        .filter(([subject, score]) => score !== null && !excluded.has(String(subject).toLowerCase()))
+        .map(([, score]) => Number(score));
+      const overallAvg = countedScores.length
+        ? Math.round((countedScores.reduce((sum, score) => sum + score, 0) / countedScores.length) * 100) / 100
+        : academicSummary.overallAverage;
 
       return {
         id: student.id,
@@ -230,7 +245,10 @@ exports.getMyStudents = async (req, res) => {
         status: student.status,
         attendance: attendanceRate,
         subjectScores,
-        overallAverage: overallAvg
+        overallAverage: overallAvg,
+        overallGrade: overallAvg === null ? null : gradeFromScore(overallAvg),
+        academicPeriod: { term: resolvedTerm, year: requestedYear },
+        calculationRule: academicSummary.calculationRule
       };
     });
 
@@ -244,6 +262,7 @@ exports.getMyStudents = async (req, res) => {
         classId: classItem?.id || null,
         class: classItem ? { id: classItem.id, name: classItem.name, grade: classItem.grade, stream: classItem.stream } : null,
         teacherName: req.user.name
+        ,academicPeriod: { term: resolvedTerm, year: requestedYear }
       }
     });
   } catch (error) {
@@ -1394,6 +1413,7 @@ exports.getMyAssignments = async (req, res) => {
     const teacher = await v3Teacher(req.user.id);
     if (!teacher) return res.status(404).json({ success:false, message:'Teacher not found' });
     const { subjectAssignments, classTeacherClasses } = await v66JTeacherAssignments(teacher, req.user.schoolCode);
+    const departmentLabels = await departmentMembershipService.labelsForTeachers([teacher.id], req.user.schoolCode);
     const byClass = new Map();
     const classTeacher = classTeacherClasses[0] || null;
 
@@ -1419,7 +1439,7 @@ exports.getMyAssignments = async (req, res) => {
     res.json({ success:true, data:{
       teacherId: teacher.id,
       teacherName: teacher.User?.name,
-      department: teacher.department || '',
+      department: departmentMembershipService.displayLabel(departmentLabels, teacher),
       role: classTeacher ? 'class_teacher' : 'subject_teacher',
       classTeacher: classTeacher ? { id:classTeacher.id, name:classTeacher.name, grade:classTeacher.grade, stream:classTeacher.stream, subjects:v66SubjectListForClass(classTeacher) } : null,
       classes:[...byClass.values()],

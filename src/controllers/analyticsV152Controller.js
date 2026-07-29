@@ -6,6 +6,8 @@ const { getAlertsForUser } = require('../services/alertReceiverEngine');
 const curriculumHelper = require('../utils/curriculumHelper');
 const financeLedger = require('../services/financeLedgerService');
 const { getStudentGamificationSummary } = require('../services/studentGamificationService');
+const { dateStringInTimeZone, uniqueWorksheetName } = require('../services/systemNormalizationService');
+const { buildAcademicSummary } = require('../services/academicSummaryService');
 
 const { QueryTypes } = require('sequelize');
 
@@ -15,8 +17,8 @@ function round(value, digits = 0) { const p = 10 ** digits; return Math.round(nu
 function text(value, fallback = '') { return String(value ?? fallback).trim(); }
 function currentYear(query = {}) { const year = Number(query.year || new Date().getFullYear()); return Number.isInteger(year) ? year : new Date().getFullYear(); }
 function currentTerm(query = {}) { return ['Term 1', 'Term 2', 'Term 3'].includes(query.term) ? query.term : null; }
-function isoDate(value, fallback) { const d = value ? new Date(value) : null; return d && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : fallback; }
-function startOfDays(days) { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString().slice(0, 10); }
+function isoDate(value, fallback) { const d = value ? new Date(value) : null; return d && !Number.isNaN(d.getTime()) ? dateStringInTimeZone(d) : fallback; }
+function startOfDays(days) { const d = new Date(); d.setDate(d.getDate() - days); return dateStringInTimeZone(d); }
 function safeName(value, fallback = 'analytics') { return text(value, fallback).replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || fallback; }
 function gradeForScore(score, context = {}) {
   const n = num(score, NaN);
@@ -84,7 +86,7 @@ function filtersFrom(req) {
     year: currentYear(req.query || req.body || {}),
     term: currentTerm(req.query || req.body || {}),
     dateFrom: isoDate((req.query || req.body || {}).dateFrom, startOfDays(210)),
-    dateTo: isoDate((req.query || req.body || {}).dateTo, new Date().toISOString().slice(0, 10)),
+    dateTo: isoDate((req.query || req.body || {}).dateTo, dateStringInTimeZone()),
     scopeType: text((req.query || req.body || {}).scopeType, 'school').toLowerCase(),
     scopeId: text((req.query || req.body || {}).scopeId),
     analyticsType: text((req.query || req.body || {}).analyticsType, 'overview').toLowerCase()
@@ -325,6 +327,43 @@ function groupAverage(rows, keyFn, valueFn = r => r.score) {
   rows.forEach(r => { const key = text(keyFn(r), 'Unknown'); const entry = map.get(key) || { name: key, values: [] }; const value = num(valueFn(r), NaN); if (Number.isFinite(value)) entry.values.push(value); map.set(key, entry); });
   return [...map.values()].map(x => ({ name: x.name, average: average(x.values), count: x.values.length })).sort((a, b) => b.average - a.average);
 }
+function latestAcademicPeriodRows(rows = [], filters = {}) {
+  if (filters.term || !rows.length) return rows;
+  const termOrder = { 'term 1': 1, 'term 2': 2, 'term 3': 3 };
+  const latest = [...rows].sort((a, b) => {
+    const yearDiff = num(b.year) - num(a.year);
+    if (yearDiff) return yearDiff;
+    return num(termOrder[text(b.term).toLowerCase()]) - num(termOrder[text(a.term).toLowerCase()]);
+  })[0];
+  return rows.filter(row => String(row.year || '') === String(latest.year || '') && String(row.term || '') === String(latest.term || ''));
+}
+function academicSummariesByStudent(rows = [], assessmentSettings = [], academicContext = {}) {
+  const byStudent = new Map();
+  rows.forEach(row => {
+    const key = Number(row.studentId);
+    if (!byStudent.has(key)) byStudent.set(key, []);
+    byStudent.get(key).push(row);
+  });
+  return new Map([...byStudent.entries()].map(([studentId, records]) => [
+    studentId,
+    buildAcademicSummary(records, {
+      assessmentSettings,
+      gradeFromScore: score => gradeForScore(score, academicContext)
+    })
+  ]));
+}
+function subjectPerformanceFromSummaries(summaries) {
+  const values = new Map();
+  for (const summary of summaries.values()) {
+    for (const subject of summary.subjects || []) {
+      const key = text(subject.subject, 'Unknown');
+      const entry = values.get(key) || [];
+      if (Number.isFinite(Number(subject.average))) entry.push(Number(subject.average));
+      values.set(key, entry);
+    }
+  }
+  return [...values.entries()].map(([name, scores]) => ({ name, average: average(scores), count: scores.length })).sort((a, b) => b.average - a.average);
+}
 function monthlyTrend(rows, dateKey, valueFn, aggregator = 'sum', months = 7) {
   const labels = []; const values = []; const now = new Date();
   for (let i = months - 1; i >= 0; i -= 1) {
@@ -462,16 +501,25 @@ async function buildSchoolAnalytics(req) {
   const studentById = new Map(options.students.map(s => [Number(s.id), s]));
   const classById = new Map(options.classes.map(c => [Number(c.id), c]));
   const teacherById = new Map(options.teachers.map(t => [Number(t.teacherId), t]));
-  const recordByClass = new Map();
-  records.forEach(r => {
-    const sid = Number(r.studentId); const cid = Number(r.classId || studentById.get(sid)?.classId || 0); if (!cid) return;
-    const arr = recordByClass.get(cid) || []; arr.push(r); recordByClass.set(cid, arr);
-  });
-  const classPerformance = [...recordByClass.entries()].map(([id, rows]) => ({ id, name: classById.get(id)?.name || `Class ${id}`, stream: classById.get(id)?.stream || '', average: average(rows.map(r => r.score)), marks: rows.length })).sort((a, b) => b.average - a.average);
-  const subjectPerformance = groupAverage(records, r => r.subject);
-  const assessmentPerformance = groupAverage(records, r => r.assessmentName || r.assessmentKey || r.assessmentType);
-  const studentPerformance = groupAverage(records, r => studentById.get(Number(r.studentId))?.name || `Student ${r.studentId}`).map(x => ({ ...x, student: x.name, id: options.students.find(s => s.name === x.name)?.id })).sort((a, b) => b.average - a.average);
-  const teacherPerformance = groupAverage(records, r => teacherById.get(Number(r.teacherId))?.name || `Teacher ${r.teacherId}`).map(x => ({ ...x, teacher: x.name }));
+  const academicRows = latestAcademicPeriodRows(records, filters);
+  const assessmentSettings = school?.settings?.curriculumEngine?.assessmentSettings || [];
+  const studentSummaries = academicSummariesByStudent(academicRows, assessmentSettings, academicContext);
+  const classSummaryMap = new Map();
+  for (const [studentId, summary] of studentSummaries.entries()) {
+    const cid = Number(studentById.get(studentId)?.classId || 0);
+    if (!cid || summary.overallAverage === null) continue;
+    const values = classSummaryMap.get(cid) || [];
+    values.push(Number(summary.overallAverage));
+    classSummaryMap.set(cid, values);
+  }
+  const classPerformance = [...classSummaryMap.entries()].map(([id, values]) => ({ id, name: classById.get(id)?.name || `Class ${id}`, stream: classById.get(id)?.stream || '', average: average(values), marks: values.length })).sort((a, b) => b.average - a.average);
+  const subjectPerformance = subjectPerformanceFromSummaries(studentSummaries);
+  const assessmentPerformance = groupAverage(academicRows, r => r.assessmentName || r.assessmentKey || r.assessmentType);
+  const studentPerformance = [...studentSummaries.entries()].map(([id, summary]) => {
+    const name = studentById.get(id)?.name || `Student ${id}`;
+    return { id, name, student:name, average:summary.overallAverage ?? 0, grade:summary.overallGrade, count:summary.countedSubjects };
+  }).sort((a, b) => b.average - a.average);
+  const teacherPerformance = groupAverage(academicRows, r => teacherById.get(Number(r.teacherId))?.name || `Teacher ${r.teacherId}`).map(x => ({ ...x, teacher: x.name }));
   const streamMap = new Map();
   classPerformance.forEach(c => { const key = c.stream || 'No Stream'; const row = streamMap.get(key) || { name: key, weighted: 0, marks: 0 }; row.weighted += c.average * c.marks; row.marks += c.marks; streamMap.set(key, row); });
   const streamPerformance = [...streamMap.values()].map(x => ({ name: x.name, average: x.marks ? round(x.weighted / x.marks, 1) : 0 }));
@@ -505,7 +553,7 @@ async function buildSchoolAnalytics(req) {
     { label: 'Student–Teacher Ratio', value: options.teachers.length ? round(scope.studentIds.length / options.teachers.length, 1) : 0 },
     { label: 'Populated Classes', value: activeClasses },
     { label: 'Configured Classes', value: configuredClasses },
-    { label: 'Empty / Unused Classes', value: Math.max(0, configuredClasses - activeClasses) },
+    { label: 'Empty / Unused Classes (review only)', value: Math.max(0, configuredClasses - activeClasses) },
     { label: 'Classes Below 70% Attendance', value: attendanceClassIds.filter(id => attendance.filter(a => Number(a.classId || studentById.get(Number(a.studentId))?.classId) === Number(id)).length && attendanceRate(attendance.filter(a => Number(a.classId || studentById.get(Number(a.studentId))?.classId) === Number(id))) < 70).length },
     { label: 'Overdue Fee Balance', value: fee.outstanding },
     { label: 'Reports Pending', value: draft }
@@ -563,7 +611,7 @@ async function buildSchoolAnalytics(req) {
 async function buildTeacherAnalytics(req) {
   const filters = filtersFrom(req);
   const schoolCode = req.user.schoolCode;
-  const options = await getSchoolOptions(schoolCode);
+  const [school, options] = await Promise.all([getSchool(schoolCode), getSchoolOptions(schoolCode)]);
   const assigned = await linkage.resolveTeacherAssignedClasses(req.user.id, schoolCode).catch(() => []);
   const assignedIds = assigned.map(c => Number(c.id));
   options.classes = options.classes.filter(c => assignedIds.includes(Number(c.id)));
@@ -571,16 +619,23 @@ async function buildTeacherAnalytics(req) {
   const teacher = await Teacher.findOne({ where: { userId: req.user.id } }).catch(() => null);
   options.subjects = options.subjects.filter(s => !teacher?.subjects?.length || teacher.subjects.some(subject => text(subject).toLowerCase() === text(s.name).toLowerCase()));
   const scope = await resolveSchoolScope(req, options, filters);
+  const academicContext = resolveCurriculumContext(school, scope, options);
   const [records, attendance, tasks, reports] = await Promise.all([academicRecords(scope, filters), attendanceRecords(scope, filters), taskRows(scope), reportRows(scope, filters)]);
   const studentById = new Map(options.students.map(s => [Number(s.id), s]));
-  const studentPerf = groupAverage(records, r => studentById.get(Number(r.studentId))?.name || `Student ${r.studentId}`).map(x => ({ ...x, student: x.name }));
-  const subjectPerf = groupAverage(records, r => r.subject);
-  const assessments = groupAverage(records, r => r.assessmentName || r.assessmentKey || r.assessmentType);
+  const academicRows = latestAcademicPeriodRows(records, filters);
+  const summaries = academicSummariesByStudent(academicRows, school?.settings?.curriculumEngine?.assessmentSettings || [], academicContext);
+  const studentPerf = [...summaries.entries()].map(([id, summary]) => {
+    const name = studentById.get(id)?.name || `Student ${id}`;
+    return { id, name, student:name, average:summary.overallAverage ?? 0, grade:summary.overallGrade, count:summary.countedSubjects };
+  }).sort((a,b)=>b.average-a.average);
+  const subjectPerf = subjectPerformanceFromSummaries(summaries);
+  const assessments = groupAverage(academicRows, r => r.assessmentName || r.assessmentKey || r.assessmentType);
+  const meanScore = average(studentPerf.map(student => student.average).filter(value => value > 0));
   const task = taskSummary(tasks);
   const published = reports.filter(r => r.status === 'published').length;
   const response = {
-    variant: 'class', title: 'Class Teacher Analytics', subtitle: 'Track class performance, student progress and teaching impact', filters, scope: { type: scope.scopeType, id: scope.scopeId, label: scope.label }, options,
-    kpis: [kpi('Students Taught', scope.studentIds.length, 'users'), kpi('Mean Score', `${average(records.map(r => r.score))}%`, 'award', 'green'), kpi('Attendance Rate', `${attendanceRate(attendance)}%`, 'calendar-check', 'blue'), kpi('Assignments Completed', `${task.rate}%`, 'clipboard-check', 'blue'), kpi('Published Reports', `${published} / ${scope.studentIds.length}`, 'file-text', 'purple'), kpi('At-Risk Learners', studentPerf.filter(x => x.average > 0 && x.average < 60).length, 'user-x', 'red')],
+    variant: 'class', title: 'Class Teacher Analytics', subtitle: 'Track class performance, student progress and teaching impact', filters, scope: { type: scope.scopeType, id: scope.scopeId, label: scope.label }, options, academicContext,
+    kpis: [kpi('Students Taught', scope.studentIds.length, 'users'), kpi('Mean Score', `${meanScore}%`, 'award', 'green'), kpi('Attendance Rate', `${attendanceRate(attendance)}%`, 'calendar-check', 'blue'), kpi('Assignments Completed', `${task.rate}%`, 'clipboard-check', 'blue'), kpi('Published Reports', `${published} / ${scope.studentIds.length}`, 'file-text', 'purple'), kpi('At-Risk Learners', studentPerf.filter(x => x.average > 0 && x.average < 60).length, 'user-x', 'red')],
     charts: { performanceTrend: monthlyTrend(records, 'date', r => r.score, 'average'), subjectPerformance: { labels: subjectPerf.map(x => x.name), values: subjectPerf.map(x => x.average) }, assessmentBreakdown: { labels: assessments.map(x => x.name), values: assessments.map(x => x.average) }, attendancePattern: { labels: ['Present/Late', 'Absent/Sick'], values: [attendance.filter(r => ['present','late'].includes(text(r.status).toLowerCase())).length, attendance.filter(r => ['absent','sick'].includes(text(r.status).toLowerCase())).length] }, homeworkSplit: { labels: ['Completed','Pending','Overdue'], values: [task.completed,task.pending,task.overdue] }, reportStatus: { labels: ['Published','Not Published'], values: [published,Math.max(0,scope.studentIds.length-published)] } },
     lists: { topStudents: studentPerf.slice(0, 8), riskStudents: studentPerf.filter(x => x.average > 0 && x.average < 60).sort((a,b)=>a.average-b.average).slice(0,8), assessmentPerformance: assessments, upcomingAssessments: [], actionableInsights: [studentPerf.some(x=>x.average>0&&x.average<60)?insight('Learners need support', `${studentPerf.filter(x=>x.average>0&&x.average<60).length} learner(s) are below 60%.`, 'warning'):insight('Academic risk', 'No learner is below 60% in the selected scope.', 'success'), insight('Attendance', `Current attendance rate is ${attendanceRate(attendance)}%.`, attendanceRate(attendance)<80?'warning':'success'), task.overdue?insight('Homework review', `${task.overdue} homework assignment(s) are overdue.`, 'warning'):insight('Homework review', 'No overdue homework in the selected scope.', 'success')] },
     taskSummary: task, updatedAt: new Date().toISOString(), realData: true, tenantScoped: schoolCode
@@ -613,13 +668,20 @@ async function buildChildStudentAnalytics(req) {
     getAlertsForUser(req.user, role === 'parent' ? { studentId: student.id, limit: 10 } : { limit: 10 }).catch(() => []),
     safeQuery(`SELECT slots,classes,term,year,"publishedAt" FROM "Timetables" WHERE "schoolId"=:schoolCode AND "isPublished"=true AND (:term::text IS NULL OR term=:term) AND (:year::int IS NULL OR year=:year) ORDER BY version DESC LIMIT 1`, { schoolCode, term: filters.term, year: filters.year })
   ]);
-  const subjectPerf = groupAverage(records, r => r.subject);
-  const recentAssessments = [...records].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,8).map(r => ({ subject:r.subject, assessment:r.assessmentName||r.assessmentKey||r.assessmentType, score:num(r.score), grade:r.grade||gradeForScore(r.score, academicContext), date:r.date }));
+  const academicRows = latestAcademicPeriodRows(records, filters);
+  const academicSummary = buildAcademicSummary(academicRows, {
+    assessmentSettings: school?.settings?.curriculumEngine?.assessmentSettings || [],
+    gradeFromScore: score => gradeForScore(score, academicContext)
+  });
+  const subjectPerf = academicSummary.subjects.map(subject => ({ name:subject.subject, average:subject.average, grade:subject.grade, count:subject.components?.length || 0 }));
+  const recentAssessments = [...academicRows].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,8).map(r => ({ subject:r.subject, assessment:r.assessmentName||r.assessmentKey||r.assessmentType, score:num(r.score), grade:r.grade||gradeForScore(r.score, academicContext), date:r.date }));
   const task = taskSummary(tasks);
   const classStudents = cls ? await linkage.resolveClassStudents([cls.id], schoolCode, { limit: 5000 }).catch(() => []) : [];
   const classIds = classStudents.map(s => Number(s.id));
   const classRecords = classIds.length ? await academicRecords({ ...scope, studentIds: classIds, subject: null }, filters, true) : [];
-  const fullLeaderboard = classStudents.map(s => ({ id:s.id, name:s.User?.name || `Student ${s.id}`, elimuid:s.elimuid || '', average:average(classRecords.filter(r=>Number(r.studentId)===Number(s.id)).map(r=>r.score)) })).sort((a,b)=>b.average-a.average);
+  const classAcademicRows = latestAcademicPeriodRows(classRecords, filters);
+  const classSummaries = academicSummariesByStudent(classAcademicRows, school?.settings?.curriculumEngine?.assessmentSettings || [], academicContext);
+  const fullLeaderboard = classStudents.map(s => ({ id:s.id, name:s.User?.name || `Student ${s.id}`, elimuid:s.elimuid || '', average:classSummaries.get(Number(s.id))?.overallAverage ?? 0 })).sort((a,b)=>b.average-a.average);
   const rank = fullLeaderboard.findIndex(x=>Number(x.id)===Number(student.id));
   const leaderboard = fullLeaderboard.slice(0,10);
   const timetable = timetableRows[0];
@@ -627,7 +689,7 @@ async function buildChildStudentAnalytics(req) {
   const className = cls?.name || student.grade;
   const slots = exactStudentTimetableSlots(rawSlots, cls, className);
   const lastReport = [...reports].filter(r=>r.status==='published').sort((a,b)=>new Date(b.publishedAt||0)-new Date(a.publishedAt||0))[0] || null;
-  const avg = average(records.map(r=>r.score));
+  const avg = academicSummary.overallAverage ?? 0;
   const badges = gamification.badges || [];
   const achievements = gamification.recentEvents || [];
   const rewardPoints = num(gamification.summary?.totalPoints, num(student.points));
@@ -922,12 +984,13 @@ function buildPrintHtml(data, sections){
 async function buildWorkbook(data, sections){
   const workbook=new ExcelJS.Workbook();workbook.creator='Shule AI';workbook.created=new Date();
   const summary=workbook.addWorksheet('Summary');
+  const usedSheetNames=new Set(['summary']);
   summary.columns=[{width:26},{width:45},{width:22},{width:28}];
   summary.addRow(['Shule AI Analytics Report']);summary.mergeCells('A1:D1');summary.getCell('A1').font={bold:true,size:18,color:{argb:'FFFFFFFF'}};summary.getCell('A1').fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF083A85'}};
   summary.addRow(['Title', data.title||'Analytics Report']);summary.addRow(['Scope', data.scope?.label||data.tenantScoped||'Current scope']);summary.addRow(['Generated', new Date().toISOString()]);summary.addRow(['Year', data.filters?.year||'All']);summary.addRow(['Term', data.filters?.term||'All']);summary.addRow([]);summary.addRow(['KPI','Value','Note']);
   const headerRow=summary.lastRow;headerRow.font={bold:true,color:{argb:'FFFFFFFF'}};headerRow.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF11B5B1'}};
   (data.kpis||[]).forEach(k=>summary.addRow([k.label,k.value,k.hint||'']));
-  for(const key of sections){const rows=normalizeRows(rowsForSection(data,key));const display=rows.length?rows:[{Status:'No data available'}];const title=humanSection(key).slice(0,31).replace(/[\\/*?:\[\]]/g,' ').trim()||'Analytics';const sheet=workbook.addWorksheet(title);const cols=rowColumns(display);sheet.columns=cols.map(c=>({header:c,key:c,width:Math.min(48,Math.max(14,String(c).length+6))}));display.forEach(row=>sheet.addRow(row));sheet.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};sheet.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF083A85'}};sheet.views=[{state:'frozen',ySplit:1}];sheet.autoFilter={from:{row:1,column:1},to:{row:Math.max(1,sheet.rowCount),column:cols.length}};}
+  for(const key of sections.filter(section=>section!=='kpis')){const rows=normalizeRows(rowsForSection(data,key));const display=rows.length?rows:[{Status:'No data available'}];const title=uniqueWorksheetName(humanSection(key),usedSheetNames);const sheet=workbook.addWorksheet(title);const cols=rowColumns(display);sheet.columns=cols.map(c=>({header:c,key:c,width:Math.min(48,Math.max(14,String(c).length+6))}));display.forEach(row=>sheet.addRow(row));sheet.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};sheet.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF083A85'}};sheet.views=[{state:'frozen',ySplit:1}];sheet.autoFilter={from:{row:1,column:1},to:{row:Math.max(1,sheet.rowCount),column:cols.length}};}
   return workbook.xlsx.writeBuffer();
 }
 function ensurePdfSpace(doc, needed = 80) { if (doc.y + needed > 760) doc.addPage(); }
@@ -998,7 +1061,7 @@ exports.exportAnalytics = async (req,res)=>{
     const data=await dataForRequest(req);
     const sections=selectedSections(data,body.include,body.analyticsType||body.filters?.analyticsType||data.filters?.analyticsType);
     const format=text(body.format,'pdf').toLowerCase();
-    const base=`shule-ai-${safeName(data.variant)}-${safeName(data.scope?.label||data.tenantScoped)}-${new Date().toISOString().slice(0,10)}`;
+    const base=`shule-ai-${safeName(data.variant)}-${safeName(data.scope?.label||data.tenantScoped)}-${dateStringInTimeZone()}`;
     if(format==='xlsx'||format==='excel'){
       const buffer=await buildWorkbook(data,sections);
       res.set({'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':`attachment; filename="${base}.xlsx"`});

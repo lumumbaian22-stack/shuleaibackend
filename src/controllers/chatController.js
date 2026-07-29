@@ -315,7 +315,7 @@ exports.getParentConversations = async (req, res) => {
     });
 
     const conversations = {};
-    const keyFor = (parentUserId, studentId, classId) => `parent_class_teacher:${req.user.schoolCode}:${studentId || 'student'}:${parentUserId}:${req.user.id}`;
+    const keyFor = (parentUserId, studentId) => `parent_class_teacher:${req.user.schoolCode}:${studentId || 'student'}:${parentUserId}:${req.user.id}`;
 
     // First list all parents linked to students in this class teacher's actual class.
     const parentRows = await sequelize.query(
@@ -339,7 +339,7 @@ exports.getParentConversations = async (req, res) => {
     ).catch(() => []);
 
     for (const row of parentRows) {
-      const key = keyFor(row.userId, row.studentId, row.classId);
+      const key = keyFor(row.userId, row.studentId);
       conversations[key] = {
         conversationKey: key,
         userId: row.userId,
@@ -368,7 +368,10 @@ exports.getParentConversations = async (req, res) => {
 
       const parentUserId = Number(md.parentUserId || (Number(msg.senderId) === Number(req.user.id) ? msg.receiverId : msg.senderId));
       const parentUser = Number(msg.senderId) === Number(req.user.id) ? msg.Receiver : msg.Sender;
-      const key = md.conversationKey || keyFor(parentUserId, md.studentId, md.classId);
+      // Always fold legacy keys into the canonical child-specific key. Older
+      // releases used several incompatible key layouts and produced duplicate
+      // parent rows for one child.
+      const key = keyFor(parentUserId, md.studentId);
       if (!conversations[key]) {
         conversations[key] = {
           conversationKey: key,

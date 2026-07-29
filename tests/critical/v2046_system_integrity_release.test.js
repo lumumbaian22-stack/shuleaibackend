@@ -199,7 +199,7 @@ test('v2046 rewards, student dashboard, and analytics share one gamification ser
 
 test('v2046 frontend uses compiled Tailwind and pinned browser dependencies', () => {
   const html = readFrontend('index.html');
-  assert.match(html, /css\/tailwind\.css\?v=2046-system-integrity-release/);
+  assert.match(html, /css\/tailwind\.css\?v=2047-grounded-system-repair/);
   assert.doesNotMatch(html, /cdn\.tailwindcss\.com/);
   assert.doesNotMatch(html, /lucide@latest/);
   assert.match(html, /lucide@1\.27\.0\/dist\/umd\/lucide\.min\.js/);

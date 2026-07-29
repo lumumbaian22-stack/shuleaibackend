@@ -22,7 +22,7 @@ async function recipients(student,schoolCode,settings={}){
   return {userIds:[...ids].filter(Boolean),classId:cls?.id||null,className:cls?.name||student.grade||null};
 }
 async function processSchool(schoolCode,{now=new Date(),createdBy=null}={}){
-  const school=await School.findOne({where:{schoolId:schoolCode}});const settings=school?.settings?.birthdayNotifications||{};if(settings.enabled===false)return {schoolCode,created:0,suppressed:true};
+  const school=await School.findOne({where:{schoolId:schoolCode}});const settings={requireVerifiedDateOfBirth:true,...(school?.settings?.birthdayNotifications||{})};if(settings.enabled===false)return {schoolCode,created:0,suppressed:true};
   const timezone=settings.timezone||'Africa/Nairobi';const advanceDays=Array.isArray(settings.advanceDays)?settings.advanceDays:[7,1];const today=ymd(now,timezone);
   const suppressedIds=Array.isArray(settings.suppressedStudentIds)?settings.suppressedStudentIds.map(Number):[];
   const students=await (Student.unscoped?Student.unscoped():Student).findAll({where:{status:'active',dateOfBirth:{[Op.ne]:null},...(settings.requireVerifiedDateOfBirth===true?{dateOfBirthVerified:true}:{}),...(suppressedIds.length?{id:{[Op.notIn]:suppressedIds}}:{})},include:[{model:User,where:{schoolCode,role:'student',isActive:true},attributes:['id','name','schoolCode']} ]});

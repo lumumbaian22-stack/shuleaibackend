@@ -127,7 +127,9 @@ exports.updatePreferences = async (req, res) => {
 exports.exportMyData = async (req, res) => {
   try {
     const user = req.user;
-    let exportData = { user: user.getPublicProfile(), createdAt: user.createdAt, lastLogin: user.lastLogin, preferences: user.preferences };
+    // The public account profile already contains dates and preferences. Keeping
+    // those fields only once prevents duplicate rows in the CSV "My Data" export.
+    const exportData = { account: user.getPublicProfile() };
     
     if (user.role === 'teacher') {
       const teacher = await Teacher.findOne({ where: { userId: user.id } });
@@ -141,9 +143,9 @@ exports.exportMyData = async (req, res) => {
       exportData.attendance = attendance;
     } else if (user.role === 'parent') {
       const parent = await Parent.findOne({ where: { userId: user.id } });
-      const children = await parent.getStudents();
+      const children = parent ? await parent.getStudents() : [];
       exportData.parent = parent;
-      exportData.children = children;
+      exportData.children = [...new Map(children.map(child => [Number(child.id), child])).values()];
     }
     
     res.json({ success: true, data: exportData });

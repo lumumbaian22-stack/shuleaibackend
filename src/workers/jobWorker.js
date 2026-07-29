@@ -1,20 +1,12 @@
 require('dotenv').config();
 const { processNextJob } = require('../services/jobQueue');
 
-const handlers = {
-  async 'csv-import'(job, progress) {
-    await progress(30, 'CSV import worker cannot process this job because no import handler is configured.');
-    throw new Error('CSV import handler is not implemented; job was not processed.');
-  },
-  async 'marks-import'(job, progress) {
-    await progress(30, 'Marks import worker cannot process this job because no import handler is configured.');
-    throw new Error('Marks import handler is not implemented; job was not processed.');
-  },
-  async 'report-card-generation'(job, progress) {
-    await progress(50, 'Report-card worker cannot process this job because no generation handler is configured.');
-    throw new Error('Report-card generation handler is not implemented; job was not processed.');
-  }
-};
+// The former CSV, marks, and report-card queue endpoints accepted jobs that
+// could never be processed. Those routes now reject explicitly and the active
+// dashboard workflows continue to use their implemented synchronous endpoints.
+// Keeping an empty worker lets an old deployment drain any legacy queued record
+// into the queue service's explicit "No worker registered" failed state.
+const handlers = Object.freeze({});
 
 async function loop() {
   await processNextJob(handlers);

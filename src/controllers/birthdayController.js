@@ -9,7 +9,7 @@ const DEFAULT_SETTINGS = {
   advanceDays:[7,1],sameDayEnabled:true,
   audience:{admin:true,classTeacher:true,subjectTeacher:false,parent:true,student:true},
   announceToClass: false,
-  requireVerifiedDateOfBirth: false,
+  requireVerifiedDateOfBirth: true,
   suppressedStudentIds: []
 };
 
@@ -128,6 +128,9 @@ exports.upcoming = async (req,res) => {
         order:[[User,'name','ASC']]
       });
     }
+    if (settings.requireVerifiedDateOfBirth !== false) {
+      students = students.filter(student => student.dateOfBirthVerified === true);
+    }
     const end = new Date(now.getTime() + days * 86400000);
     const eventRows = await BirthdayEvent.findAll({
       where:{ schoolCode:schoolCode(req), eventDate:{ [Op.between]:[today,dateOnlyInZone(end,timeZone)] } },
@@ -148,6 +151,7 @@ exports.upcoming = async (req,res) => {
       return {
         studentId:student.id,
         studentName:student.User?.name || student.elimuid,
+        elimuid:student.elimuid || null,
         profileImage:student.User?.profileImage || null,
         classId:student.classId || null,
         className:student.Class?.name || student.grade || 'Unassigned',

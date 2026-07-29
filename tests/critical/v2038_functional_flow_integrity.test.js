@@ -49,8 +49,13 @@ test('unfinished LearnFeed and worker operations cannot report fake success', ()
   assert.match(feed, /FEATURE_NOT_IMPLEMENTED/);
   assert.doesNotMatch(feed, /exports\.withdraw[\s\S]{0,160}status: 'requested'/);
   const worker = readBackend('src/workers/jobWorker.js');
+  const jobRoutes = readBackend('src/routes/jobRoutes.js');
   assert.doesNotMatch(worker, /accepted: true/);
-  assert.match(worker, /handler is not implemented/);
+  assert.match(worker, /const handlers = Object\.freeze\(\{\}\)/);
+  assert.doesNotMatch(worker, /handler is not implemented/);
+  assert.doesNotMatch(jobRoutes, /enqueueJob/);
+  assert.match(jobRoutes, /ASYNC_JOB_ROUTE_RETIRED/);
+  assert.doesNotMatch(jobRoutes, /res\.status\(202\)/);
 });
 
 test('production migrations avoid describeTable timeout loops and use explicit DDL limits', () => {

@@ -54,6 +54,15 @@ exports.preview = async (req,res)=>{
     const closingYear=Number(req.body.closingYear), newYear=Number(req.body.newYear), effectiveDate=String(req.body.effectiveDate || `${newYear}-01-01`).slice(0,10);
     const closingTerm=enrollmentService.normalizeTerm(req.body.closingTerm)||'Term 3', newTerm=enrollmentService.normalizeTerm(req.body.newTerm)||'Term 1';
     if(!closingYear||!newYear||newYear<=closingYear){ await transaction.rollback(); return res.status(400).json({success:false,message:'Choose a valid closing year and a later new academic year'}); }
+    const existingDraft = await PromotionBatch.findOne({
+      where: { schoolCode:code(req), closingYear, newYear, effectiveDate, status:'draft' },
+      order: [['createdAt','DESC']],
+      transaction
+    });
+    if (existingDraft) {
+      await transaction.rollback();
+      return exports.getBatch({ ...req, params:{ id:existingDraft.id } }, res);
+    }
     const classes=await Class.findAll({where:{schoolCode:code(req),isActive:true},transaction});
     const classIds=classes.map(c=>c.id);
     const students=await (Student.unscoped?Student.unscoped():Student).findAll({ where:{status:'active',classId:{[Op.in]:classIds}}, include:[{model:User,where:{schoolCode:code(req),role:'student'},attributes:['id','name','schoolCode']}], transaction });
@@ -95,7 +104,7 @@ exports.getBatch=async(req,res)=>{
   }catch(error){res.status(500).json({success:false,message:error.message});}
 };
 
-exports.listBatches=async(req,res)=>{try{res.json({success:true,data:await PromotionBatch.findAll({where:{schoolCode:code(req)},order:[['createdAt','DESC']],limit:50})});}catch(error){res.status(500).json({success:false,message:error.message});}};
+exports.listBatches=async(req,res)=>{try{const rows=await PromotionBatch.findAll({where:{schoolCode:code(req)},order:[['createdAt','DESC']],limit:100});const seen=new Set();const data=rows.filter(row=>{const key=[row.closingYear,row.newYear,String(row.effectiveDate),row.status].join(':');if(seen.has(key))return false;seen.add(key);return true;}).slice(0,50);res.json({success:true,data});}catch(error){res.status(500).json({success:false,message:error.message});}};
 
 exports.updateDecision=async(req,res)=>{
   try{

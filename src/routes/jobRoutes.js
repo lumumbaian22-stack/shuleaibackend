@@ -1,24 +1,21 @@
 const express = require('express');
 const { protect, authorize } = require('../middleware/auth');
-const { enqueueJob, getJob, listJobs } = require('../services/jobQueue');
+const { getJob, listJobs } = require('../services/jobQueue');
 
 const router = express.Router();
 router.use(protect);
 
-router.post('/csv-import', authorize('admin', 'super_admin'), (req, res) => {
-  const job = enqueueJob('csv-import', { filename: req.body?.filename || null, mode: req.body?.mode || 'students' }, req.user);
-  res.status(202).json({ success: true, message: 'Import queued. Large imports should be processed by a worker before final rollout.', data: job });
-});
+function retiredAsyncRoute(feature) {
+  return (_req, res) => res.status(410).json({
+    success: false,
+    code: 'ASYNC_JOB_ROUTE_RETIRED',
+    message: `${feature} is handled by its active dashboard workflow. This retired background-job route does not queue work.`
+  });
+}
 
-router.post('/marks-import', authorize('admin', 'teacher', 'super_admin'), (req, res) => {
-  const job = enqueueJob('marks-import', { filename: req.body?.filename || null, term: req.body?.term, year: req.body?.year }, req.user);
-  res.status(202).json({ success: true, message: 'Marks import queued. Large marks uploads will not block dashboard requests.', data: job });
-});
-
-router.post('/report-cards', authorize('admin', 'teacher', 'super_admin'), (req, res) => {
-  const job = enqueueJob('report-card-generation', { classId: req.body?.classId, term: req.body?.term, year: req.body?.year }, req.user);
-  res.status(202).json({ success: true, message: 'Report card generation queued.', data: job });
-});
+router.post('/csv-import', authorize('admin', 'super_admin'), retiredAsyncRoute('CSV import'));
+router.post('/marks-import', authorize('admin', 'teacher', 'super_admin'), retiredAsyncRoute('Marks import'));
+router.post('/report-cards', authorize('admin', 'teacher', 'super_admin'), retiredAsyncRoute('Report-card generation'));
 
 router.get('/', authorize('admin', 'teacher', 'super_admin'), (req, res) => {
   const schoolCode = req.user.role === 'super_admin' ? req.query.schoolCode : req.user.schoolCode;

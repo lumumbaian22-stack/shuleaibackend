@@ -12,6 +12,7 @@ const {
 } = require('../models');
 const schoolFeatures = require('../services/schoolFeatureService');
 const subscriptionEnforcement = require('../services/subscriptionEnforcementService');
+const { normalizeSchoolPlanCapacity } = require('../services/systemNormalizationService');
 
 const SCHOOL_CORE_FEATURES = schoolFeatures.CORE_SCHOOL_FEATURES || ['dashboard','students','teachers','attendance','marks','report_cards','fees','calendar','timetable','homework','duty','departments','school_branding','alerts','bulk_sms'];
 const SCHOOL_PREMIUM_FEATURES = [];
@@ -66,7 +67,9 @@ function normalizeSettingsPlan(raw, ownerType, index = 0) {
     setupFeeMaxKes: raw.setupFeeMaxKes ?? raw.setupMax ?? null,
     features: ownerType === 'school' ? SCHOOL_CORE_FEATURES : (Array.isArray(raw.features) ? raw.features : []),
     lockedFeatures: ownerType === 'school' ? [] : (Array.isArray(raw.lockedFeatures) ? raw.lockedFeatures : []),
-    limits: raw.limits && typeof raw.limits === 'object' ? raw.limits : { days: Number(raw.days || 30) || 30 },
+    limits: ownerType === 'school'
+      ? normalizeSchoolPlanCapacity(raw, index)
+      : (raw.limits && typeof raw.limits === 'object' ? raw.limits : { days: Number(raw.days || 30) || 30 }),
     sortOrder: Number(raw.sortOrder ?? index ?? 0),
     isActive: raw.isActive !== false,
     source: 'platform_payment_settings'
@@ -250,8 +253,7 @@ exports.getPlans = async (req, res) => {
     if (ownerType === 'school' || ownerType === 'child') {
       const configured = await getPlatformConfiguredPlans(ownerType);
       if (configured && configured.length) {
-        const ranges={school_starter:[1,400],school_growth:[401,800],school_enterprise:[801,null]};
-        const data=ownerType==='school'?configured.map(p=>{const r=ranges[p.code]||ranges[`school_${String(p.code||'').replace(/^school_/,'')}`]||[1,null];return {...p,features:SCHOOL_CORE_FEATURES,lockedFeatures:[],limits:{...(p.limits||{}),minStudents:r[0],maxStudents:r[1]},pricingBasis:'active_students'};}):configured;
+        const data=ownerType==='school'?configured.map((p,index)=>({...p,features:SCHOOL_CORE_FEATURES,lockedFeatures:[],limits:normalizeSchoolPlanCapacity(p,index),pricingBasis:'active_students'})):configured;
         return res.json({success:true,data});
       }
     }
